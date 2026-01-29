@@ -1,0 +1,236 @@
+// Aegis Agent - Database Schema
+// This schema defines the memory and state management for the AI agent
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// AGENT IDENTITY & CONFIGURATION
+// ============================================
+
+model Agent {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // On-chain identity (ERC-8004 when available)
+  onChainId     String?  @unique
+  walletAddress String?  @unique
+
+  // Configuration
+  confidenceThreshold Float    @default(0.75)
+  maxTransactionValue BigInt?
+  isActive            Boolean  @default(true)
+
+  // Relations
+  observations Observation[]
+  decisions    Decision[]
+  executions   Execution[]
+  memories     Memory[]
+
+  @@index([walletAddress])
+}
+
+// ============================================
+// OBSERVATION LAYER
+// ============================================
+
+model Observation {
+  id        String   @id @default(cuid())
+  agentId   String
+  agent     Agent    @relation(fields: [agentId], references: [id])
+  createdAt DateTime @default(now())
+
+  // Source information
+  source    String   // "blockchain", "oracle", "api", "event"
+  chainId   Int?
+  blockNumber BigInt?
+
+  // Observed state (JSON blob of the state snapshot)
+  stateData Json
+
+  // Metadata
+  context   String?  // Additional context about the observation
+
+  // Relations
+  decisions Decision[]
+
+  @@index([agentId, createdAt])
+  @@index([source])
+}
+
+// ============================================
+// REASONING & DECISION LAYER
+// ============================================
+
+model Decision {
+  id            String   @id @default(cuid())
+  agentId       String
+  agent         Agent    @relation(fields: [agentId], references: [id])
+  observationId String
+  observation   Observation @relation(fields: [observationId], references: [id])
+  createdAt     DateTime @default(now())
+
+  // Decision details
+  action        String   // "EXECUTE", "WAIT", "ALERT_HUMAN", etc.
+  parameters    Json?    // Action parameters
+  confidence    Float    // 0.0 to 1.0
+  reasoning     String   // LLM's reasoning explanation
+
+  // Decision status
+  status        DecisionStatus @default(PENDING)
+
+  // Policy validation
+  policyPassed  Boolean  @default(false)
+  policyErrors  String[]
+
+  // Relations
+  execution     Execution?
+
+  @@index([agentId, createdAt])
+  @@index([status])
+}
+
+enum DecisionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXECUTED
+  FAILED
+}
+
+// ============================================
+// EXECUTION LAYER
+// ============================================
+
+model Execution {
+  id          String   @id @default(cuid())
+  agentId     String
+  agent       Agent    @relation(fields: [agentId], references: [id])
+  decisionId  String   @unique
+  decision    Decision @relation(fields: [decisionId], references: [id])
+  createdAt   DateTime @default(now())
+  completedAt DateTime?
+
+  // Transaction details
+  chainId       Int
+  txHash        String?
+  blockNumber   BigInt?
+  gasUsed       BigInt?
+  gasCost       BigInt?
+
+  // Execution status
+  status        ExecutionStatus @default(PENDING)
+  errorMessage  String?
+
+  // Outcome evaluation
+  success       Boolean?
+  outcomeData   Json?
+
+  @@index([agentId, createdAt])
+  @@index([txHash])
+  @@index([status])
+}
+
+enum ExecutionStatus {
+  PENDING
+  SUBMITTED
+  CONFIRMED
+  FAILED
+  REVERTED
+}
+
+// ============================================
+// MEMORY LAYER
+// ============================================
+
+model Memory {
+  id        String   @id @default(cuid())
+  agentId   String
+  agent     Agent    @relation(fields: [agentId], references: [id])
+  createdAt DateTime @default(now())
+
+  // Memory content
+  type        MemoryType
+  content     String     // Textual description for embedding
+  metadata    Json?      // Structured metadata
+
+  // Vector embedding reference (stored in Pinecone)
+  embeddingId String?    @unique
+
+  // Importance scoring for retrieval
+  importance  Float      @default(0.5)
+  accessCount Int        @default(0)
+  lastAccessed DateTime?
+
+  @@index([agentId, type])
+  @@index([importance])
+}
+
+enum MemoryType {
+  OBSERVATION
+  DECISION
+  OUTCOME
+  LEARNED_PATTERN
+  USER_FEEDBACK
+}
+
+// ============================================
+// PAYMENT & REPUTATION (x402 / ERC-8004)
+// ============================================
+
+model PaymentRecord {
+  id          String   @id @default(cuid())
+  createdAt   DateTime @default(now())
+
+  // Payment details
+  paymentHash String   @unique
+  amount      BigInt
+  currency    String   // "USDC", "ETH", etc.
+  chainId     Int
+
+  // Request details
+  requestedAction String
+  requester       String  // Address of requester
+
+  // Status
+  status      PaymentStatus @default(PENDING)
+  executionId String?
+
+  @@index([paymentHash])
+  @@index([requester])
+}
+
+enum PaymentStatus {
+  PENDING
+  CONFIRMED
+  EXECUTED
+  REFUNDED
+}
+
+model ReputationAttestation {
+  id          String   @id @default(cuid())
+  createdAt   DateTime @default(now())
+
+  // Attestation details
+  agentOnChainId String
+  attestor       String   // Address of attestor
+  attestationType String  // "SUCCESS", "FAILURE", "QUALITY"
+  score          Int      // Rating score
+  metadata       Json?
+
+  // On-chain reference
+  chainId        Int
+  txHash         String?
+
+  @@index([agentOnChainId])
+  @@index([attestor])
+}
