@@ -4,7 +4,7 @@
  * Uses viem to read on-chain state for the agent to reason about.
  */
 
-import { createPublicClient, http, formatEther, type PublicClient } from 'viem';
+import { createPublicClient, http, formatEther } from 'viem';
 import { base, baseSepolia, mainnet, sepolia } from 'viem/chains';
 import type { Observation } from './index';
 
@@ -19,7 +19,7 @@ const chains = {
 type ChainName = keyof typeof chains;
 
 // Create public clients for each chain
-function getPublicClient(chainName: ChainName): PublicClient {
+function getPublicClient(chainName: ChainName) {
   const chain = chains[chainName];
   const rpcUrl = process.env[`RPC_URL_${chainName.toUpperCase()}`];
   
