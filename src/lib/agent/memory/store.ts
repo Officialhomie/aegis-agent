@@ -4,13 +4,15 @@
  * PostgreSQL-backed storage for agent memories using Prisma.
  */
 
-import { PrismaClient } from '@prisma/client';
-
-// Lazy-load Prisma client
+// Lazy-load Prisma client without requiring generated types at build time.
+// This allows the project to compile before `prisma generate` runs.
+type PrismaClient = any;
 let prisma: PrismaClient | null = null;
 
 function getPrisma(): PrismaClient {
   if (!prisma) {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { PrismaClient } = require('@prisma/client') as { PrismaClient: PrismaClient };
     prisma = new PrismaClient();
   }
   return prisma;
@@ -74,7 +76,7 @@ export class MemoryStore {
         },
       });
 
-      return memories.map(m => ({
+      return memories.map((m: any) => ({
         id: m.id,
         type: m.type,
         content: m.content,
@@ -104,7 +106,7 @@ export class MemoryStore {
         take: limit,
       });
 
-      return memories.map(m => ({
+      return memories.map((m: any) => ({
         id: m.id,
         type: m.type,
         content: m.content,
