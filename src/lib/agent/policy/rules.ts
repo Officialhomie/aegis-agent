@@ -63,7 +63,7 @@ const builtInRules: PolicyRule[] = [
     severity: 'ERROR',
     validate: async (decision) => ({
       ruleName: 'reasoning-required',
-      passed: decision.reasoning && decision.reasoning.length >= 20,
+      passed: Boolean(decision.reasoning) && decision.reasoning.length >= 20,
       message: !decision.reasoning || decision.reasoning.length < 20
         ? 'Insufficient reasoning provided for decision'
         : 'Reasoning requirement met',
