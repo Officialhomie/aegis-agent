@@ -1,14 +1,19 @@
 /**
- * Agent status (config placeholder; can be extended with DB last run, etc.)
+ * Agent status - health only. Requires API auth.
  */
 
 import { NextResponse } from 'next/server';
+import { verifyApiAuth } from '../../../../src/lib/auth/api-auth';
 
-export async function GET() {
+export async function GET(request: Request) {
+  const auth = verifyApiAuth(request);
+  if (!auth.valid) {
+    return NextResponse.json({ error: auth.error }, { status: 401 });
+  }
+
   return NextResponse.json({
-    mode: process.env.AGENT_EXECUTION_MODE ?? 'SIMULATION',
-    hasOpenAI: !!process.env.OPENAI_API_KEY,
-    hasTreasury: !!process.env.TREASURY_ADDRESS,
+    status: 'healthy',
     timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
   });
 }
