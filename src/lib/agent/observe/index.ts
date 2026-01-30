@@ -8,6 +8,8 @@
  */
 
 import { observeBlockchainState } from './blockchain';
+import { observeTreasury } from './treasury';
+import { observeOraclePrices } from './oracles';
 
 export interface Observation {
   id: string;
@@ -26,14 +28,17 @@ export async function observe(): Promise<Observation[]> {
   const observations: Observation[] = [];
 
   try {
-    // Observe blockchain state
     const blockchainState = await observeBlockchainState();
     observations.push(...blockchainState);
 
-    // TODO: Add oracle observations (price feeds, etc.)
-    // TODO: Add event monitoring (governance, transfers, etc.)
-    // TODO: Add external API observations (market data, etc.)
+    const treasuryAddress = process.env.TREASURY_ADDRESS;
+    if (treasuryAddress) {
+      const treasuryObs = await observeTreasury(treasuryAddress);
+      observations.push(...treasuryObs);
+    }
 
+    const oracleObs = await observeOraclePrices(['ETH/USD'], 'baseSepolia');
+    observations.push(...oracleObs);
   } catch (error) {
     console.error('[Observe] Error gathering observations:', error);
   }
@@ -42,3 +47,31 @@ export async function observe(): Promise<Observation[]> {
 }
 
 export { observeBlockchainState } from './blockchain';
+export {
+  observeTreasury,
+  observeTreasuryState,
+  getTokenBalances,
+  getTokenBalancesForChain,
+  type TreasuryState,
+  type TokenBalance,
+} from './treasury';
+export {
+  observeOraclePrices,
+  getPrice,
+  getChainlinkPrice,
+  getCoinGeckoPrice,
+  type PriceFeedResult,
+} from './oracles';
+export {
+  getDeFiPositions as getDeFiPositionsFromDefi,
+  observeDeFiPositions,
+  type DeFiPosition,
+  type LendingPosition,
+  type LiquidityPosition,
+} from './defi';
+export {
+  getGovernanceState as getGovernanceStateFromGov,
+  observeGovernance,
+  type GovernanceState,
+  type GovernanceProposal,
+} from './governance';
