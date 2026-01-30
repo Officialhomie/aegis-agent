@@ -15,6 +15,22 @@ export interface AgentConfig {
   confidenceThreshold: number;
   maxTransactionValueUsd: number;
   executionMode: 'LIVE' | 'SIMULATION' | 'READONLY';
+  /** Max gas price in Gwei - if set, policy rejects when currentGasPriceGwei exceeds this */
+  gasPriceMaxGwei?: number;
+  /** Current gas price in Gwei - set by orchestrator before validate for gas-price-limit rule */
+  currentGasPriceGwei?: number;
+  /** Allowed recipient/contract addresses (TRANSFER recipient, EXECUTE contractAddress) */
+  allowedAddresses?: string[];
+  /** Max slippage tolerance for SWAP (0-1) */
+  maxSlippageTolerance?: number;
+  /** Rate limit: max actions per window */
+  maxActionsPerWindow?: number;
+  /** Rate limit: window in ms */
+  rateLimitWindowMs?: number;
+  /** Trigger source (e.g. 'reactive', 'polling') */
+  triggerSource?: string;
+  /** Event payload when triggered by external source (e.g. Reactive Network) */
+  eventData?: unknown;
 }
 
 export interface AgentState {
