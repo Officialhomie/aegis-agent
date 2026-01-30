@@ -41,34 +41,43 @@ export interface VerifiedPayment {
 }
 
 /**
- * Verify x402 payment proof (stub: validate structure; in production call facilitator verify API)
+ * Verify x402 payment proof via facilitator API.
+ * CRITICAL: Never accept unverified payments; throws when X402_FACILITATOR_URL not set.
  */
-export async function verifyX402Payment(proof: X402PaymentProof): Promise<VerifiedPayment | null> {
+export async function verifyX402Payment(proof: X402PaymentProof): Promise<VerifiedPayment> {
   if (!proof.paymentHash || !proof.amount || !proof.currency || !proof.chainId) {
-    return null;
+    throw new Error('Invalid payment proof: missing required fields');
   }
-  if (process.env.X402_FACILITATOR_URL && proof.verificationToken) {
-    try {
-      const res = await fetch(`${process.env.X402_FACILITATOR_URL}/verify`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${proof.verificationToken}` },
-        body: JSON.stringify(proof),
-      });
-      if (!res.ok) return null;
-      const data = (await res.json()) as { verified?: boolean; payment?: VerifiedPayment };
-      if (data.verified && data.payment) return data.payment;
-    } catch {
-      return null;
-    }
+
+  const facilitatorUrl = process.env.X402_FACILITATOR_URL;
+
+  if (!facilitatorUrl) {
+    throw new Error(
+      'Payment verification unavailable: X402_FACILITATOR_URL not configured. ' +
+        'Cannot accept unverified payments.'
+    );
   }
-  return {
-    paymentHash: proof.paymentHash,
-    amount: BigInt(proof.amount),
-    currency: proof.currency,
-    chainId: proof.chainId,
-    requestedAction: proof.requestedAction ?? 'run_cycle',
-    requester: proof.requester ?? '0x0000000000000000000000000000000000000000',
-  };
+
+  const res = await fetch(`${facilitatorUrl}/verify`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${process.env.X402_API_KEY ?? ''}`,
+    },
+    body: JSON.stringify(proof),
+    signal: AbortSignal.timeout(10000),
+  });
+
+  if (!res.ok) {
+    throw new Error(`Payment verification failed: ${res.status}`);
+  }
+
+  const data = (await res.json()) as { verified?: boolean; payment?: VerifiedPayment };
+  if (!data.verified || !data.payment) {
+    throw new Error('Payment verification rejected by facilitator');
+  }
+
+  return data.payment;
 }
 
 /**
@@ -111,9 +120,6 @@ export async function executePaidAction(
   agentOnChainId?: string
 ): Promise<{ executionResult: unknown; reputationTxHash?: string; paymentId: string }> {
   const payment = await verifyX402Payment(paymentProof);
-  if (!payment) {
-    throw new Error('Invalid or unverifiable payment');
-  }
 
   await upsertPaymentRecord(payment, 'CONFIRMED');
 
