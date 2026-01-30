@@ -3,16 +3,26 @@
  */
 
 import { NextResponse } from 'next/server';
+import { verifyApiAuth } from '../../../../src/lib/auth/api-auth';
+import { AgentCycleRequestSchema } from '../../../../src/lib/api/schemas';
 
 export async function POST(request: Request) {
+  const auth = verifyApiAuth(request);
+  if (!auth.valid) {
+    return NextResponse.json({ error: auth.error }, { status: 401 });
+  }
+
   try {
     const { runAgentCycle } = await import('../../../../src/lib/agent');
     const body = await request.json().catch(() => ({}));
-    const config = {
-      confidenceThreshold: Number(body.confidenceThreshold ?? 0.75),
-      maxTransactionValueUsd: Number(body.maxTransactionValueUsd ?? 10000),
-      executionMode: (body.executionMode ?? 'SIMULATION') as 'LIVE' | 'SIMULATION' | 'READONLY',
-    };
+    const parsed = AgentCycleRequestSchema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: 'Invalid request', details: parsed.error.flatten() },
+        { status: 400 }
+      );
+    }
+    const config = parsed.data;
     const state = await runAgentCycle(config);
     return NextResponse.json({
       ok: true,
