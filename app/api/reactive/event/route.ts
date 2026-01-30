@@ -1,25 +1,63 @@
 /**
  * Reactive Network webhook: receives event callbacks and triggers Aegis agent cycle.
+ * HMAC-SHA256 signature verification required when REACTIVE_CALLBACK_SECRET is set.
  */
 
+import { createHmac, timingSafeEqual } from 'crypto';
 import { NextResponse } from 'next/server';
+import { verifyApiAuth } from '../../../../src/lib/auth/api-auth';
+import { ReactiveEventSchema } from '../../../../src/lib/api/schemas';
 
-const REACTIVE_CALLBACK_SECRET = process.env.REACTIVE_CALLBACK_SECRET;
+function verifyReactiveCallback(request: Request, body: string): boolean {
+  const secret = process.env.REACTIVE_CALLBACK_SECRET;
 
-function verifyReactiveCallback(headers: Headers): boolean {
-  if (!REACTIVE_CALLBACK_SECRET) return true;
-  const sig = headers.get('x-reactive-signature') ?? headers.get('authorization');
-  return sig === `Bearer ${REACTIVE_CALLBACK_SECRET}` || sig === REACTIVE_CALLBACK_SECRET;
+  // CRITICAL: Deny all if secret not configured
+  if (!secret) {
+    console.error('[Reactive] REACTIVE_CALLBACK_SECRET not configured - denying request');
+    return false;
+  }
+
+  const signature = request.headers.get('x-reactive-signature');
+  if (!signature) {
+    return false;
+  }
+
+  const expectedSig = createHmac('sha256', secret)
+    .update(body)
+    .digest('hex');
+
+  try {
+    const sigBuf = Buffer.from(signature, 'hex');
+    const expectedBuf = Buffer.from(expectedSig, 'hex');
+    if (sigBuf.length !== expectedBuf.length) return false;
+    return timingSafeEqual(sigBuf, expectedBuf);
+  } catch {
+    return false;
+  }
 }
 
 export async function POST(request: Request) {
-  try {
-    if (!verifyReactiveCallback(request.headers)) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+  const auth = verifyApiAuth(request);
+  if (!auth.valid) {
+    return NextResponse.json({ error: auth.error }, { status: 401 });
+  }
 
-    const body = await request.json();
-    const { chainId, event, data } = body as { chainId?: number; event?: string; data?: unknown };
+  const bodyText = await request.text();
+
+  if (!verifyReactiveCallback(request, bodyText)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  try {
+    const body = JSON.parse(bodyText) as unknown;
+    const parsed = ReactiveEventSchema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: 'Invalid request', details: parsed.error.flatten() },
+        { status: 400 }
+      );
+    }
+    const { chainId, event, data } = parsed.data;
 
     const { runAgentCycle } = await import('../../../../src/lib/agent');
     await runAgentCycle({
