@@ -1,17 +1,46 @@
 /**
  * Aegis Agent - Prompt Engineering
- * 
+ *
  * Defines prompts for LLM reasoning with structured outputs.
- * Uses OpenAI's function calling for reliable decision generation.
+ * Uses OpenAI tools API and Anthropic Claude for decision generation.
  */
 
 import OpenAI from 'openai';
+import Anthropic from '@anthropic-ai/sdk';
 import { DecisionSchema, type Decision } from './schemas';
 import type { ReasoningContext } from './index';
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
+
+const anthropic = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
+});
+
+const DECISION_TOOL = {
+  type: 'function' as const,
+  function: {
+    name: 'make_decision',
+    description: 'Make a decision about what action the agent should take',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['EXECUTE', 'WAIT', 'ALERT_HUMAN', 'REBALANCE', 'SWAP', 'TRANSFER'],
+          description: 'The action to take',
+        },
+        confidence: { type: 'number', minimum: 0, maximum: 1, description: 'Confidence score from 0 to 1' },
+        reasoning: { type: 'string', description: 'Explanation of why this action was chosen' },
+        parameters: { type: 'object', description: 'Action-specific parameters (null for WAIT)', nullable: true },
+        preconditions: { type: 'array', items: { type: 'string' }, description: 'Conditions before execution' },
+        expectedOutcome: { type: 'string', description: 'Expected outcome' },
+      },
+      required: ['action', 'confidence', 'reasoning', 'parameters'],
+    },
+  },
+};
 
 /**
  * System prompt that defines the agent's role and constraints
@@ -58,65 +87,34 @@ ${constraints ? `Additional Constraints:\n${constraints.map(c => `- ${c}`).join(
 Based on the above, what action should be taken? Analyze the situation and provide your decision.
 `;
 
+  const useClaude = process.env.USE_CLAUDE_REASONING === 'true' && process.env.ANTHROPIC_API_KEY;
+  if (useClaude) {
+    return generateDecisionWithClaude(context);
+  }
+
   try {
     const response = await openai.chat.completions.create({
-      model: 'gpt-4-turbo-preview',
+      model: process.env.OPENAI_REASONING_MODEL ?? 'gpt-4-turbo',
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: userPrompt },
       ],
-      functions: [
-        {
-          name: 'make_decision',
-          description: 'Make a decision about what action the agent should take',
-          parameters: {
-            type: 'object',
-            properties: {
-              action: {
-                type: 'string',
-                enum: ['EXECUTE', 'WAIT', 'ALERT_HUMAN', 'REBALANCE', 'SWAP', 'TRANSFER'],
-                description: 'The action to take',
-              },
-              confidence: {
-                type: 'number',
-                minimum: 0,
-                maximum: 1,
-                description: 'Confidence score from 0 to 1',
-              },
-              reasoning: {
-                type: 'string',
-                description: 'Explanation of why this action was chosen',
-              },
-              parameters: {
-                type: 'object',
-                description: 'Action-specific parameters (null for WAIT)',
-                nullable: true,
-              },
-              preconditions: {
-                type: 'array',
-                items: { type: 'string' },
-                description: 'Conditions that should be met before execution',
-              },
-              expectedOutcome: {
-                type: 'string',
-                description: 'What outcome is expected from this action',
-              },
-            },
-            required: ['action', 'confidence', 'reasoning', 'parameters'],
-          },
-        },
-      ],
-      function_call: { name: 'make_decision' },
-      temperature: 0.2, // Lower temperature for more consistent decisions
+      tools: [DECISION_TOOL],
+      tool_choice: { type: 'function', function: { name: 'make_decision' } },
+      temperature: 0.2,
     });
 
-    const functionCall = response.choices[0]?.message?.function_call;
-    
-    if (!functionCall?.arguments) {
-      throw new Error('No function call in response');
+    const message = response.choices[0]?.message;
+    const toolCall = message?.tool_calls?.find((tc) => (tc as { function?: { name?: string; arguments?: string } }).function?.name === 'make_decision') as
+      | { function: { arguments: string } }
+      | undefined;
+    const args = toolCall?.function?.arguments;
+
+    if (!args) {
+      throw new Error('No tool call in response');
     }
 
-    const decision = JSON.parse(functionCall.arguments);
+    const decision = JSON.parse(args);
     return DecisionSchema.parse(decision);
   } catch (error) {
     console.error('[Prompts] Error generating decision:', error);
@@ -125,10 +123,40 @@ Based on the above, what action should be taken? Analyze the situation and provi
 }
 
 /**
- * Generate a decision using Anthropic Claude (alternative)
+ * Generate a decision using Anthropic Claude
  */
 export async function generateDecisionWithClaude(context: ReasoningContext): Promise<Decision> {
-  // TODO: Implement Claude-based reasoning using @anthropic-ai/sdk
-  // This provides an alternative LLM for comparison or fallback
-  throw new Error('Claude reasoning not yet implemented');
+  const { observations, memories, constraints } = context;
+
+  const userContent = `
+Current Observations:
+${JSON.stringify(observations, null, 2)}
+
+Relevant Past Experiences:
+${memories.length > 0 ? JSON.stringify(memories, null, 2) : 'No relevant memories found.'}
+
+${constraints ? `Additional Constraints:\n${constraints.map((c) => `- ${c}`).join('\n')}` : ''}
+
+Based on the above, respond with a single JSON object for your decision with exactly these keys: action, confidence, reasoning, parameters (use null for WAIT).
+Action must be one of: EXECUTE, WAIT, ALERT_HUMAN, REBALANCE, SWAP, TRANSFER.
+Confidence is a number between 0 and 1.
+Respond with only the JSON, no other text.
+`;
+
+  const response = await anthropic.messages.create({
+    model: process.env.ANTHROPIC_REASONING_MODEL ?? 'claude-sonnet-4-20250514',
+    max_tokens: 1024,
+    messages: [{ role: 'user', content: userContent }],
+  });
+
+  const textBlock = response.content.find((b) => b.type === 'text');
+  if (!textBlock || textBlock.type !== 'text') {
+    throw new Error('No text in Claude response');
+  }
+
+  const raw = textBlock.text.trim();
+  const jsonMatch = raw.match(/\{[\s\S]*\}/);
+  const jsonStr = jsonMatch ? jsonMatch[0] : raw;
+  const decision = JSON.parse(jsonStr);
+  return DecisionSchema.parse(decision);
 }
