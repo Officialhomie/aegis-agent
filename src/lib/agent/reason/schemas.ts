@@ -30,6 +30,7 @@ export const ExecuteParams = z.object({
   args: z.array(z.unknown()).optional(),
   value: z.string().optional(), // Wei value as string
 });
+export type ExecuteParams = z.infer<typeof ExecuteParams>;
 
 export const SwapParams = z.object({
   tokenIn: z.string(),
@@ -38,18 +39,21 @@ export const SwapParams = z.object({
   minAmountOut: z.string().optional(),
   slippageTolerance: z.number().min(0).max(1).optional(),
 });
+export type SwapParams = z.infer<typeof SwapParams>;
 
 export const TransferParams = z.object({
   token: z.string(),
   recipient: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
   amount: z.string(),
 });
+export type TransferParams = z.infer<typeof TransferParams>;
 
 export const AlertParams = z.object({
   severity: z.enum(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']),
   message: z.string(),
   suggestedAction: z.string().optional(),
 });
+export type AlertParams = z.infer<typeof AlertParams>;
 
 /**
  * Main Decision schema - what the LLM must produce
