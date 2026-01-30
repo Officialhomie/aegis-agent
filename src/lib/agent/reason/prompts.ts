@@ -9,6 +9,7 @@ import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
 import { DecisionSchema, type Decision } from './schemas';
 import type { ReasoningContext } from './index';
+import { maskSensitiveData } from '../../security/data-masking';
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -74,13 +75,15 @@ Your confidence score should reflect:
  */
 export async function generateDecision(context: ReasoningContext): Promise<Decision> {
   const { observations, memories, constraints } = context;
+  const maskedObservations = maskSensitiveData(observations);
+  const maskedMemories = maskSensitiveData(memories);
 
   const userPrompt = `
 Current Observations:
-${JSON.stringify(observations, null, 2)}
+${JSON.stringify(maskedObservations, null, 2)}
 
 Relevant Past Experiences:
-${memories.length > 0 ? JSON.stringify(memories, null, 2) : 'No relevant memories found.'}
+${maskedMemories && Array.isArray(maskedMemories) && maskedMemories.length > 0 ? JSON.stringify(maskedMemories, null, 2) : 'No relevant memories found.'}
 
 ${constraints ? `Additional Constraints:\n${constraints.map(c => `- ${c}`).join('\n')}` : ''}
 
@@ -127,13 +130,15 @@ Based on the above, what action should be taken? Analyze the situation and provi
  */
 export async function generateDecisionWithClaude(context: ReasoningContext): Promise<Decision> {
   const { observations, memories, constraints } = context;
+  const maskedObservations = maskSensitiveData(observations);
+  const maskedMemories = maskSensitiveData(memories);
 
   const userContent = `
 Current Observations:
-${JSON.stringify(observations, null, 2)}
+${JSON.stringify(maskedObservations, null, 2)}
 
 Relevant Past Experiences:
-${memories.length > 0 ? JSON.stringify(memories, null, 2) : 'No relevant memories found.'}
+${maskedMemories && Array.isArray(maskedMemories) && maskedMemories.length > 0 ? JSON.stringify(maskedMemories, null, 2) : 'No relevant memories found.'}
 
 ${constraints ? `Additional Constraints:\n${constraints.map((c) => `- ${c}`).join('\n')}` : ''}
 
