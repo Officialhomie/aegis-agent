@@ -127,8 +127,8 @@ describe('Policy Validation', () => {
       action: 'TRANSFER',
       confidence: 0.9,
       reasoning: 'Attempting to transfer without parameters.',
-      parameters: null, // Missing required parameters
-    };
+      parameters: null, // Invalid: TRANSFER requires params; testing policy rejection
+    } as unknown as import('@/src/lib/agent/reason/schemas').Decision;
 
     const result = await validatePolicy(decision, testConfig);
     expect(result.passed).toBe(false);
@@ -138,22 +138,25 @@ describe('Policy Validation', () => {
 
 describe('Action Types', () => {
   it('should accept all valid action types', () => {
-    const validActions = ['EXECUTE', 'WAIT', 'ALERT_HUMAN', 'REBALANCE', 'SWAP', 'TRANSFER'];
+    const decisions: Array<{ action: string; parameters: unknown }> = [
+      { action: 'EXECUTE', parameters: { contractAddress: '0x1234567890123456789012345678901234567890', functionName: 'transfer', args: [] } },
+      { action: 'WAIT', parameters: null },
+      { action: 'ALERT_HUMAN', parameters: { severity: 'HIGH', message: 'Test alert' } },
+      { action: 'REBALANCE', parameters: { tokenIn: 'ETH', tokenOut: 'USDC', amountIn: '1000' } },
+      { action: 'SWAP', parameters: { tokenIn: 'ETH', tokenOut: 'USDC', amountIn: '1000' } },
+      { action: 'TRANSFER', parameters: { token: 'ETH', recipient: '0x1234567890123456789012345678901234567890', amount: '1000' } },
+    ];
 
-    for (const action of validActions) {
+    for (const { action, parameters } of decisions) {
       const decision = {
         action,
         confidence: 0.8,
         reasoning: `Testing action type: ${action} for validity check.`,
-        parameters: action === 'WAIT' || action === 'ALERT_HUMAN' ? null : {
-          token: 'ETH',
-          recipient: '0x1234567890123456789012345678901234567890',
-          amount: '1000',
-        },
+        parameters,
       };
 
       const result = DecisionSchema.safeParse(decision);
-      expect(result.success).toBe(true);
+      expect(result.success, `Action ${action} should parse: ${!result.success && 'error' in result ? JSON.stringify(result.error.flatten()) : ''}`).toBe(true);
     }
   });
 
