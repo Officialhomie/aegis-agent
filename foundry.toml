@@ -1,0 +1,13 @@
+[profile.default]
+src = "contracts"
+out = "out"
+test = "contracts/test"
+libs = ["lib"]
+solc = "0.8.20"
+evm_version = "paris"
+
+[profile.default.fmt]
+line_length = 100
+
+[rpc_endpoints]
+base_sepolia = "${RPC_URL_BASE_SEPOLIA}"
