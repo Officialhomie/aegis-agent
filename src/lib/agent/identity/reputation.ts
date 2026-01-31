@@ -1,18 +1,33 @@
 /**
  * Aegis Agent - Reputation Tracking (ERC-8004)
  *
- * Records attestations after execution and aggregates reputation.
+ * Records attestations after execution (DB and optionally on-chain) and aggregates reputation.
  */
 
+import { createPublicClient, createWalletClient, http } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
+import { baseSepolia } from 'viem/chains';
+import { PrismaClient } from '@prisma/client';
 import type { ExecutionResult } from '../execute';
 
-type PrismaClient = any;
+const ATTEST_ABI = [
+  {
+    inputs: [
+      { name: 'agentOnChainId', type: 'string' },
+      { name: 'score', type: 'uint8' },
+      { name: 'attestationType', type: 'uint8' },
+    ],
+    name: 'attest',
+    outputs: [],
+    stateMutability: 'nonpayable',
+    type: 'function',
+  },
+] as const;
+
 let prisma: PrismaClient | null = null;
 
 function getPrisma(): PrismaClient {
   if (!prisma) {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { PrismaClient } = require('@prisma/client') as { PrismaClient: PrismaClient };
     prisma = new PrismaClient();
   }
   return prisma;
@@ -45,9 +60,43 @@ export function calculateQualityScore(execution: ExecutionResult): number {
 }
 
 /**
- * Submit reputation attestation to DB (and optionally on-chain when ERC-8004 is live)
+ * Submit reputation attestation to DB and optionally on-chain when REPUTATION_ATTESTATION_CONTRACT_ADDRESS is set.
  */
 export async function submitReputationAttestation(input: ReputationAttestationInput): Promise<string> {
+  let txHash: string | undefined = input.txHash;
+  const contractAddress = process.env.REPUTATION_ATTESTATION_CONTRACT_ADDRESS as `0x${string}` | undefined;
+  const privateKey = process.env.EXECUTE_WALLET_PRIVATE_KEY ?? process.env.AGENT_PRIVATE_KEY;
+
+  if (contractAddress && privateKey) {
+    const rpcUrl = process.env.RPC_URL_BASE_SEPOLIA ?? process.env.RPC_URL_84532;
+    if (rpcUrl) {
+      try {
+        const account = privateKeyToAccount(privateKey as `0x${string}`);
+        const walletClient = createWalletClient({
+          account,
+          chain: baseSepolia,
+          transport: http(rpcUrl),
+        });
+        const publicClient = createPublicClient({
+          chain: baseSepolia,
+          transport: http(rpcUrl),
+        });
+        const typeNum = input.attestationType === 'SUCCESS' ? 0 : input.attestationType === 'FAILURE' ? 1 : 2;
+        const score = Math.min(100, Math.max(0, input.score));
+        const hash = await walletClient.writeContract({
+          address: contractAddress,
+          abi: ATTEST_ABI,
+          functionName: 'attest',
+          args: [input.agentOnChainId, score as 0 | number, typeNum as 0 | number],
+        });
+        const receipt = await publicClient.waitForTransactionReceipt({ hash });
+        txHash = receipt.transactionHash;
+      } catch (err) {
+        console.error('[Reputation] On-chain attestation failed:', err);
+      }
+    }
+  }
+
   const db = getPrisma();
   try {
     const attestation = await db.reputationAttestation.create({
@@ -57,8 +106,8 @@ export async function submitReputationAttestation(input: ReputationAttestationIn
         attestationType: input.attestationType,
         score: input.score,
         chainId: input.chainId,
-        txHash: input.txHash,
-        metadata: input.metadata ?? undefined,
+        txHash: txHash ?? undefined,
+        metadata: (input.metadata ?? undefined) as object | undefined,
       },
     });
     return attestation.id;
@@ -95,18 +144,29 @@ export async function recordExecution(
 }
 
 /**
- * Get aggregated reputation for an agent (average score, count)
+ * Get aggregated reputation for an agent (average score, count) with pagination
  */
-export async function getReputationScore(agentOnChainId: string): Promise<{ averageScore: number; count: number }> {
+export async function getReputationScore(
+  agentOnChainId: string,
+  options?: { take?: number; skip?: number }
+): Promise<{ averageScore: number; count: number }> {
   const db = getPrisma();
+  const take = Math.min(options?.take ?? 100, 500);
+  const skip = options?.skip ?? 0;
   try {
-    const attestations = await db.reputationAttestation.findMany({
-      where: { agentOnChainId },
-      select: { score: true },
-    });
-    if (attestations.length === 0) return { averageScore: 0, count: 0 };
+    const [attestations, total] = await Promise.all([
+      db.reputationAttestation.findMany({
+        where: { agentOnChainId },
+        select: { score: true },
+        orderBy: { createdAt: 'desc' },
+        take,
+        skip,
+      }),
+      db.reputationAttestation.count({ where: { agentOnChainId } }),
+    ]);
+    if (attestations.length === 0) return { averageScore: 0, count: total };
     const sum = attestations.reduce((s: number, a: { score: number }) => s + a.score, 0);
-    return { averageScore: sum / attestations.length, count: attestations.length };
+    return { averageScore: sum / attestations.length, count: total };
   } catch {
     return { averageScore: 0, count: 0 };
   }
