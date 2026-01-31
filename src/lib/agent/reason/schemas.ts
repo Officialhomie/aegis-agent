@@ -55,34 +55,23 @@ export const AlertParams = z.object({
 });
 export type AlertParams = z.infer<typeof AlertParams>;
 
-/**
- * Main Decision schema - what the LLM must produce
- */
-export const DecisionSchema = z.object({
-  // The chosen action
-  action: ActionType,
-  
-  // Confidence score (0.0 to 1.0)
+/** Base fields shared by all decisions */
+const DecisionBase = z.object({
   confidence: z.number().min(0).max(1),
-  
-  // Explanation of the reasoning
   reasoning: z.string().min(10),
-  
-  // Action-specific parameters (null for WAIT)
-  parameters: z.union([
-    ExecuteParams,
-    SwapParams,
-    TransferParams,
-    AlertParams,
-    z.null(),
-  ]),
-  
-  // Optional: conditions that should be met before execution
   preconditions: z.array(z.string()).optional(),
-  
-  // Optional: expected outcome
   expectedOutcome: z.string().optional(),
 });
+
+/** Discriminated union: action determines required parameters type */
+export const DecisionSchema = z.discriminatedUnion('action', [
+  DecisionBase.extend({ action: z.literal('EXECUTE'), parameters: ExecuteParams }),
+  DecisionBase.extend({ action: z.literal('WAIT'), parameters: z.null() }),
+  DecisionBase.extend({ action: z.literal('ALERT_HUMAN'), parameters: AlertParams }),
+  DecisionBase.extend({ action: z.literal('REBALANCE'), parameters: SwapParams }),
+  DecisionBase.extend({ action: z.literal('SWAP'), parameters: SwapParams }),
+  DecisionBase.extend({ action: z.literal('TRANSFER'), parameters: TransferParams }),
+]);
 
 export type Decision = z.infer<typeof DecisionSchema>;
 

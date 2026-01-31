@@ -5,11 +5,15 @@
  * It connects all the agent components and manages the decision cycle.
  */
 
+import { logger } from '../logger';
 import { observe } from './observe';
 import { reason } from './reason';
 import { validatePolicy } from './policy';
 import { execute } from './execute';
 import { storeMemory, retrieveRelevantMemories } from './memory';
+import type { Observation } from './observe';
+import type { Decision } from './reason/schemas';
+import type { ExecutionResult } from './execute';
 
 export interface AgentConfig {
   confidenceThreshold: number;
@@ -33,11 +37,21 @@ export interface AgentConfig {
   eventData?: unknown;
 }
 
+/** In-memory representation of a retrieved memory (from memory layer) */
+export interface AgentMemory {
+  id: string;
+  type: string;
+  content: string;
+  metadata: Record<string, unknown>;
+  importance: number;
+  createdAt: Date;
+}
+
 export interface AgentState {
-  observations: unknown[];
-  memories: unknown[];
-  currentDecision: unknown | null;
-  executionResult: unknown | null;
+  observations: Observation[];
+  memories: AgentMemory[];
+  currentDecision: Decision | null;
+  executionResult: ExecutionResult | null;
 }
 
 const defaultConfig: AgentConfig = {
@@ -59,24 +73,24 @@ export async function runAgentCycle(config: AgentConfig = defaultConfig): Promis
 
   try {
     // Step 1: OBSERVE - Gather current state from blockchain and other sources
-    console.log('[Aegis] Observing current state...');
+    logger.info('[Aegis] Observing current state...');
     state.observations = await observe();
 
     // Step 2: RETRIEVE MEMORIES - Get relevant past experiences
-    console.log('[Aegis] Retrieving relevant memories...');
-    state.memories = await retrieveRelevantMemories(state.observations);
+    logger.info('[Aegis] Retrieving relevant memories...');
+    state.memories = (await retrieveRelevantMemories(state.observations)) as AgentMemory[];
 
     // Step 3: REASON - Use LLM to analyze state and propose action
-    console.log('[Aegis] Reasoning about state...');
+    logger.info('[Aegis] Reasoning about state...');
     const decision = await reason(state.observations, state.memories);
     state.currentDecision = decision;
 
     // Step 4: VALIDATE POLICY - Check decision against safety rules
-    console.log('[Aegis] Validating against policy rules...');
+    logger.info('[Aegis] Validating against policy rules...');
     const policyResult = await validatePolicy(decision, config);
 
     if (!policyResult.passed) {
-      console.log('[Aegis] Decision rejected by policy:', policyResult.errors);
+      logger.warn('[Aegis] Decision rejected by policy', { errors: policyResult.errors });
       await storeMemory({
         type: 'DECISION',
         decision,
@@ -88,19 +102,22 @@ export async function runAgentCycle(config: AgentConfig = defaultConfig): Promis
 
     // Step 5: EXECUTE - Perform the action (if confidence threshold met)
     if (decision.confidence >= config.confidenceThreshold) {
-      console.log('[Aegis] Executing decision...');
-      
+      logger.info('[Aegis] Executing decision...');
+
       if (config.executionMode === 'READONLY') {
-        console.log('[Aegis] READONLY mode - skipping execution');
+        logger.info('[Aegis] READONLY mode - skipping execution');
       } else {
         state.executionResult = await execute(decision, config.executionMode);
       }
     } else {
-      console.log(`[Aegis] Confidence ${decision.confidence} below threshold ${config.confidenceThreshold} - waiting`);
+      logger.info('[Aegis] Confidence below threshold - waiting', {
+        confidence: decision.confidence,
+        threshold: config.confidenceThreshold,
+      });
     }
 
     // Step 6: STORE MEMORY - Record the experience for future learning
-    console.log('[Aegis] Storing memory...');
+    logger.info('[Aegis] Storing memory...');
     await storeMemory({
       type: 'DECISION',
       observations: state.observations,
@@ -110,31 +127,45 @@ export async function runAgentCycle(config: AgentConfig = defaultConfig): Promis
 
     return state;
   } catch (error) {
-    console.error('[Aegis] Error in agent cycle:', error);
+    logger.error('[Aegis] Error in agent cycle', { error: error instanceof Error ? error.message : String(error) });
     throw error;
   }
 }
 
 /**
- * Start the agent in continuous monitoring mode
+ * Start the agent in continuous monitoring mode with graceful shutdown.
  */
 export async function startAgent(
   config: AgentConfig = defaultConfig,
   intervalMs: number = 60000
 ): Promise<void> {
-  console.log('[Aegis] Starting agent with config:', config);
-  
+  logger.info('[Aegis] Starting agent', { executionMode: config.executionMode, confidenceThreshold: config.confidenceThreshold });
+
+  let cycleTimer: ReturnType<typeof setInterval> | null = null;
+  let draining = false;
+
   const runCycle = async () => {
+    if (draining) return;
     try {
       await runAgentCycle(config);
     } catch (error) {
-      console.error('[Aegis] Cycle error:', error);
+      logger.error('[Aegis] Cycle error', { error: error instanceof Error ? error.message : String(error) });
     }
   };
 
-  // Run immediately, then on interval
+  const shutdown = async () => {
+    draining = true;
+    if (cycleTimer) clearInterval(cycleTimer);
+    cycleTimer = null;
+    logger.info('[Aegis] Shutting down gracefully');
+    process.exit(0);
+  };
+
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
+
   await runCycle();
-  setInterval(runCycle, intervalMs);
+  cycleTimer = setInterval(runCycle, intervalMs);
 }
 
 export { observe } from './observe';

@@ -5,6 +5,9 @@
  * Rules are checked in order and can be configured per-agent.
  */
 
+import { getPrice } from '../observe/oracles';
+import { getDefaultChainName } from '../observe/chains';
+import { getStateStore } from '../state-store';
 import type { Decision } from '../reason/schemas';
 import type { ExecuteParams, SwapParams, TransferParams } from '../reason/schemas';
 import type { AgentConfig } from '../index';
@@ -23,13 +26,14 @@ export interface RuleResult {
   severity: 'ERROR' | 'WARNING';
 }
 
-/** Default ETH price for USD estimate when not available (conservative) */
-const DEFAULT_ETH_USD = 2000;
+/** Fallback ETH price when oracle unavailable */
+const FALLBACK_ETH_USD = 2000;
 
 /**
- * Extract estimated USD value from decision parameters for value-limit rules
+ * Extract estimated USD value from decision parameters for value-limit rules.
+ * Uses real-time oracle price for EXECUTE when available.
  */
-function extractTransactionValueUsd(decision: Decision): number {
+async function extractTransactionValueUsd(decision: Decision): Promise<number> {
   const params = decision.parameters;
   if (!params) return 0;
   if (decision.action === 'TRANSFER') {
@@ -46,21 +50,23 @@ function extractTransactionValueUsd(decision: Decision): number {
     const p = params as ExecuteParams;
     const wei = p.value ? BigInt(p.value) : BigInt(0);
     const eth = Number(wei) / 1e18;
-    return eth * DEFAULT_ETH_USD;
+    const priceResult = await getPrice('ETH/USD', getDefaultChainName());
+    const ethUsd = priceResult ? parseFloat(priceResult.price) : FALLBACK_ETH_USD;
+    return eth * ethUsd;
   }
   return 0;
 }
 
-/** In-memory rate limit: key -> timestamps of actions */
-const rateLimitTimestamps: Map<string, number[]> = new Map();
-const RATE_LIMIT_KEY = 'default';
+const RATE_LIMIT_KEY = 'aegis:rate_limit:default';
 
-function recordActionAndCheckRateLimit(config: AgentConfig): { allowed: boolean; message: string } {
+async function recordActionAndCheckRateLimit(config: AgentConfig): Promise<{ allowed: boolean; message: string }> {
   const max = config.maxActionsPerWindow ?? 0;
   const windowMs = config.rateLimitWindowMs ?? 60_000;
   if (max <= 0) return { allowed: true, message: 'Rate limit not configured' };
   const now = Date.now();
-  const list = rateLimitTimestamps.get(RATE_LIMIT_KEY) ?? [];
+  const store = await getStateStore();
+  const raw = await store.get(RATE_LIMIT_KEY);
+  const list: number[] = raw ? (JSON.parse(raw) as number[]) : [];
   const trimmed = list.filter((t) => now - t < windowMs);
   if (trimmed.length >= max) {
     return {
@@ -69,7 +75,7 @@ function recordActionAndCheckRateLimit(config: AgentConfig): { allowed: boolean;
     };
   }
   trimmed.push(now);
-  rateLimitTimestamps.set(RATE_LIMIT_KEY, trimmed);
+  await store.set(RATE_LIMIT_KEY, JSON.stringify(trimmed));
   return { allowed: true, message: 'Rate limit check passed' };
 }
 
@@ -152,7 +158,7 @@ const builtInRules: PolicyRule[] = [
       if (decision.action === 'WAIT' || decision.action === 'ALERT_HUMAN') {
         return { ruleName: 'transaction-value-limit', passed: true, message: 'N/A', severity: 'ERROR' };
       }
-      const value = extractTransactionValueUsd(decision);
+      const value = await extractTransactionValueUsd(decision);
       const max = config.maxTransactionValueUsd ?? 0;
       const over = max > 0 && value > max;
       return {
@@ -173,7 +179,7 @@ const builtInRules: PolicyRule[] = [
       if (decision.action === 'WAIT' || decision.action === 'ALERT_HUMAN') {
         return { ruleName: 'high-value-alert', passed: true, message: 'N/A', severity: 'WARNING' };
       }
-      const value = extractTransactionValueUsd(decision);
+      const value = await extractTransactionValueUsd(decision);
       const max = config.maxTransactionValueUsd ?? 0;
       const isHighValue = max > 0 && value > max * 0.5;
 
@@ -221,7 +227,7 @@ const builtInRules: PolicyRule[] = [
       if (decision.action === 'WAIT' || decision.action === 'ALERT_HUMAN') {
         return { ruleName: 'rate-limiter', passed: true, message: 'N/A', severity: 'ERROR' };
       }
-      const { allowed, message } = recordActionAndCheckRateLimit(config);
+      const { allowed, message } = await recordActionAndCheckRateLimit(config);
       return { ruleName: 'rate-limiter', passed: allowed, message, severity: 'ERROR' };
     },
   },
