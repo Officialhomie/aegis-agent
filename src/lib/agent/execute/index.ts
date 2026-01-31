@@ -5,6 +5,7 @@
  * The LLM never directly accesses this layer - all actions pass through policy first.
  */
 
+import { logger } from '../../logger';
 import { executeWithAgentKit } from './agentkit';
 import { sendAlert } from './alerts';
 import { getDefaultCircuitBreaker } from './circuit-breaker';
@@ -41,7 +42,7 @@ export async function execute(
   decision: Decision,
   mode: 'LIVE' | 'SIMULATION' = 'SIMULATION'
 ): Promise<ExecutionResult> {
-  console.log(`[Execute] Processing decision in ${mode} mode:`, decision.action);
+  logger.info('[Execute] Processing decision', { mode, action: decision.action });
 
   try {
     if (decision.action === 'WAIT') {
@@ -60,7 +61,7 @@ export async function execute(
           suggestedAction: params.suggestedAction,
         });
       } else {
-        console.log('[Execute] ALERT_HUMAN (no params):', decision.parameters);
+        logger.warn('[Execute] ALERT_HUMAN (no params)', { parameters: decision.parameters });
       }
       return {
         success: true,
@@ -79,7 +80,7 @@ export async function execute(
 
     return await executeWithAgentKit(decision, mode);
   } catch (error) {
-    console.error('[Execute] Execution error:', error);
+    logger.error('[Execute] Execution error', { error: error instanceof Error ? error.message : String(error) });
     return {
       success: false,
       error: `Execution failed: ${error instanceof Error ? error.message : error}`,

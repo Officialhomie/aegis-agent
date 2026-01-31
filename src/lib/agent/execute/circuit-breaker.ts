@@ -1,7 +1,12 @@
 /**
  * Circuit breaker to prevent repeated execution failures from overwhelming the system.
  * Opens after threshold failures within the window; resets on success or after cooldown.
+ * When REDIS_URL is set, state is persisted to Redis.
  */
+
+import { getStateStore } from '../state-store';
+
+const CIRCUIT_BREAKER_KEY = 'aegis:circuit_breaker';
 
 export interface CircuitBreakerOptions {
   /** Number of failures before opening the circuit */
@@ -19,6 +24,13 @@ const DEFAULTS: Required<CircuitBreakerOptions> = {
 };
 
 type State = 'CLOSED' | 'OPEN' | 'HALF_OPEN';
+
+interface PersistedState {
+  state: State;
+  failures: number;
+  lastFailureTime: number | null;
+  lastSuccessTime: number | null;
+}
 
 export class CircuitBreaker {
   private state: State = 'CLOSED';
@@ -56,8 +68,48 @@ export class CircuitBreaker {
     }
   }
 
-  /** Execute fn only if circuit allows; records success/failure based on result */
+  private getPersistedState(): PersistedState {
+    return {
+      state: this.state,
+      failures: this.failures,
+      lastFailureTime: this.lastFailureTime,
+      lastSuccessTime: this.lastSuccessTime,
+    };
+  }
+
+  private applyPersistedState(data: PersistedState): void {
+    this.state = data.state;
+    this.failures = data.failures;
+    this.lastFailureTime = data.lastFailureTime;
+    this.lastSuccessTime = data.lastSuccessTime;
+  }
+
+  private async loadFromStore(): Promise<void> {
+    try {
+      const store = await getStateStore();
+      const raw = await store.get(CIRCUIT_BREAKER_KEY);
+      if (!raw) return;
+      const data = JSON.parse(raw) as PersistedState;
+      if (data.state && typeof data.failures === 'number') {
+        this.applyPersistedState(data);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  private async saveToStore(): Promise<void> {
+    try {
+      const store = await getStateStore();
+      await store.set(CIRCUIT_BREAKER_KEY, JSON.stringify(this.getPersistedState()));
+    } catch {
+      // ignore
+    }
+  }
+
+  /** Execute fn only if circuit allows; records success/failure based on result. Persists state when REDIS_URL is set. */
   async execute<T>(fn: () => Promise<T>): Promise<T> {
+    await this.loadFromStore();
     this.maybeTransition();
 
     if (this.state === 'OPEN') {
@@ -69,9 +121,11 @@ export class CircuitBreaker {
     try {
       const result = await fn();
       this.recordSuccess();
+      await this.saveToStore();
       return result;
     } catch (error) {
       this.recordFailure();
+      await this.saveToStore();
       throw error;
     }
   }
