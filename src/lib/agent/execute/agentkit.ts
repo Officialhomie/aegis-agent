@@ -10,10 +10,24 @@ import {
   TransferAction,
   TradeAction,
 } from '@coinbase/cdp-agentkit-core';
+import { createPublicClient, createWalletClient, http, parseAbiItem } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
+import { baseSepolia } from 'viem/chains';
 
+import { logger } from '../../logger';
 import type { Decision } from '../reason/schemas';
 import type { TransferParams, SwapParams, ExecuteParams } from '../reason/schemas';
 import type { ExecutionResult } from './index';
+
+const ERC20_TRANSFER_ABI = [
+  parseAbiItem('function transfer(address to, uint256 amount) returns (bool)'),
+] as const;
+
+/** Minimal ABI for common contract calls used in simulation */
+const MINIMAL_CALL_ABI = [
+  parseAbiItem('function transfer(address to, uint256 amount) returns (bool)'),
+  parseAbiItem('function approve(address spender, uint256 amount) returns (bool)'),
+] as const;
 
 /**
  * AgentKit configuration
@@ -28,6 +42,21 @@ export interface AgentKitConfig {
 
 /** CdpAgentkit instance type for execution functions */
 export type AgentKitInstance = CdpAgentkit;
+
+/** Input shape for CDP TransferAction.run() */
+interface TransferRunInput {
+  assetId: string;
+  destination: string;
+  amount: string;
+  gasless?: boolean;
+}
+
+/** Input shape for CDP TradeAction.run() */
+interface TradeRunInput {
+  fromAssetId: string;
+  toAssetId: string;
+  amount: string;
+}
 
 const transferAction = new TransferAction();
 const tradeAction = new TradeAction();
@@ -65,21 +94,24 @@ export async function initializeAgentKit(
   return agentkit;
 }
 
+let cachedAgentKit: AgentKitInstance | null = null;
+
 /**
- * Execute a decision using AgentKit
+ * Execute a decision using AgentKit (reuses cached instance when available)
  */
 export async function executeWithAgentKit(
   decision: Decision,
   mode: 'LIVE' | 'SIMULATION'
 ): Promise<ExecutionResult> {
-  console.log(`[AgentKit] Executing ${decision.action} in ${mode} mode`);
+  logger.info('[AgentKit] Executing', { action: decision.action, mode });
 
   if (mode === 'SIMULATION') {
-    return simulateExecution(decision);
+    return await simulateExecution(decision);
   }
 
   try {
-    const agentkit = await initializeAgentKit();
+    if (!cachedAgentKit) cachedAgentKit = await initializeAgentKit();
+    const agentkit = cachedAgentKit;
 
     switch (decision.action) {
       case 'TRANSFER':
@@ -97,7 +129,7 @@ export async function executeWithAgentKit(
         };
     }
   } catch (error) {
-    console.error('[AgentKit] Execution error:', error);
+    logger.error('[AgentKit] Execution error', { error: error instanceof Error ? error.message : String(error) });
     const message = error instanceof Error ? error.message : String(error);
     return {
       success: false,
@@ -106,18 +138,190 @@ export async function executeWithAgentKit(
   }
 }
 
+function getSimulationClient() {
+  const rpcUrl = process.env.RPC_URL_BASE_SEPOLIA ?? process.env.RPC_URL_84532;
+  return createPublicClient({
+    chain: baseSepolia,
+    transport: http(rpcUrl),
+  });
+}
+
 /**
- * Simulate execution without real transactions
+ * Simulate execution using viem simulateContract / eth_call.
+ * Validates reverts, estimates gas where possible.
  */
-function simulateExecution(decision: Decision): ExecutionResult {
+async function simulateExecution(decision: Decision): Promise<ExecutionResult> {
   console.log('[AgentKit] Simulating execution:', decision.action);
+
+  if (decision.action === 'TRANSFER') {
+    const params = decision.parameters as TransferParams | null;
+    if (!params) {
+      return { success: false, error: 'Transfer requires parameters' };
+    }
+    try {
+      const client = getSimulationClient();
+      const tokenAddress = params.token.startsWith('0x')
+        ? (params.token as `0x${string}`)
+        : undefined;
+      if (!tokenAddress) {
+        return {
+          success: true,
+          simulationResult: {
+            action: 'TRANSFER',
+            parameters: params,
+            message: 'Simulation skipped - token is symbol, not address',
+          },
+        };
+      }
+      const { result } = await client.simulateContract({
+        address: tokenAddress,
+        abi: ERC20_TRANSFER_ABI,
+        functionName: 'transfer',
+        args: [params.recipient as `0x${string}`, BigInt(params.amount)],
+        account: '0x0000000000000000000000000000000000000000' as `0x${string}`,
+      });
+      const gas = await client.estimateContractGas({
+        address: tokenAddress,
+        abi: ERC20_TRANSFER_ABI,
+        functionName: 'transfer',
+        args: [params.recipient as `0x${string}`, BigInt(params.amount)],
+        account: '0x0000000000000000000000000000000000000000' as `0x${string}`,
+      });
+      return {
+        success: result === true,
+        simulationResult: {
+          action: 'TRANSFER',
+          parameters: params,
+          result,
+          gasEstimate: gas.toString(),
+          message: 'Simulation successful (eth_call + gas estimate)',
+        },
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const revertMatch = message.match(/revert|rejected|insufficient/i);
+      return {
+        success: false,
+        error: revertMatch ? `Simulation reverted: ${message}` : message,
+        simulationResult: {
+          action: 'TRANSFER',
+          parameters: decision.parameters,
+          revertReason: message,
+        },
+      };
+    }
+  }
+
+  if (decision.action === 'EXECUTE') {
+    const params = decision.parameters as ExecuteParams | null;
+    if (!params) {
+      return { success: false, error: 'EXECUTE requires parameters' };
+    }
+    try {
+      const client = getSimulationClient();
+      const contractAddress = params.contractAddress as `0x${string}`;
+      const fn = params.functionName.toLowerCase();
+      const isTransfer = fn.includes('transfer') && params.args && params.args.length >= 2;
+      const isApprove = fn.includes('approve') && params.args && params.args.length >= 2;
+      if (isTransfer) {
+        const [to, amount] = params.args as [string, string];
+        const { result } = await client.simulateContract({
+          address: contractAddress,
+          abi: ERC20_TRANSFER_ABI,
+          functionName: 'transfer',
+          args: [to as `0x${string}`, BigInt(amount)],
+          account: '0x0000000000000000000000000000000000000000' as `0x${string}`,
+        });
+        const gas = await client.estimateContractGas({
+          address: contractAddress,
+          abi: ERC20_TRANSFER_ABI,
+          functionName: 'transfer',
+          args: [to as `0x${string}`, BigInt(amount)],
+          account: '0x0000000000000000000000000000000000000000' as `0x${string}`,
+        });
+        return {
+          success: result === true,
+          simulationResult: {
+            action: 'EXECUTE',
+            functionName: params.functionName,
+            gasEstimate: gas.toString(),
+            message: 'Simulation successful (eth_call + gas estimate)',
+          },
+        };
+      }
+      if (isApprove && params.args && params.args.length >= 2) {
+        const [spender, amount] = params.args as [string, string];
+        const { result } = await client.simulateContract({
+          address: contractAddress,
+          abi: MINIMAL_CALL_ABI,
+          functionName: 'approve',
+          args: [spender as `0x${string}`, BigInt(amount)],
+          account: '0x0000000000000000000000000000000000000000' as `0x${string}`,
+        });
+        const gas = await client.estimateContractGas({
+          address: contractAddress,
+          abi: MINIMAL_CALL_ABI,
+          functionName: 'approve',
+          args: [spender as `0x${string}`, BigInt(amount)],
+          account: '0x0000000000000000000000000000000000000000' as `0x${string}`,
+        });
+        return {
+          success: result === true,
+          simulationResult: {
+            action: 'EXECUTE',
+            functionName: params.functionName,
+            gasEstimate: gas.toString(),
+            message: 'Simulation successful (eth_call + gas estimate)',
+          },
+        };
+      }
+      return {
+        success: true,
+        simulationResult: {
+          action: 'EXECUTE',
+          parameters: params,
+          message: 'Simulation skipped - only transfer/approve supported for eth_call',
+        },
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        success: false,
+        error: `Simulation reverted: ${message}`,
+        simulationResult: {
+          action: 'EXECUTE',
+          parameters: decision.parameters,
+          revertReason: message,
+        },
+      };
+    }
+  }
+
+  if (decision.action === 'SWAP' || decision.action === 'REBALANCE') {
+    const params = decision.parameters as SwapParams | null;
+    if (!params) {
+      return {
+        success: false,
+        error: 'SWAP/REBALANCE requires parameters',
+      };
+    }
+    return {
+      success: true,
+      simulationResult: {
+        action: decision.action,
+        parameters: params,
+        message:
+          'Simulation validated parameters - actual swap/rebalance would be executed via AgentKit',
+      },
+    };
+  }
 
   return {
     success: true,
     simulationResult: {
       action: decision.action,
       parameters: decision.parameters,
-      message: 'Simulation successful - no actual transaction submitted',
+      message: 'Simulation successful - no transaction submitted',
     },
   };
 }
@@ -154,13 +358,14 @@ async function executeTransfer(
   const assetId = toAssetId(params.token, networkId);
 
   try {
-    const result = await agentkit.run(transferAction, {
+    const input: TransferRunInput = {
       assetId,
       destination: params.recipient,
       amount: params.amount,
       gasless: networkId.includes('base') && assetId.toLowerCase() === 'usdc',
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- CDP run() expects schema type at compile time but inferred type at runtime
-} as any);
+    };
+    // CDP run() expects schema type at compile time; runtime accepts this input shape
+    const result = await agentkit.run(transferAction, input as unknown as Parameters<AgentKitInstance['run']>[1]);
 
     const txHash = extractTxHash(result);
     return {
@@ -192,12 +397,12 @@ async function executeSwap(
   const toId = toAssetId(params.tokenOut, networkId);
 
   try {
-    const result = await agentkit.run(tradeAction, {
+    const input: TradeRunInput = {
       fromAssetId: fromId,
       toAssetId: toId,
       amount: params.amountIn,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- CDP run() expects schema type at compile time but inferred type at runtime
-} as any);
+    };
+    const result = await agentkit.run(tradeAction, input as unknown as Parameters<AgentKitInstance['run']>[1]);
 
     const txHash = extractTxHash(result);
     return {
@@ -212,11 +417,16 @@ async function executeSwap(
   }
 }
 
+function getExecuteAllowlist(): string[] {
+  const raw = process.env.ALLOWED_CONTRACT_ADDRESSES;
+  if (!raw?.trim()) return [];
+  return raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+}
+
 /**
- * Execute a generic contract call. CDP AgentKit does not expose a generic
- * invoke_contract action; we use deploy_contract only for deployment.
- * For arbitrary contract calls we return a clear error and suggest using
- * EXECUTE with a dedicated integration (e.g. viem + wallet from AgentKit).
+ * Execute a contract call using viem writeContract.
+ * Validates contract address against ALLOWED_CONTRACT_ADDRESSES.
+ * Supports transfer(address,uint256) and approve(address,uint256) when EXECUTE_WALLET_PRIVATE_KEY is set.
  */
 async function executeContractCall(
   _agentkit: AgentKitInstance,
@@ -227,14 +437,88 @@ async function executeContractCall(
     return { success: false, error: 'Contract call requires parameters' };
   }
 
-  return {
-    success: false,
-    error:
-      'EXECUTE (contract call) is not supported by CDP AgentKit actions. Use TRANSFER or SWAP for treasury operations, or extend with a viem-based contract invocation layer. Requested: ' +
-      params.functionName +
-      ' at ' +
-      params.contractAddress,
-  };
+  const privateKey = process.env.EXECUTE_WALLET_PRIVATE_KEY ?? process.env.AGENT_PRIVATE_KEY;
+  if (!privateKey) {
+    return {
+      success: false,
+      error:
+        'EXECUTE requires EXECUTE_WALLET_PRIVATE_KEY or AGENT_PRIVATE_KEY. Use TRANSFER or SWAP for AgentKit-backed execution.',
+    };
+  }
+
+  const allowlist = getExecuteAllowlist();
+  const contractLower = params.contractAddress.toLowerCase();
+  if (allowlist.length > 0 && !allowlist.includes(contractLower)) {
+    return {
+      success: false,
+      error: `Contract ${params.contractAddress} is not in ALLOWED_CONTRACT_ADDRESSES`,
+    };
+  }
+
+  const rpcUrl = process.env.RPC_URL_BASE_SEPOLIA ?? process.env.RPC_URL_84532;
+  if (!rpcUrl) {
+    return { success: false, error: 'RPC URL not configured for EXECUTE' };
+  }
+
+  const account = privateKeyToAccount(privateKey as `0x${string}`);
+  const client = createWalletClient({
+    account,
+    chain: baseSepolia,
+    transport: http(rpcUrl),
+  });
+  const publicClient = createPublicClient({
+    chain: baseSepolia,
+    transport: http(rpcUrl),
+  });
+
+  const contractAddress = params.contractAddress as `0x${string}`;
+  const fn = params.functionName.toLowerCase();
+  const isTransfer = fn.includes('transfer') && params.args && params.args.length >= 2;
+  const isApprove = fn.includes('approve') && params.args && params.args.length >= 2;
+
+  try {
+    if (isTransfer) {
+      const [to, amount] = params.args as [string, string];
+      const hash = await client.writeContract({
+        address: contractAddress,
+        abi: ERC20_TRANSFER_ABI,
+        functionName: 'transfer',
+        args: [to as `0x${string}`, BigInt(amount)],
+      });
+      const receipt = await publicClient.waitForTransactionReceipt({ hash });
+      return {
+        success: true,
+        transactionHash: hash,
+        blockNumber: receipt.blockNumber,
+        gasUsed: receipt.gasUsed,
+        simulationResult: { hash, blockNumber: receipt.blockNumber.toString() },
+      };
+    }
+    if (isApprove && params.args && params.args.length >= 2) {
+      const [spender, amount] = params.args as [string, string];
+      const hash = await client.writeContract({
+        address: contractAddress,
+        abi: MINIMAL_CALL_ABI,
+        functionName: 'approve',
+        args: [spender as `0x${string}`, BigInt(amount)],
+      });
+      const receipt = await publicClient.waitForTransactionReceipt({ hash });
+      return {
+        success: true,
+        transactionHash: hash,
+        blockNumber: receipt.blockNumber,
+        gasUsed: receipt.gasUsed,
+        simulationResult: { hash, blockNumber: receipt.blockNumber.toString() },
+      };
+    }
+    return {
+      success: false,
+      error: `EXECUTE supports only transfer and approve. Requested: ${params.functionName} at ${params.contractAddress}`,
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { success: false, error: `EXECUTE failed: ${message}` };
+  }
 }
 
 /**
@@ -254,12 +538,12 @@ async function executeRebalance(
 
   const networkId = process.env.AGENT_NETWORK_ID || 'base-sepolia';
   try {
-    const result = await agentkit.run(tradeAction, {
+    const rebalanceInput: TradeRunInput = {
       fromAssetId: toAssetId(params.tokenIn, networkId),
       toAssetId: toAssetId(params.tokenOut, networkId),
       amount: params.amountIn,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- CDP run() expects schema type at compile time but inferred type at runtime
-} as any);
+    };
+    const result = await agentkit.run(tradeAction, rebalanceInput as unknown as Parameters<AgentKitInstance['run']>[1]);
 
     const txHash = extractTxHash(result);
     return {
