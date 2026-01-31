@@ -5,10 +5,11 @@
  */
 
 import { createPublicClient, http, formatEther } from 'viem';
+import type { Abi } from 'viem';
 import { base, baseSepolia, mainnet, sepolia } from 'viem/chains';
+import { getDefaultChainName, getSupportedChainNames } from './chains';
 import type { Observation } from './index';
 
-// Chain configurations
 const chains = {
   base,
   baseSepolia,
@@ -18,11 +19,11 @@ const chains = {
 
 type ChainName = keyof typeof chains;
 
-// Create public clients for each chain
 function getPublicClient(chainName: ChainName) {
   const chain = chains[chainName];
-  const rpcUrl = process.env[`RPC_URL_${chainName.toUpperCase()}`];
-  
+  const envKey =
+    chainName === 'baseSepolia' ? 'BASE_SEPOLIA_RPC_URL' : `RPC_URL_${chainName.toUpperCase()}`;
+  const rpcUrl = process.env[envKey] ?? process.env[`${chainName.toUpperCase()}_RPC_URL`];
   return createPublicClient({
     chain,
     transport: http(rpcUrl),
@@ -30,44 +31,37 @@ function getPublicClient(chainName: ChainName) {
 }
 
 /**
- * Observe the current blockchain state
+ * Observe the current blockchain state (configurable via SUPPORTED_CHAINS)
  */
 export async function observeBlockchainState(): Promise<Observation[]> {
   const observations: Observation[] = [];
-  
-  // Default to Base Sepolia for development
-  const chainName: ChainName = 'baseSepolia';
-  const client = getPublicClient(chainName);
+  const chainNames = getSupportedChainNames();
+  const defaultChain = chainNames[0] ?? getDefaultChainName();
 
-  try {
-    // Get current block number
-    const blockNumber = await client.getBlockNumber();
-    
-    // Get gas price
-    const gasPrice = await client.getGasPrice();
-
-    observations.push({
-      id: `block-${blockNumber}`,
-      timestamp: new Date(),
-      source: 'blockchain',
-      chainId: chains[chainName].id,
-      blockNumber,
-      data: {
-        blockNumber: blockNumber.toString(),
-        gasPrice: gasPrice.toString(),
-        gasPriceGwei: formatEther(gasPrice * BigInt(1e9)),
-      },
-      context: `Current block state on ${chainName}`,
-    });
-
-    // TODO: Add treasury balance observation
-    // TODO: Add governance state observation
-    // TODO: Add relevant contract state observation
-
-  } catch (error) {
-    console.error('[Blockchain] Error observing state:', error);
+  for (const chainName of chainNames.length > 0 ? chainNames : [defaultChain]) {
+    const name = chainName as ChainName;
+    const client = getPublicClient(name);
+    try {
+      const blockNumber = await client.getBlockNumber();
+      const gasPrice = await client.getGasPrice();
+      const chain = chains[name];
+      observations.push({
+        id: `block-${chain.id}-${blockNumber}`,
+        timestamp: new Date(),
+        source: 'blockchain',
+        chainId: chain.id,
+        blockNumber,
+        data: {
+          blockNumber: blockNumber.toString(),
+          gasPrice: gasPrice.toString(),
+          gasPriceGwei: formatEther(gasPrice * BigInt(1e9)),
+        },
+        context: `Current block state on ${name}`,
+      });
+    } catch (error) {
+      console.error('[Blockchain] Error observing state:', error);
+    }
   }
-
   return observations;
 }
 
@@ -76,7 +70,7 @@ export async function observeBlockchainState(): Promise<Observation[]> {
  */
 export async function getBalance(
   address: `0x${string}`,
-  chainName: ChainName = 'baseSepolia'
+  chainName: ChainName = getDefaultChainName()
 ): Promise<bigint> {
   const client = getPublicClient(chainName);
   return client.getBalance({ address });
@@ -87,10 +81,10 @@ export async function getBalance(
  */
 export async function readContract(
   address: `0x${string}`,
-  abi: unknown[],
+  abi: Abi,
   functionName: string,
   args: unknown[] = [],
-  chainName: ChainName = 'baseSepolia'
+  chainName: ChainName = getDefaultChainName()
 ): Promise<unknown> {
   const client = getPublicClient(chainName);
   return client.readContract({
@@ -98,5 +92,5 @@ export async function readContract(
     abi,
     functionName,
     args,
-  } as any);
+  });
 }

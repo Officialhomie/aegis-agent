@@ -7,8 +7,12 @@
 import { createPublicClient, http, formatUnits } from 'viem';
 import { getDeFiPositions as getDeFiPositionsFromDefi } from './defi';
 import { getGovernanceState as getGovernanceStateFromGov } from './governance';
+import { getDefaultChainName, getSupportedChainNames } from './chains';
+import { getPrice } from './oracles';
 import { base, baseSepolia, mainnet, sepolia } from 'viem/chains';
 import type { Observation } from './index';
+import type { DeFiPosition, LendingPosition } from './defi';
+import type { GovernanceState } from './governance';
 
 const erc20BalanceOfAbi = [
   {
@@ -43,11 +47,19 @@ export interface TokenBalance {
   chainId: number;
 }
 
+export interface RiskMetrics {
+  totalValueUsd: number;
+  concentrationHerfindahl: number;
+  liquidationRiskScore: number;
+  gasCostRatioBps: number;
+  summary: string;
+}
+
 export interface TreasuryState {
   tokens: TokenBalance[];
-  positions: unknown[];
-  governance: unknown;
-  riskMetrics: unknown;
+  positions: DeFiPosition[];
+  governance: GovernanceState[] | Record<string, never>;
+  riskMetrics: RiskMetrics;
 }
 
 const chains = {
@@ -160,7 +172,7 @@ export async function getTokenBalancesForChain(
  */
 export async function getTokenBalances(
   treasuryAddress: string,
-  chainNames: ChainName[] = ['baseSepolia']
+  chainNames: ChainName[] = getSupportedChainNames()
 ): Promise<TokenBalance[]> {
   const results = await Promise.all(
     chainNames.map((name) => getTokenBalancesForChain(treasuryAddress, name))
@@ -171,23 +183,87 @@ export async function getTokenBalances(
 /**
  * DeFi positions (Aave, Compound, Uniswap) - implemented in defi.ts
  */
-export async function getDeFiPositions(treasuryAddress: string): Promise<unknown[]> {
+export async function getDeFiPositions(treasuryAddress: string): Promise<DeFiPosition[]> {
   return getDeFiPositionsFromDefi(treasuryAddress);
 }
 
 /**
  * Governance state - implemented in governance.ts
  */
-export async function getGovernanceState(treasuryAddress: string): Promise<unknown> {
+export async function getGovernanceState(treasuryAddress: string): Promise<GovernanceState[] | Record<string, never>> {
   const states = await getGovernanceStateFromGov(treasuryAddress);
   return states.length > 0 ? states : {};
 }
 
 /**
- * Placeholder for risk metrics - can be computed from balances and prices
+ * Compute risk metrics: concentration (Herfindahl), liquidation risk, gas cost ratio.
  */
-export async function calculateRiskMetrics(_treasuryAddress: string): Promise<unknown> {
-  return {};
+export async function calculateRiskMetrics(treasuryAddress: string): Promise<RiskMetrics> {
+  const [tokens, positions, ethPriceResult] = await Promise.all([
+    getTokenBalances(treasuryAddress),
+    getDeFiPositionsFromDefi(treasuryAddress),
+    getPrice('ETH/USD', getDefaultChainName()).catch(() => null),
+  ]);
+
+  const ethUsd = ethPriceResult ? parseFloat(ethPriceResult.price) : 0;
+  const valuesUsd: number[] = [];
+
+  for (const t of tokens) {
+    const balanceNum = parseFloat(t.balanceFormatted);
+    if (Number.isNaN(balanceNum)) continue;
+    if (t.symbol === 'WETH' || t.symbol === 'ETH') {
+      valuesUsd.push(balanceNum * ethUsd);
+    } else if (t.symbol === 'USDC' || t.symbol === 'USDT') {
+      valuesUsd.push(balanceNum);
+    } else {
+      valuesUsd.push(balanceNum * ethUsd * 0.5);
+    }
+  }
+
+  const lendingPositions = (positions as DeFiPosition[]).filter(
+    (p): p is LendingPosition => p.protocol === 'aave' || p.protocol === 'compound'
+  );
+  let liquidationRiskScore = 0;
+  for (const pos of lendingPositions) {
+    if (pos.healthFactor) {
+      const hf = parseFloat(pos.healthFactor);
+      if (!Number.isNaN(hf) && hf > 0) {
+        if (hf < 1) liquidationRiskScore = Math.max(liquidationRiskScore, 100);
+        else if (hf < 1.5) liquidationRiskScore = Math.max(liquidationRiskScore, 50);
+        else if (hf < 2) liquidationRiskScore = Math.max(liquidationRiskScore, 20);
+      }
+    }
+  }
+
+  const totalValueUsd = valuesUsd.reduce((a, b) => a + b, 0);
+  let concentrationHerfindahl = 0;
+  if (totalValueUsd > 0) {
+    for (const v of valuesUsd) {
+      const share = v / totalValueUsd;
+      concentrationHerfindahl += share * share;
+    }
+  }
+
+  const gasPriceGwei = 0.05;
+  const gasPerTx = 200_000;
+  const gasCostEth = (gasPriceGwei * gasPerTx) / 1e9;
+  const gasCostUsd = gasCostEth * ethUsd;
+  const gasCostRatioBps = totalValueUsd > 0 ? Math.round((gasCostUsd / totalValueUsd) * 10000) : 0;
+
+  const summary = [
+    `Total ~$${totalValueUsd.toFixed(0)}`,
+    `Concentration HHI ${concentrationHerfindahl.toFixed(2)}`,
+    liquidationRiskScore > 0 ? `Liquidation risk ${liquidationRiskScore}` : 'No lending liquidation risk',
+    `Gas ratio ${gasCostRatioBps} bps`,
+  ].join('; ');
+
+  return {
+    totalValueUsd,
+    concentrationHerfindahl,
+    liquidationRiskScore,
+    gasCostRatioBps,
+    summary,
+  };
 }
 
 /**
@@ -208,7 +284,8 @@ export async function observeTreasuryState(treasuryAddress: string): Promise<Tre
  */
 export async function observeTreasury(treasuryAddress: string): Promise<Observation[]> {
   const observations: Observation[] = [];
-  const chainNames: ChainName[] = ['baseSepolia'];
+  const supported = getSupportedChainNames();
+  const chainNames: ChainName[] = supported.length > 0 ? supported : ['baseSepolia'];
 
   for (const chainName of chainNames) {
     const chainId = chains[chainName].id;

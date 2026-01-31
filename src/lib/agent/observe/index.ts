@@ -7,9 +7,23 @@
  * - Events (governance proposals, transfers)
  */
 
+import { logger } from '../../logger';
+import { getDefaultChainName } from './chains';
 import { observeBlockchainState } from './blockchain';
 import { observeTreasury } from './treasury';
 import { observeOraclePrices } from './oracles';
+import type { GovernanceState } from './governance';
+import type { DeFiPosition } from './defi';
+import type { TokenBalance } from './treasury';
+
+/** Union of observation payloads from different sources */
+export type ObservationData =
+  | { blockNumber?: string; gasPrice?: string; gasPriceGwei?: string }
+  | { treasuryAddress: string; chainName?: string; tokens: TokenBalance[] }
+  | { pair: string; price: string; source?: string }
+  | GovernanceState
+  | { treasuryAddress: string; positions: DeFiPosition[] }
+  | Record<string, unknown>;
 
 export interface Observation {
   id: string;
@@ -17,7 +31,7 @@ export interface Observation {
   source: 'blockchain' | 'oracle' | 'api' | 'event';
   chainId?: number;
   blockNumber?: bigint;
-  data: unknown;
+  data: ObservationData;
   context?: string;
 }
 
@@ -37,10 +51,11 @@ export async function observe(): Promise<Observation[]> {
       observations.push(...treasuryObs);
     }
 
-    const oracleObs = await observeOraclePrices(['ETH/USD'], 'baseSepolia');
+    const defaultChain = getDefaultChainName();
+    const oracleObs = await observeOraclePrices(['ETH/USD'], defaultChain);
     observations.push(...oracleObs);
   } catch (error) {
-    console.error('[Observe] Error gathering observations:', error);
+    logger.error('[Observe] Error gathering observations', { error: error instanceof Error ? error.message : String(error) });
   }
 
   return observations;
@@ -54,6 +69,7 @@ export {
   getTokenBalancesForChain,
   type TreasuryState,
   type TokenBalance,
+  type RiskMetrics,
 } from './treasury';
 export {
   observeOraclePrices,

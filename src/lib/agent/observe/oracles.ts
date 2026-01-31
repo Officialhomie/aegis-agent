@@ -1,11 +1,13 @@
 /**
  * Aegis Agent - Oracle / Price Feed Observation
  *
- * Chainlink price feeds with CoinGecko API fallback and TTL cache.
+ * Chainlink price feeds with CoinGecko API fallback, TTL cache, and rate limiting.
  */
 
+import { LRUCache } from 'lru-cache';
 import { createPublicClient, http } from 'viem';
 import { base, baseSepolia, mainnet, sepolia } from 'viem/chains';
+import { getDefaultChainName } from './chains';
 import type { Observation } from './index';
 
 const chainlinkAggregatorAbi = [
@@ -57,21 +59,25 @@ const CHAINLINK_FEEDS: Record<string, Partial<Record<ChainName, `0x${string}`>>>
   },
 };
 
-const CACHE_TTL_MS = Number(process.env.ORACLE_CACHE_TTL_MS) || 60_000; // 1 min
-const cache = new Map<string, { value: PriceFeedResult; expires: number }>();
+const CACHE_TTL_MS = Number(process.env.ORACLE_CACHE_TTL_MS) || 60_000;
+const CACHE_MAX = Math.min(Number(process.env.ORACLE_CACHE_MAX_ENTRIES) || 500, 2000);
+
+/** Bounded LRU cache for oracle prices (avoids unbounded memory growth) */
+const cache = new LRUCache<string, PriceFeedResult>({
+  max: CACHE_MAX,
+  ttl: CACHE_TTL_MS,
+});
 
 function cacheKey(pair: string, chainName: string, source: string): string {
   return `${source}:${chainName}:${pair}`;
 }
 
 function getCached(key: string): PriceFeedResult | null {
-  const entry = cache.get(key);
-  if (!entry || Date.now() > entry.expires) return null;
-  return entry.value;
+  return cache.get(key) ?? null;
 }
 
 function setCached(key: string, value: PriceFeedResult): void {
-  cache.set(key, { value, expires: Date.now() + CACHE_TTL_MS });
+  cache.set(key, value);
 }
 
 function getPublicClient(chainName: ChainName) {
@@ -98,7 +104,7 @@ function getFeedAddress(pair: string, chainName: ChainName): `0x${string}` | nul
  */
 export async function getChainlinkPrice(
   pair: string,
-  chainName: ChainName = 'baseSepolia'
+  chainName: ChainName = getDefaultChainName()
 ): Promise<PriceFeedResult | null> {
   const key = cacheKey(pair, chainName, 'chainlink');
   const cached = getCached(key);
@@ -148,23 +154,70 @@ const COINGECKO_IDS: Record<string, string> = {
   USDT: 'tether',
 };
 
+/** CoinGecko rate limit: min ms between requests (free tier ~10–30/min) */
+const COINGECKO_MIN_INTERVAL_MS = 2000;
+let lastCoinGeckoRequest = 0;
+
+function waitCoinGeckoRateLimit(): Promise<void> {
+  const now = Date.now();
+  const elapsed = now - lastCoinGeckoRequest;
+  if (elapsed >= COINGECKO_MIN_INTERVAL_MS) return Promise.resolve();
+  return new Promise((r) => setTimeout(r, COINGECKO_MIN_INTERVAL_MS - elapsed));
+}
+
+async function fetchCoinGeckoWithRetry(
+  url: string,
+  headers: Record<string, string>,
+  maxRetries = 3
+): Promise<Response> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    await waitCoinGeckoRateLimit();
+    lastCoinGeckoRequest = Date.now();
+    try {
+      const res = await fetch(url, {
+        signal: AbortSignal.timeout(8000),
+        headers,
+      });
+      if (res.status === 429 && attempt < maxRetries) {
+        const backoff = Math.min(1000 * 2 ** attempt, 10000);
+        await new Promise((r) => setTimeout(r, backoff));
+        continue;
+      }
+      return res;
+    } catch (e) {
+      lastErr = e;
+      if (attempt < maxRetries) {
+        const backoff = Math.min(1000 * 2 ** attempt, 10000);
+        await new Promise((r) => setTimeout(r, backoff));
+      }
+    }
+  }
+  throw lastErr;
+}
+
 /**
- * Fetch price from CoinGecko (free API, no key required for simple usage)
+ * Fetch price from CoinGecko. COINGECKO_API_KEY optional (Pro API); rate limiting and retry with backoff.
  */
 export async function getCoinGeckoPrice(pair: string): Promise<PriceFeedResult | null> {
   const key = cacheKey(pair, 'coingecko', 'coingecko');
   const cached = getCached(key);
   if (cached) return cached;
 
-  const [base, quote] = pair.split('/').map((s) => s.trim());
-  const id = COINGECKO_IDS[base] ?? base.toLowerCase();
+  const [baseSymbol, quote] = pair.split('/').map((s) => s.trim());
+  const id = COINGECKO_IDS[baseSymbol] ?? baseSymbol.toLowerCase();
   if (quote !== 'USD') return null;
 
+  const apiKey = process.env.COINGECKO_API_KEY;
+  const baseUrl = apiKey
+    ? 'https://pro-api.coingecko.com/api/v3'
+    : 'https://api.coingecko.com/api/v3';
+  const url = `${baseUrl}/simple/price?ids=${encodeURIComponent(id)}&vs_currencies=usd`;
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  if (apiKey) headers['x-cg-pro-api-key'] = apiKey;
+
   try {
-    const res = await fetch(
-      `https://api.coingecko.com/api/v3/simple/price?ids=${id}&vs_currencies=usd`,
-      { signal: AbortSignal.timeout(5000) }
-    );
+    const res = await fetchCoinGeckoWithRetry(url, headers);
     if (!res.ok) return null;
     const data = (await res.json()) as Record<string, { usd?: number }>;
     const usd = data[id]?.usd;
@@ -188,7 +241,7 @@ export async function getCoinGeckoPrice(pair: string): Promise<PriceFeedResult |
  */
 export async function getPrice(
   pair: string,
-  chainName: ChainName = 'baseSepolia'
+  chainName: ChainName = getDefaultChainName()
 ): Promise<PriceFeedResult | null> {
   const chainlink = await getChainlinkPrice(pair, chainName);
   if (chainlink) return chainlink;
@@ -200,7 +253,7 @@ export async function getPrice(
  */
 export async function observeOraclePrices(
   pairs: string[] = ['ETH/USD'],
-  chainName: ChainName = 'baseSepolia'
+  chainName: ChainName = getDefaultChainName()
 ): Promise<Observation[]> {
   const observations: Observation[] = [];
 
