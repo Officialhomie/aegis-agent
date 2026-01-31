@@ -53,7 +53,7 @@ export class EmbeddingService {
       });
 
       const embedding = embeddingResponse.data[0].embedding;
-      const embeddingId = `mem-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      const embeddingId = `mem-${Date.now()}-${crypto.randomUUID()}`;
 
       // Store in Pinecone
       try {

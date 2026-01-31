@@ -1,18 +1,15 @@
 /**
  * Aegis Agent - Memory Store
- * 
+ *
  * PostgreSQL-backed storage for agent memories using Prisma.
  */
 
-// Lazy-load Prisma client without requiring generated types at build time.
-// This allows the project to compile before `prisma generate` runs.
-type PrismaClient = any;
+import { PrismaClient } from '@prisma/client';
+
 let prisma: PrismaClient | null = null;
 
 function getPrisma(): PrismaClient {
   if (!prisma) {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { PrismaClient } = require('@prisma/client') as { PrismaClient: PrismaClient };
     prisma = new PrismaClient();
   }
   return prisma;
@@ -46,11 +43,11 @@ export class MemoryStore {
       const memory = await db.memory.create({
         data: {
           agentId: this.agentId,
-          type: input.type as any,
+          type: input.type as 'DECISION' | 'OUTCOME' | 'LEARNED_PATTERN' | 'USER_FEEDBACK',
           content: input.content,
-          metadata: input.metadata as any,
+          metadata: input.metadata as object,
           embeddingId: input.embeddingId,
-          importance: input.importance || 0.5,
+          importance: input.importance ?? 0.5,
         },
       });
 
@@ -76,7 +73,7 @@ export class MemoryStore {
         },
       });
 
-      return memories.map((m: any) => ({
+      return memories.map((m) => ({
         id: m.id,
         type: m.type,
         content: m.content,
@@ -100,13 +97,13 @@ export class MemoryStore {
       const memories = await db.memory.findMany({
         where: {
           agentId: this.agentId,
-          ...(type && { type: type as any }),
+          ...(type && { type: type as 'DECISION' | 'OUTCOME' | 'LEARNED_PATTERN' | 'USER_FEEDBACK' }),
         },
         orderBy: { createdAt: 'desc' },
         take: limit,
       });
 
-      return memories.map((m: any) => ({
+      return memories.map((m) => ({
         id: m.id,
         type: m.type,
         content: m.content,
