@@ -5,16 +5,14 @@
  * Tracks payment lifecycle: PENDING → CONFIRMED → EXECUTED.
  */
 
+import { PrismaClient } from '@prisma/client';
 import { runAgentCycle } from '../index';
 import { recordExecution } from '../identity/reputation';
 
-type PrismaClient = any;
 let prisma: PrismaClient | null = null;
 
 function getPrisma(): PrismaClient {
   if (!prisma) {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { PrismaClient } = require('@prisma/client') as { PrismaClient: PrismaClient };
     prisma = new PrismaClient();
   }
   return prisma;
@@ -113,20 +111,31 @@ export async function upsertPaymentRecord(
 }
 
 /**
- * Execute agent action for a verified x402 payment and record reputation
+ * Execute agent action for a verified x402 payment and record reputation.
+ * Idempotency: if paymentHash was already processed (EXECUTED), skip re-execution.
  */
 export async function executePaidAction(
   paymentProof: X402PaymentProof,
   agentOnChainId?: string
 ): Promise<{ executionResult: unknown; reputationTxHash?: string; paymentId: string }> {
+  const db = getPrisma();
+  const existing = await db.paymentRecord.findUnique({ where: { paymentHash: paymentProof.paymentHash } });
+  if (existing?.status === 'EXECUTED') {
+    return {
+      executionResult: { idempotent: true, previousExecutionId: existing.executionId },
+      paymentId: paymentProof.paymentHash,
+    };
+  }
+
   const payment = await verifyX402Payment(paymentProof);
 
   await upsertPaymentRecord(payment, 'CONFIRMED');
 
+  const executionMode = (process.env.X402_EXECUTION_MODE ?? 'SIMULATION') as 'LIVE' | 'SIMULATION' | 'READONLY';
   const state = await runAgentCycle({
     confidenceThreshold: 0.75,
     maxTransactionValueUsd: 10000,
-    executionMode: 'SIMULATION',
+    executionMode,
     eventData: { requestedAction: payment.requestedAction, requester: payment.requester },
   });
 
