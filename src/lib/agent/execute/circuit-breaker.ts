@@ -2,9 +2,13 @@
  * Circuit breaker to prevent repeated execution failures from overwhelming the system.
  * Opens after threshold failures within the window; resets on success or after cooldown.
  * When REDIS_URL is set, state is persisted to Redis.
+ * Optional health check (reserves) for paymaster loop.
  */
 
 import { getStateStore } from '../state-store';
+import { getAgentWalletBalance } from '../observe/sponsorship';
+
+const RESERVE_CRITICAL_ETH = Number(process.env.RESERVE_CRITICAL_ETH) || 0.05;
 
 const CIRCUIT_BREAKER_KEY = 'aegis:circuit_breaker';
 
@@ -105,6 +109,18 @@ export class CircuitBreaker {
     } catch {
       // ignore
     }
+  }
+
+  /** Optional: check health before execution (reserves, etc.). Returns { healthy: true } or { healthy: false, reason }. */
+  async checkHealthBeforeExecution(): Promise<{ healthy: boolean; reason?: string }> {
+    const reserves = await getAgentWalletBalance();
+    if (reserves.ETH < RESERVE_CRITICAL_ETH) {
+      return { healthy: false, reason: 'Reserve below critical threshold' };
+    }
+    if (this.getState() === 'OPEN') {
+      return { healthy: false, reason: 'Circuit breaker OPEN' };
+    }
+    return { healthy: true };
   }
 
   /** Execute fn only if circuit allows; records success/failure based on result. Persists state when REDIS_URL is set. */
