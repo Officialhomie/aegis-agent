@@ -140,6 +140,9 @@ export async function executeWithAgentKit(
 
 function getSimulationClient() {
   const rpcUrl = process.env.RPC_URL_BASE_SEPOLIA ?? process.env.RPC_URL_84532;
+  if (!rpcUrl?.trim()) {
+    throw new Error('RPC_URL_BASE_SEPOLIA or RPC_URL_84532 must be configured for simulation');
+  }
   return createPublicClient({
     chain: baseSepolia,
     transport: http(rpcUrl),
