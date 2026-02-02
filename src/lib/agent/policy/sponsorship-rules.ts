@@ -35,16 +35,16 @@ export const sponsorshipPolicyRules: PolicyRule[] = [
     severity: 'ERROR',
     validate: async (decision): Promise<RuleResult> => {
       if (!isSponsorshipDecision(decision)) {
-        return { ruleName: 'user-legitimacy-check', passed: true, message: 'N/A', severity: 'ERROR' };
+        return { ruleName: 'agent-legitimacy-check', passed: true, message: 'N/A', severity: 'ERROR' };
       }
-      const userAddress = decision.parameters.userAddress as `0x${string}`;
+      const agentWallet = decision.parameters.agentWallet as `0x${string}`;
       const [txCount, abuse] = await Promise.all([
-        getOnchainTxCount(userAddress),
-        detectAbuse(decision.parameters.userAddress),
+        getOnchainTxCount(agentWallet),
+        detectAbuse(decision.parameters.agentWallet),
       ]);
       if (abuse.isAbusive) {
         return {
-          ruleName: 'user-legitimacy-check',
+          ruleName: 'agent-legitimacy-check',
           passed: false,
           message: abuse.reason ?? 'Abuse detected',
           severity: 'ERROR',
@@ -52,11 +52,11 @@ export const sponsorshipPolicyRules: PolicyRule[] = [
       }
       const passed = txCount >= MIN_HISTORICAL_TXS;
       return {
-        ruleName: 'user-legitimacy-check',
+        ruleName: 'agent-legitimacy-check',
         passed,
         message: passed
-          ? `User has ${txCount} historical txs (min ${MIN_HISTORICAL_TXS})`
-          : `User has ${txCount} historical txs (min ${MIN_HISTORICAL_TXS} required)`,
+          ? `Agent has ${txCount} historical txs (min ${MIN_HISTORICAL_TXS})`
+          : `Agent has ${txCount} historical txs (min ${MIN_HISTORICAL_TXS} required)`,
         severity: 'ERROR',
       };
     },
@@ -105,11 +105,11 @@ export const sponsorshipPolicyRules: PolicyRule[] = [
     severity: 'ERROR',
     validate: async (decision): Promise<RuleResult> => {
       if (!isSponsorshipDecision(decision)) {
-        return { ruleName: 'daily-cap-per-user', passed: true, message: 'N/A', severity: 'ERROR' };
+        return { ruleName: 'daily-cap-per-agent', passed: true, message: 'N/A', severity: 'ERROR' };
       }
-      const user = decision.parameters.userAddress.toLowerCase();
+      const agent = decision.parameters.agentWallet.toLowerCase();
       const store = await getStateStore();
-      const dayKey = `aegis:sponsorship:user:${user}:day`;
+      const dayKey = `aegis:sponsorship:agent:${agent}:day`;
       const raw = await store.get(dayKey);
       const list: number[] = raw ? (JSON.parse(raw) as number[]) : [];
       const now = Date.now();
@@ -121,7 +121,7 @@ export const sponsorshipPolicyRules: PolicyRule[] = [
         await store.set(dayKey, JSON.stringify(trimmed), { px: oneDayMs });
       }
       return {
-        ruleName: 'daily-cap-per-user',
+        ruleName: 'daily-cap-per-agent',
         passed,
         message: passed
           ? `User daily count OK (${trimmed.length}/${MAX_SPONSORSHIPS_PER_USER_DAY})`
