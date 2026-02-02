@@ -32,6 +32,7 @@ describe('Execution Layer', () => {
   });
 
   it('should simulate TRANSFER without real tx', async () => {
+    vi.stubEnv('RPC_URL_BASE_SEPOLIA', 'https://sepolia.base.org');
     const transferDecision: Decision = {
       action: 'TRANSFER',
       confidence: 0.9,

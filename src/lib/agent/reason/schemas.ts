@@ -64,6 +64,7 @@ export const SponsorParams = z.object({
   protocolId: z.string().min(1),
   maxGasLimit: z.number().int().positive().optional().default(200000),
   estimatedCostUSD: z.number().min(0),
+  targetContract: z.string().regex(/^0x[a-fA-F0-9]{40}$/).optional(),
 });
 export type SponsorParams = z.infer<typeof SponsorParams>;
 
@@ -87,12 +88,21 @@ export const AlertProtocolParams = z.object({
 });
 export type AlertProtocolParams = z.infer<typeof AlertProtocolParams>;
 
+/** Optional metadata (e.g. reasoningFailed when LLM/reasoning threw) */
+export const DecisionMetadata = z
+  .object({
+    reasoningFailed: z.boolean().optional(),
+    error: z.string().optional(),
+  })
+  .optional();
+
 /** Base fields shared by all decisions */
 const DecisionBase = z.object({
   confidence: z.number().min(0).max(1),
   reasoning: z.string().min(10),
   preconditions: z.array(z.string()).optional(),
   expectedOutcome: z.string().optional(),
+  metadata: DecisionMetadata,
 });
 
 /** Discriminated union: action determines required parameters type */

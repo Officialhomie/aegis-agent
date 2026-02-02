@@ -7,6 +7,8 @@
 import { LRUCache } from 'lru-cache';
 import { createPublicClient, http } from 'viem';
 import { base, baseSepolia, mainnet, sepolia } from 'viem/chains';
+import { getConfigNumber } from '../../config';
+import { logger } from '../../logger';
 import { getDefaultChainName } from './chains';
 import type { Observation } from './index';
 
@@ -42,6 +44,12 @@ export interface PriceFeedResult {
   updatedAt: number;
 }
 
+export interface PriceError {
+  success: false;
+  error: string;
+  reason: 'network_error' | 'not_available' | 'parse_error' | 'rate_limited';
+}
+
 const chains = { base, baseSepolia, mainnet, sepolia };
 type ChainName = keyof typeof chains;
 
@@ -59,8 +67,8 @@ const CHAINLINK_FEEDS: Record<string, Partial<Record<ChainName, `0x${string}`>>>
   },
 };
 
-const CACHE_TTL_MS = Number(process.env.ORACLE_CACHE_TTL_MS) || 60_000;
-const CACHE_MAX = Math.min(Number(process.env.ORACLE_CACHE_MAX_ENTRIES) || 500, 2000);
+const CACHE_TTL_MS = getConfigNumber('ORACLE_CACHE_TTL_MS', 60_000, 1000, 300_000);
+const CACHE_MAX = Math.min(getConfigNumber('ORACLE_CACHE_MAX_ENTRIES', 500, 1, 2000), 2000);
 
 /** Bounded LRU cache for oracle prices (avoids unbounded memory growth) */
 const cache = new LRUCache<string, PriceFeedResult>({
@@ -105,13 +113,16 @@ function getFeedAddress(pair: string, chainName: ChainName): `0x${string}` | nul
 export async function getChainlinkPrice(
   pair: string,
   chainName: ChainName = getDefaultChainName()
-): Promise<PriceFeedResult | null> {
+): Promise<PriceFeedResult | PriceError> {
   const key = cacheKey(pair, chainName, 'chainlink');
   const cached = getCached(key);
   if (cached) return cached;
 
   const address = getFeedAddress(pair, chainName);
-  if (!address) return null;
+  if (!address) {
+    logger.debug('[Oracle] Chainlink feed address not found', { pair, chainName });
+    return { success: false, error: 'Price feed not available for this pair', reason: 'not_available' };
+  }
 
   try {
     const client = getPublicClient(chainName);
@@ -142,8 +153,12 @@ export async function getChainlinkPrice(
     };
     setCached(key, result);
     return result;
-  } catch {
-    return null;
+  } catch (error) {
+    logger.warn('[Oracle] Chainlink price fetch failed', { error, pair, chainName });
+    const msg = error instanceof Error ? error.message : String(error);
+    const reason: PriceError['reason'] =
+      msg.includes('contract') || msg.includes('not found') ? 'not_available' : 'network_error';
+    return { success: false, error: msg, reason };
   }
 }
 
@@ -199,14 +214,16 @@ async function fetchCoinGeckoWithRetry(
 /**
  * Fetch price from CoinGecko. COINGECKO_API_KEY optional (Pro API); rate limiting and retry with backoff.
  */
-export async function getCoinGeckoPrice(pair: string): Promise<PriceFeedResult | null> {
+export async function getCoinGeckoPrice(pair: string): Promise<PriceFeedResult | PriceError> {
   const key = cacheKey(pair, 'coingecko', 'coingecko');
   const cached = getCached(key);
   if (cached) return cached;
 
   const [baseSymbol, quote] = pair.split('/').map((s) => s.trim());
   const id = COINGECKO_IDS[baseSymbol] ?? baseSymbol.toLowerCase();
-  if (quote !== 'USD') return null;
+  if (quote !== 'USD') {
+    return { success: false, error: 'Only USD quote supported', reason: 'not_available' };
+  }
 
   const apiKey = process.env.COINGECKO_API_KEY;
   const baseUrl = apiKey
@@ -218,10 +235,21 @@ export async function getCoinGeckoPrice(pair: string): Promise<PriceFeedResult |
 
   try {
     const res = await fetchCoinGeckoWithRetry(url, headers);
-    if (!res.ok) return null;
+    if (res.status === 429) {
+      logger.warn('[Oracle] CoinGecko rate limited');
+      return { success: false, error: 'Rate limited', reason: 'rate_limited' };
+    }
+    if (!res.ok) {
+      const text = await res.text();
+      logger.warn('[Oracle] CoinGecko API error', { status: res.status, error: text });
+      return { success: false, error: `HTTP ${res.status}`, reason: 'network_error' };
+    }
     const data = (await res.json()) as Record<string, { usd?: number }>;
     const usd = data[id]?.usd;
-    if (usd == null) return null;
+    if (usd == null) {
+      logger.warn('[Oracle] CoinGecko price not in response', { id, data: Object.keys(data) });
+      return { success: false, error: 'Price not in response', reason: 'parse_error' };
+    }
     const result: PriceFeedResult = {
       pair,
       price: String(usd),
@@ -231,9 +259,20 @@ export async function getCoinGeckoPrice(pair: string): Promise<PriceFeedResult |
     };
     setCached(key, result);
     return result;
-  } catch {
-    return null;
+  } catch (error) {
+    logger.error('[Oracle] CoinGecko fetch exception', { error });
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+      reason: 'network_error',
+    };
   }
+}
+
+function isPriceResult(
+  r: PriceFeedResult | PriceError
+): r is PriceFeedResult {
+  return 'price' in r && !('success' in r);
 }
 
 /**
@@ -244,8 +283,10 @@ export async function getPrice(
   chainName: ChainName = getDefaultChainName()
 ): Promise<PriceFeedResult | null> {
   const chainlink = await getChainlinkPrice(pair, chainName);
-  if (chainlink) return chainlink;
-  return getCoinGeckoPrice(pair);
+  if (isPriceResult(chainlink)) return chainlink;
+  const coingecko = await getCoinGeckoPrice(pair);
+  if (isPriceResult(coingecko)) return coingecko;
+  return null;
 }
 
 /**
@@ -259,7 +300,7 @@ export async function observeOraclePrices(
 
   for (const pair of pairs) {
     const result = await getPrice(pair, chainName);
-    if (result) {
+    if (result != null) {
       observations.push({
         id: `oracle-${pair.replace('/', '-')}-${chainName}`,
         timestamp: new Date(result.updatedAt),

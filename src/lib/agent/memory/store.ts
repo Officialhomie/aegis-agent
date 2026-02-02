@@ -83,8 +83,12 @@ export class MemoryStore {
         createdAt: m.createdAt,
       }));
     } catch (error) {
-      logger.error('[MemoryStore] Error finding memories', { error });
-      return [];
+      logger.error('[MemoryStore] Database unavailable when finding memories', {
+        error,
+        ids,
+        severity: 'CRITICAL',
+      });
+      throw new DatabaseUnavailableError('Cannot retrieve memories - database connection failed');
     }
   }
 
@@ -113,8 +117,13 @@ export class MemoryStore {
         createdAt: m.createdAt,
       }));
     } catch (error) {
-      logger.error('[MemoryStore] Error getting recent memories', { error });
-      return [];
+      logger.error('[MemoryStore] Database unavailable when getting recent memories', {
+        error,
+        type,
+        limit,
+        severity: 'CRITICAL',
+      });
+      throw new DatabaseUnavailableError('Cannot retrieve recent memories - database connection failed');
     }
   }
 
@@ -142,7 +151,16 @@ export class MemoryStore {
         });
       }
     } catch (error) {
-      logger.error('[MemoryStore] Error updating importance', { error });
+      logger.error('[MemoryStore] Failed to update memory importance', {
+        error,
+        memoryId,
+        delta,
+        severity: 'HIGH',
+        impact: 'Memory weighting inaccurate - learning degraded',
+      });
+      throw new DatabaseUnavailableError(
+        `Cannot update memory importance: ${error instanceof Error ? error.message : String(error)}`
+      );
     }
   }
 

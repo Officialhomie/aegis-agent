@@ -32,6 +32,17 @@ vi.mock('../../src/lib/agent/security/abuse-detection', () => ({
   detectAbuse: vi.fn().mockResolvedValue({ isAbusive: false }),
 }));
 
+const mockProtocolFindUnique = vi.fn().mockResolvedValue({
+  protocolId: 'test-protocol',
+  whitelistedContracts: ['0x1234567890123456789012345678901234567890'],
+});
+
+vi.mock('@prisma/client', () => ({
+  PrismaClient: class MockPrismaClient {
+    protocolSponsor = { findUnique: mockProtocolFindUnique };
+  },
+}));
+
 describe('validatePolicy for SPONSOR_TRANSACTION', () => {
   const config: AgentConfig = {
     confidenceThreshold: 0.8,
@@ -92,5 +103,27 @@ describe('validatePolicy for SPONSOR_TRANSACTION', () => {
     expect(result.passed).toBe(false);
     const gasRule = result.errors?.find((e) => e.toLowerCase().includes('gas'));
     expect(gasRule).toBeDefined();
+  });
+
+  it('contract-whitelist-check fails CLOSED when database throws', async () => {
+    mockProtocolFindUnique.mockRejectedValueOnce(new Error('Connection refused'));
+    const decision: Decision = {
+      action: 'SPONSOR_TRANSACTION',
+      confidence: 0.9,
+      reasoning: 'Valid sponsorship with target contract for whitelist check.',
+      parameters: {
+        agentWallet: '0x1234567890123456789012345678901234567890',
+        protocolId: 'test-protocol',
+        maxGasLimit: 200000,
+        estimatedCostUSD: 0.5,
+        targetContract: '0x1234567890123456789012345678901234567890',
+      },
+    };
+    const result = await validatePolicy(decision, config);
+    expect(result.passed).toBe(false);
+    const whitelistError = result.errors?.find(
+      (e) => e.includes('contract-whitelist-check') && e.toLowerCase().includes('database')
+    );
+    expect(whitelistError).toBeDefined();
   });
 });

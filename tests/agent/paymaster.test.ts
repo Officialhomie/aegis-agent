@@ -3,14 +3,33 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { signDecision, sponsorTransaction, executePaymasterSponsorship } from '../../src/lib/agent/execute/paymaster';
+import {
+  signDecision,
+  sponsorTransaction,
+  executePaymasterSponsorship,
+  deductProtocolBudget,
+} from '../../src/lib/agent/execute/paymaster';
 import type { Decision } from '../../src/lib/agent/reason/schemas';
+
+const mockProtocolSponsorUpdate = vi.fn();
+const mockSponsorshipRecordCreate = vi.fn().mockResolvedValue(undefined);
+
+vi.mock('@prisma/client', () => ({
+  PrismaClient: class MockPrismaClient {
+    protocolSponsor = { update: mockProtocolSponsorUpdate };
+    sponsorshipRecord = { create: mockSponsorshipRecordCreate };
+  },
+}));
 
 vi.mock('../../src/lib/agent/state-store', () => ({
   getStateStore: vi.fn().mockResolvedValue({
     get: vi.fn().mockResolvedValue(null),
     set: vi.fn().mockResolvedValue(undefined),
   }),
+}));
+
+vi.mock('../../src/lib/ipfs', () => ({
+  uploadDecisionToIPFS: vi.fn().mockResolvedValue({ success: false, reason: 'not_configured', error: 'No IPFS' }),
 }));
 
 vi.mock('viem/account-abstraction', () => ({
@@ -103,5 +122,26 @@ describe('executePaymasterSponsorship', () => {
     });
     expect(result.paymasterReady).toBe(false);
     expect(result.error).toContain('BUNDLER_RPC_URL');
+  });
+});
+
+describe('deductProtocolBudget', () => {
+  beforeEach(() => {
+    mockProtocolSponsorUpdate.mockReset();
+  });
+
+  it('returns success: true when database update succeeds', async () => {
+    mockProtocolSponsorUpdate.mockResolvedValue(undefined);
+    const result = await deductProtocolBudget('test-protocol', 10);
+    expect(result.success).toBe(true);
+    expect(result.error).toBeUndefined();
+  });
+
+  it('returns success: false when database update fails', async () => {
+    mockProtocolSponsorUpdate.mockRejectedValueOnce(new Error('Connection refused'));
+    const result = await deductProtocolBudget('test-protocol', 10);
+    expect(result.success).toBe(false);
+    expect(result.error).toBeDefined();
+    expect(result.error).toContain('Connection refused');
   });
 });

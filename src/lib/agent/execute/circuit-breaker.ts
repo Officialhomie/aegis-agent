@@ -5,6 +5,7 @@
  * Optional health check (reserves) for paymaster loop.
  */
 
+import { logger } from '../../logger';
 import { getStateStore } from '../state-store';
 import { getAgentWalletBalance } from '../observe/sponsorship';
 
@@ -92,13 +93,24 @@ export class CircuitBreaker {
     try {
       const store = await getStateStore();
       const raw = await store.get(CIRCUIT_BREAKER_KEY);
-      if (!raw) return;
+      if (!raw) {
+        logger.debug('[CircuitBreaker] No persisted state found, starting fresh');
+        return;
+      }
       const data = JSON.parse(raw) as PersistedState;
       if (data.state && typeof data.failures === 'number') {
         this.applyPersistedState(data);
+        logger.info('[CircuitBreaker] Restored persisted state', {
+          state: data.state,
+          failures: data.failures,
+        });
       }
-    } catch {
-      // ignore
+    } catch (error) {
+      logger.error('[CircuitBreaker] Failed to load persisted state - starting in CLOSED state', {
+        error,
+        severity: 'CRITICAL',
+        impact: 'Circuit breaker state lost - safety mechanism weakened',
+      });
     }
   }
 
@@ -106,8 +118,15 @@ export class CircuitBreaker {
     try {
       const store = await getStateStore();
       await store.set(CIRCUIT_BREAKER_KEY, JSON.stringify(this.getPersistedState()));
-    } catch {
-      // ignore
+      logger.debug('[CircuitBreaker] State persisted successfully');
+    } catch (error) {
+      logger.error('[CircuitBreaker] FAILED to persist state - circuit breaker state will be lost on restart', {
+        error,
+        currentState: this.state,
+        failures: this.failures,
+        severity: 'CRITICAL',
+        actionNeeded: 'Check Redis/state store connection',
+      });
     }
   }
 

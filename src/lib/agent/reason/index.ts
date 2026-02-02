@@ -47,14 +47,20 @@ export async function reason(
 
     return validated;
   } catch (error) {
-    logger.error('[Reason] Error generating decision', { error });
-    
-    // Return a safe default decision on error
+    logger.error('[Reason] LLM reasoning failed', {
+      error,
+      severity: 'HIGH',
+      impact: 'Agent cannot generate decisions - may be stuck in WAIT loop',
+    });
     return {
       action: 'WAIT',
       confidence: 0,
       reasoning: `Error during reasoning: ${error}`,
       parameters: null,
+      metadata: {
+        reasoningFailed: true,
+        error: error instanceof Error ? error.message : String(error),
+      },
     };
   }
 }
@@ -84,12 +90,20 @@ export async function reasonAboutSponsorship(
     logger.info('[Reason] Sponsorship decision', { action: validated.action, confidence: validated.confidence });
     return validated;
   } catch (error) {
-    logger.error('[Reason] Error generating sponsorship decision', { error });
+    logger.error('[Reason] LLM sponsorship reasoning failed', {
+      error,
+      severity: 'HIGH',
+      impact: 'Agent cannot generate sponsorship decisions - may be stuck in WAIT loop',
+    });
     return {
       action: 'WAIT',
       confidence: 0,
       reasoning: `Error during sponsorship reasoning: ${error}`,
       parameters: null,
+      metadata: {
+        reasoningFailed: true,
+        error: error instanceof Error ? error.message : String(error),
+      },
     };
   }
 }

@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { DatabaseUnavailableError } from '../../src/lib/errors';
 import {
   observeBaseSponsorshipOpportunities,
   observeLowGasWallets,
@@ -13,6 +14,7 @@ import {
   observeNewWalletActivations,
   getOnchainTxCount,
   getProtocolBudget,
+  getProtocolBudgets,
 } from '../../src/lib/agent/observe/sponsorship';
 
 vi.mock('../../src/lib/agent/observe/chains', () => ({
@@ -33,6 +35,14 @@ vi.mock('viem', async () => {
 
 vi.mock('../../src/lib/agent/observe/blockchain', () => ({
   getBalance: vi.fn().mockResolvedValue(BigInt(1e14)),
+}));
+
+const mockProtocolFindMany = vi.fn().mockResolvedValue([]);
+
+vi.mock('@prisma/client', () => ({
+  PrismaClient: class MockPrismaClient {
+    protocolSponsor = { findMany: mockProtocolFindMany };
+  },
 }));
 
 describe('observeBaseSponsorshipOpportunities', () => {
@@ -80,9 +90,26 @@ describe('observeGasPrice', () => {
 });
 
 describe('observeProtocolBudgets', () => {
-  it('returns array (may be empty without DB)', async () => {
+  it('returns array when getProtocolBudgets succeeds', async () => {
+    mockProtocolFindMany.mockResolvedValueOnce([
+      { protocolId: 'p1', name: 'P1', balanceUSD: 100, totalSpent: 0, whitelistedContracts: [] },
+    ]);
     const result = await observeProtocolBudgets();
     expect(Array.isArray(result)).toBe(true);
+  });
+
+  it('throws when getProtocolBudgets fails', async () => {
+    mockProtocolFindMany.mockRejectedValueOnce(new Error('Connection refused'));
+    await expect(observeProtocolBudgets()).rejects.toThrow();
+  });
+});
+
+describe('getProtocolBudgets', () => {
+  it('throws DatabaseUnavailableError when DB fails', async () => {
+    mockProtocolFindMany.mockRejectedValueOnce(new Error('Connection refused'));
+    const err = await getProtocolBudgets().catch((e) => e);
+    expect(err).toBeInstanceOf(DatabaseUnavailableError);
+    expect((err as Error).message).toMatch(/Cannot fetch protocol budgets/);
   });
 });
 
