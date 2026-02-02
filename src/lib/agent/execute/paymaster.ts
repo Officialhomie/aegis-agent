@@ -179,7 +179,7 @@ export async function logSponsorshipOnchain(params: {
 export async function deductProtocolBudget(
   protocolId: string,
   amountUSD: number
-): Promise<{ success: boolean }> {
+): Promise<{ success: boolean; error?: string }> {
   try {
     const { PrismaClient } = await import('@prisma/client');
     const db = new PrismaClient();
@@ -191,9 +191,20 @@ export async function deductProtocolBudget(
         sponsorshipCount: { increment: 1 },
       },
     });
+    logger.info('[Paymaster] Budget deducted successfully', { protocolId, amountUSD });
     return { success: true };
-  } catch {
-    return { success: true }; // non-fatal
+  } catch (error) {
+    logger.error('[Paymaster] FAILED to deduct protocol budget', {
+      error,
+      protocolId,
+      amountUSD,
+      severity: 'CRITICAL',
+      impact: 'Budget tracking inconsistent - on-chain transaction succeeded but DB update failed',
+    });
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown database error',
+    };
   }
 }
 
@@ -321,11 +332,35 @@ export async function sponsorTransaction(
     };
   }
 
-  await deductProtocolBudget(params.protocolId, params.estimatedCostUSD);
+  const budgetResult = await deductProtocolBudget(params.protocolId, params.estimatedCostUSD);
+  if (!budgetResult.success) {
+    logger.error('[Paymaster] Budget deduction failed after on-chain transaction', {
+      protocolId: params.protocolId,
+      gasCostUsd: params.estimatedCostUSD,
+      txHash: logResult.txHash,
+      severity: 'CRITICAL',
+      actionNeeded: 'Manual reconciliation required - transaction succeeded but budget not updated',
+      error: budgetResult.error,
+    });
+  }
 
-  let ipfsCid: string | null = null;
+  let ipfsCid: string | undefined;
   const ipfsResult = await uploadDecisionToIPFS(signed.decisionJSON);
-  if (ipfsResult) ipfsCid = ipfsResult.cid;
+  if ('cid' in ipfsResult) {
+    ipfsCid = ipfsResult.cid;
+    logger.info('[Paymaster] Decision uploaded to IPFS', { cid: ipfsResult.cid });
+  } else {
+    if (ipfsResult.reason === 'not_configured') {
+      logger.warn('[Paymaster] IPFS not configured - decision not backed up to immutable storage');
+    } else {
+      logger.error('[Paymaster] IPFS upload failed', {
+        error: ipfsResult.error,
+        reason: ipfsResult.reason,
+        severity: 'HIGH',
+        impact: 'Decision not backed up to immutable storage',
+      });
+    }
+  }
 
   try {
     const { PrismaClient } = await import('@prisma/client');
@@ -341,8 +376,19 @@ export async function sponsorTransaction(
         ipfsCid: ipfsCid ?? undefined,
       },
     });
-  } catch {
-    // non-fatal
+    logger.info('[Paymaster] Sponsorship record created', {
+      decisionHash: signed.decisionHash,
+      txHash: logResult.txHash,
+    });
+  } catch (error) {
+    logger.error('[Paymaster] FAILED to create sponsorship record - audit trail incomplete', {
+      error,
+      decisionHash: signed.decisionHash,
+      txHash: logResult.txHash,
+      protocolId: params.protocolId,
+      severity: 'HIGH',
+      impact: 'Audit trail incomplete - sponsorship not recorded in database',
+    });
   }
 
   const maxGasLimit = params.maxGasLimit ?? 200_000;
