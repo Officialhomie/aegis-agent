@@ -5,6 +5,8 @@
  */
 
 import { PrismaClient } from '@prisma/client';
+import { DatabaseUnavailableError } from '../../errors';
+import { logger } from '../../logger';
 
 let prisma: PrismaClient | null = null;
 
@@ -53,9 +55,8 @@ export class MemoryStore {
 
       return memory.id;
     } catch (error) {
-      console.error('[MemoryStore] Error creating memory:', error);
-      // Return a placeholder ID if database is not available
-      return `temp-${Date.now()}`;
+      logger.error('[MemoryStore] Database unavailable', { error });
+      throw new DatabaseUnavailableError('Cannot store memory without database connection');
     }
   }
 
@@ -82,7 +83,7 @@ export class MemoryStore {
         createdAt: m.createdAt,
       }));
     } catch (error) {
-      console.error('[MemoryStore] Error finding memories:', error);
+      logger.error('[MemoryStore] Error finding memories', { error });
       return [];
     }
   }
@@ -112,7 +113,7 @@ export class MemoryStore {
         createdAt: m.createdAt,
       }));
     } catch (error) {
-      console.error('[MemoryStore] Error getting recent memories:', error);
+      logger.error('[MemoryStore] Error getting recent memories', { error });
       return [];
     }
   }
@@ -141,7 +142,7 @@ export class MemoryStore {
         });
       }
     } catch (error) {
-      console.error('[MemoryStore] Error updating importance:', error);
+      logger.error('[MemoryStore] Error updating importance', { error });
     }
   }
 
@@ -166,8 +167,7 @@ export class MemoryStore {
         });
       }
     } catch (error) {
-      // Agent table might not exist yet - that's okay during development
-      console.log('[MemoryStore] Agent table not available (run prisma migrate)');
+      logger.warn('[MemoryStore] Agent table not available (run prisma migrate)', { error });
     }
   }
 }
