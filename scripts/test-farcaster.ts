@@ -27,7 +27,7 @@ async function main() {
     confidence: 0.9,
     reasoning: 'Test cast from Aegis paymaster integration.',
     parameters: {
-      userAddress: '0x0000000000000000000000000000000000000001',
+      agentWallet: '0x0000000000000000000000000000000000000001',
       protocolId: 'test-protocol',
       maxGasLimit: 200000,
       estimatedCostUSD: 0.12,
@@ -45,7 +45,7 @@ async function main() {
     success: true,
     sponsorshipHash: undefined,
     decisionHash: signed.decisionHash,
-    simulationResult: { action: 'SPONSOR_TRANSACTION', userAddress: '0x...1', protocolId: 'test-protocol' },
+    simulationResult: { action: 'SPONSOR_TRANSACTION', agentWallet: '0x...1', protocolId: 'test-protocol' },
   });
 
   if (result.success) {
@@ -61,7 +61,7 @@ async function main() {
     activeProtocols: 0,
     reserveETH: 0.5,
     totalGasSavedUSD: 0,
-    uniqueUsers: 0,
+    uniqueAgents: 0,
   });
 
   if (statsResult.success) {
