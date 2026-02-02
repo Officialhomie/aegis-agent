@@ -2,14 +2,17 @@
  * Aegis Agent - Base Paymaster Execution
  *
  * Signs decisions, logs sponsorship to AegisActivityLogger, and integrates with
- * paymaster/bundler for gas sponsorship. Uses viem account-abstraction when
- * paymaster RPC is configured.
+ * paymaster/bundler (Pimlico) for gas sponsorship via viem account-abstraction.
+ * When BUNDLER_RPC_URL is set, executes paymaster sponsorship for the user's next UserOperation.
  */
 
 import { createPublicClient, createWalletClient, http, keccak256, toHex } from 'viem';
 import { privateKeyToAccount, type PrivateKeyAccount } from 'viem/accounts';
 import { recoverMessageAddress } from 'viem';
 import { base, baseSepolia } from 'viem/chains';
+import { createPaymasterClient, getPaymasterStubData, entryPoint07Address } from 'viem/account-abstraction';
+import { getStateStore } from '../state-store';
+import { uploadDecisionToIPFS } from '../../ipfs';
 import { logger } from '../../logger';
 import type { Decision } from '../reason/schemas';
 import type { SponsorParams } from '../reason/schemas';
@@ -198,12 +201,74 @@ export interface SponsorshipExecutionResult extends ExecutionResult {
   decisionHash?: `0x${string}`;
   signature?: `0x${string}`;
   sponsorshipHash?: string;
+  paymasterReady?: boolean;
+  ipfsCid?: string;
+}
+
+/** TTL for paymaster approval (1 hour) so user's next UserOp can be sponsored */
+const PAYMASTER_APPROVAL_TTL_MS = 60 * 60 * 1000;
+
+/**
+ * Execute paymaster sponsorship: get paymaster stub data for the user and store approval
+ * so the bundler can sponsor the user's next UserOperation. Requires BUNDLER_RPC_URL (e.g. Pimlico).
+ */
+export async function executePaymasterSponsorship(params: {
+  userAddress: string;
+  maxGasLimit: number;
+}): Promise<{ paymasterReady: boolean; userOpHash?: string; error?: string }> {
+  const rpcUrl = process.env.BUNDLER_RPC_URL ?? process.env.PAYMASTER_RPC_URL;
+  if (!rpcUrl?.trim()) {
+    logger.warn('[Paymaster] BUNDLER_RPC_URL not set - skipping paymaster execution');
+    return { paymasterReady: false, error: 'BUNDLER_RPC_URL not set' };
+  }
+
+  const chain = getChain();
+  const entryPoint = (process.env.ENTRY_POINT_ADDRESS as `0x${string}`) ?? entryPoint07Address;
+
+  try {
+    const paymasterClient = createPaymasterClient({
+      transport: http(rpcUrl),
+    });
+
+    const stub = await getPaymasterStubData(paymasterClient, {
+      chainId: chain.id,
+      entryPointAddress: entryPoint,
+      sender: params.userAddress as `0x${string}`,
+      nonce: BigInt(0),
+      callData: '0x' as `0x${string}`,
+      callGasLimit: BigInt(params.maxGasLimit),
+    });
+
+    if (!stub || (!('paymaster' in stub) && !('paymasterAndData' in stub))) {
+      return { paymasterReady: false, error: 'No paymaster stub data returned' };
+    }
+
+    const store = await getStateStore();
+    const key = `paymaster:approved:${params.userAddress.toLowerCase()}`;
+    await store.set(
+      key,
+      JSON.stringify({
+        maxGasLimit: params.maxGasLimit,
+        approvedAt: Date.now(),
+      }),
+      { px: PAYMASTER_APPROVAL_TTL_MS }
+    );
+
+    logger.info('[Paymaster] Paymaster sponsorship ready for user', {
+      userAddress: params.userAddress,
+      maxGasLimit: params.maxGasLimit,
+    });
+    return { paymasterReady: true };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error('[Paymaster] executePaymasterSponsorship failed', { error: message });
+    return { paymasterReady: false, error: message };
+  }
 }
 
 /**
- * Execute SPONSOR_TRANSACTION: sign decision, log on-chain, deduct protocol budget.
- * Actual paymaster sponsorship (getPaymasterData) is done by the bundler when the user
- * submits a UserOperation; this path records the agent's decision and updates state.
+ * Execute SPONSOR_TRANSACTION: sign decision, log on-chain, deduct protocol budget,
+ * and in LIVE mode execute paymaster sponsorship (get paymaster stub + store approval).
  */
 export async function sponsorTransaction(
   decision: Decision,
@@ -258,17 +323,49 @@ export async function sponsorTransaction(
 
   await deductProtocolBudget(params.protocolId, params.estimatedCostUSD);
 
+  let ipfsCid: string | null = null;
+  const ipfsResult = await uploadDecisionToIPFS(signed.decisionJSON);
+  if (ipfsResult) ipfsCid = ipfsResult.cid;
+
+  try {
+    const { PrismaClient } = await import('@prisma/client');
+    const db = new PrismaClient();
+    await db.sponsorshipRecord.create({
+      data: {
+        userAddress: params.userAddress,
+        protocolId: params.protocolId,
+        decisionHash: signed.decisionHash,
+        estimatedCostUSD: params.estimatedCostUSD,
+        txHash: logResult.txHash ?? null,
+        signature: signed.signature,
+        ipfsCid: ipfsCid ?? undefined,
+      },
+    });
+  } catch {
+    // non-fatal
+  }
+
+  const maxGasLimit = params.maxGasLimit ?? 200_000;
+  const paymasterResult = await executePaymasterSponsorship({
+    userAddress: params.userAddress,
+    maxGasLimit,
+  });
+
   return {
     success: true,
     transactionHash: logResult.txHash,
     sponsorshipHash: logResult.txHash,
     decisionHash: signed.decisionHash,
     signature: signed.signature,
+    paymasterReady: paymasterResult.paymasterReady,
+    ipfsCid: ipfsCid ?? undefined,
     simulationResult: {
       action: 'SPONSOR_TRANSACTION',
       userAddress: params.userAddress,
       protocolId: params.protocolId,
       onChainTxHash: logResult.txHash,
+      paymasterReady: paymasterResult.paymasterReady,
+      ipfsCid: ipfsCid ?? undefined,
     },
   };
 }
