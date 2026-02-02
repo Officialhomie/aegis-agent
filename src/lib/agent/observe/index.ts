@@ -91,3 +91,16 @@ export {
   type GovernanceState,
   type GovernanceProposal,
 } from './governance';
+export {
+  observeBaseSponsorshipOpportunities,
+  observeLowGasWallets,
+  observeFailedTransactions,
+  observeNewWalletActivations,
+  observeProtocolBudgets,
+  observeAgentReserves,
+  observeGasPrice,
+  getOnchainTxCount,
+  getProtocolBudget,
+  getProtocolBudgets,
+  getAgentWalletBalance,
+} from './sponsorship';
