@@ -135,7 +135,7 @@ const builtInRules: PolicyRule[] = [
     description: 'Ensures action parameters are provided when needed',
     severity: 'ERROR',
     validate: async (decision) => {
-      const actionsRequiringParams = ['EXECUTE', 'SWAP', 'TRANSFER', 'REBALANCE'];
+      const actionsRequiringParams = ['EXECUTE', 'SWAP', 'TRANSFER', 'REBALANCE', 'SPONSOR_TRANSACTION', 'SWAP_RESERVES', 'ALERT_PROTOCOL'];
       const needsParams = actionsRequiringParams.includes(decision.action);
       const hasParams = decision.parameters !== null;
 
@@ -275,7 +275,7 @@ const builtInRules: PolicyRule[] = [
     description: 'Enforce max slippage tolerance for swaps',
     severity: 'ERROR',
     validate: async (decision, config) => {
-      if ((decision.action !== 'SWAP' && decision.action !== 'REBALANCE') || !decision.parameters) {
+      if ((decision.action !== 'SWAP' && decision.action !== 'REBALANCE' && decision.action !== 'SWAP_RESERVES') || !decision.parameters) {
         return { ruleName: 'slippage-protection', passed: true, message: 'N/A', severity: 'ERROR' };
       }
       const maxSlippage = config.maxSlippageTolerance;
