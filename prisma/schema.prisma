@@ -267,6 +267,7 @@ model SponsorshipRecord {
   actualCostUSD     Float?
   txHash            String?
   signature         String
+  ipfsCid           String?
   createdAt         DateTime @default(now())
 
   @@index([userAddress])
