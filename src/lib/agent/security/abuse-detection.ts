@@ -18,10 +18,10 @@ const SYBIL_MAX_SAME_SOURCE = 10;
  * Check if multiple wallets sponsored within short time from same funding source (Sybil).
  * Uses state store to track recent sponsorships per funding source (simplified: per user).
  */
-export async function checkSybilAttack(userAddress: string): Promise<AbuseResult> {
+export async function checkSybilAttack(agentWallet: string): Promise<AbuseResult> {
   try {
     const store = await getStateStore();
-    const key = `aegis:abuse:sybil:${userAddress.toLowerCase()}`;
+    const key = `aegis:abuse:sybil:${agentWallet.toLowerCase()}`;
     const raw = await store.get(key);
     const list: number[] = raw ? (JSON.parse(raw) as number[]) : [];
     const now = Date.now();
@@ -41,9 +41,9 @@ export async function checkSybilAttack(userAddress: string): Promise<AbuseResult
 /**
  * Record a sponsorship for Sybil tracking (call after successful sponsorship).
  */
-export async function recordSponsorshipForSybil(userAddress: string): Promise<void> {
+export async function recordSponsorshipForSybil(agentWallet: string): Promise<void> {
   const store = await getStateStore();
-  const key = `aegis:abuse:sybil:${userAddress.toLowerCase()}`;
+  const key = `aegis:abuse:sybil:${agentWallet.toLowerCase()}`;
   const raw = await store.get(key);
   const list: number[] = raw ? (JSON.parse(raw) as number[]) : [];
   list.push(Date.now());
@@ -58,12 +58,12 @@ const MIN_TXS_FOR_DUST_CHECK = 5;
 /**
  * Check for dust spam (high ratio of tiny-value txs). Uses Blockscout when BLOCKSCOUT_API_URL set.
  */
-export async function checkDustSpam(userAddress: string): Promise<AbuseResult> {
+export async function checkDustSpam(agentWallet: string): Promise<AbuseResult> {
   const baseUrl = process.env.BLOCKSCOUT_API_URL?.trim();
   if (!baseUrl) return { isAbusive: false };
 
   try {
-    const url = `${baseUrl.replace(/\/$/, '')}/api/v2/addresses/${userAddress}/transactions?page=1`;
+    const url = `${baseUrl.replace(/\/$/, '')}/api/v2/addresses/${agentWallet}/transactions?page=1`;
     const res = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(5000) });
     if (!res.ok) return { isAbusive: false };
     const data = (await res.json()) as { items?: { value?: string }[] };
@@ -105,11 +105,11 @@ export async function checkScamContract(targetContract: string): Promise<AbuseRe
 /**
  * Check if address is on blacklist (known scammer). Uses env ABUSE_BLACKLIST (comma-separated).
  */
-export async function checkBlacklist(userAddress: string): Promise<AbuseResult> {
+export async function checkBlacklist(agentWallet: string): Promise<AbuseResult> {
   const raw = process.env.ABUSE_BLACKLIST;
   if (!raw?.trim()) return { isAbusive: false };
   const list = raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
-  const addr = userAddress.toLowerCase();
+  const addr = agentWallet.toLowerCase();
   if (list.includes(addr)) {
     return { isAbusive: true, reason: 'Address on abuse blacklist' };
   }
@@ -120,11 +120,11 @@ export async function checkBlacklist(userAddress: string): Promise<AbuseResult> 
  * Run all abuse checks. Returns first abusive result or { isAbusive: false }.
  * Optionally pass targetContract to check against known scam contracts.
  */
-export async function detectAbuse(userAddress: string, targetContract?: string): Promise<AbuseResult> {
+export async function detectAbuse(agentWallet: string, targetContract?: string): Promise<AbuseResult> {
   const checks: Promise<AbuseResult>[] = [
-    checkSybilAttack(userAddress),
-    checkDustSpam(userAddress),
-    checkBlacklist(userAddress),
+    checkSybilAttack(agentWallet),
+    checkDustSpam(agentWallet),
+    checkBlacklist(agentWallet),
   ];
   if (targetContract) checks.push(checkScamContract(targetContract));
   const results = await Promise.all(checks);
