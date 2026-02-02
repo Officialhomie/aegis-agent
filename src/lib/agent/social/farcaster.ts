@@ -21,7 +21,7 @@ export interface DailyStats {
   activeProtocols: number;
   reserveETH: number;
   totalGasSavedUSD: number;
-  uniqueUsers: number;
+  uniqueAgents: number;
 }
 
 /**
@@ -38,8 +38,8 @@ export async function postSponsorshipProof(
     return { success: true };
   }
 
-  const params = signedDecision.decision.parameters as { userAddress?: string; protocolId?: string; estimatedCostUSD?: number };
-  const userAddress = params?.userAddress ?? '0x...';
+  const params = signedDecision.decision.parameters as { agentWallet?: string; protocolId?: string; estimatedCostUSD?: number };
+  const agentWallet = params?.agentWallet ?? '0x...';
   const protocolId = params?.protocolId ?? 'unknown';
   const costUSD = params?.estimatedCostUSD ?? 0;
   const txHash = result.sponsorshipHash ?? result.transactionHash ?? '';
@@ -50,7 +50,7 @@ export async function postSponsorshipProof(
   const ipfsGateway = process.env.IPFS_GATEWAY_URL ?? 'https://gateway.pinata.cloud';
   const ipfsLine = ipfsCid ? `\n📄 Decision JSON: ${ipfsGateway}/ipfs/${ipfsCid}` : '';
 
-  const castText = `⛽ Sponsored tx for ${truncate(userAddress)}
+  const castText = `⛽ Sponsored execution for agent ${truncate(agentWallet)}
 
 Protocol: ${protocolId}
 Cost: $${costUSD.toFixed(2)}
@@ -98,13 +98,13 @@ export async function postDailyStats(stats: DailyStats): Promise<{ success: bool
   }
 
   const castText = `📊 Daily Stats:
-• ${stats.sponsorshipsToday} transactions sponsored
-• ${stats.uniqueUsers} unique users helped
+• ${stats.sponsorshipsToday} autonomous executions sponsored
+• ${stats.uniqueAgents} autonomous agents served
 • ${stats.activeProtocols} protocols active
 • Total gas saved: $${stats.totalGasSavedUSD.toFixed(2)}
 • Reserve: ${stats.reserveETH.toFixed(2)} ETH
 
-#BasePaymaster #BuildOnBase`;
+#BasePaymaster #AutonomousAgent #BuildOnBase`;
 
   try {
     const { NeynarAPIClient, Configuration } = await import('@neynar/nodejs-sdk');
