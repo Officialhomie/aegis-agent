@@ -58,9 +58,9 @@ export const AlertParams = z.object({
 });
 export type AlertParams = z.infer<typeof AlertParams>;
 
-/** Parameters for SPONSOR_TRANSACTION (Base paymaster) */
+/** Parameters for SPONSOR_TRANSACTION (Base paymaster) - sponsors autonomous agent execution */
 export const SponsorParams = z.object({
-  userAddress: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
+  agentWallet: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
   protocolId: z.string().min(1),
   maxGasLimit: z.number().int().positive().optional().default(200000),
   estimatedCostUSD: z.number().min(0),

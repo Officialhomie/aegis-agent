@@ -20,20 +20,20 @@ export const SPONSORSHIP_DECISION_TOOL = {
   type: 'function' as const,
   function: {
     name: 'make_decision',
-    description: 'Decide whether to sponsor a user tx, swap reserves, alert a protocol, or wait',
+    description: 'Decide whether to sponsor an agent execution, swap reserves, alert a protocol, or wait',
     parameters: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
           enum: ['SPONSOR_TRANSACTION', 'SWAP_RESERVES', 'ALERT_PROTOCOL', 'WAIT'],
-          description: 'Action: sponsor one user tx, swap USDC→ETH for reserves, alert protocol of low budget, or wait',
+          description: 'Action: sponsor one agent execution, swap USDC→ETH for reserves, alert protocol of low budget, or wait',
         },
         confidence: { type: 'number', minimum: 0, maximum: 1, description: 'Confidence 0-1' },
         reasoning: { type: 'string', description: 'Why this action' },
         parameters: {
           type: 'object',
-          description: 'For SPONSOR_TRANSACTION: { userAddress, protocolId, maxGasLimit?, estimatedCostUSD }. For SWAP_RESERVES: { tokenIn, tokenOut, amountIn, minAmountOut?, slippageTolerance? }. For ALERT_PROTOCOL: { protocolId, severity?, budgetRemaining, estimatedDaysRemaining?, topUpRecommendation? }. Null for WAIT.',
+          description: 'For SPONSOR_TRANSACTION: { agentWallet, protocolId, maxGasLimit?, estimatedCostUSD }. For SWAP_RESERVES: { tokenIn, tokenOut, amountIn, minAmountOut?, slippageTolerance? }. For ALERT_PROTOCOL: { protocolId, severity?, budgetRemaining, estimatedDaysRemaining?, topUpRecommendation? }. Null for WAIT.',
           nullable: true,
         },
         preconditions: { type: 'array', items: { type: 'string' }, description: 'Conditions before execution' },
@@ -44,18 +44,18 @@ export const SPONSORSHIP_DECISION_TOOL = {
   },
 };
 
-const SYSTEM_PROMPT_SPONSORSHIP = `You are Aegis, an autonomous Base paymaster agent. Your mission is to sponsor gas for legitimate users who are low on ETH, funded by protocols via x402, with full transparency.
+const SYSTEM_PROMPT_SPONSORSHIP = `You are Aegis, an autonomous Base paymaster agent. Your mission is to sponsor gas for legitimate autonomous agents who are low on ETH, funded by protocols via x402, with full transparency.
 
 AVAILABLE ACTIONS:
-- SPONSOR_TRANSACTION: Sponsor one user's next transaction. Use when a specific user (from observations) is eligible: sufficient on-chain history, protocol budget and agent reserves OK, gas price acceptable.
-- SWAP_RESERVES: Swap USDC→ETH for the agent's own reserves. Use when observations show agent ETH below threshold (e.g. <0.1 ETH) and USDC is available (e.g. >100).
+- SPONSOR_TRANSACTION: Sponsor one autonomous agent's next transaction. Use when a specific agent (from observations) is eligible: sufficient on-chain history, protocol budget and Aegis reserves OK, gas price acceptable.
+- SWAP_RESERVES: Swap USDC→ETH for Aegis's own reserves. Use when observations show Aegis ETH below threshold (e.g. <0.1 ETH) and USDC is available (e.g. >100).
 - ALERT_PROTOCOL: Notify a protocol of low budget. Use when a protocol's remaining budget is critically low and you want to signal for top-up.
 - WAIT: Do nothing this cycle. Use when no clear opportunity, gas too high, or confidence below 0.8.
 
-USER LEGITIMACY SCORING (for SPONSOR_TRANSACTION):
-- Prefer users with historicalTxs >= 5 and no abuse flags.
-- Observations may include: lowGasWallets (address, balance, dApp), failedTransactions (user, reason), newWalletActivations (address, pendingIntent).
-- Only sponsor one user per decision; pick the highest-legitimacy opportunity if multiple.
+AGENT LEGITIMACY SCORING (for SPONSOR_TRANSACTION):
+- Prefer agents with historicalTxs >= 5 and no abuse flags.
+- Observations may include: lowGasWallets (address, balance, dApp), failedTransactions (agent, reason), newWalletActivations (address, pendingIntent).
+- Only sponsor one agent per decision; pick the highest-legitimacy opportunity if multiple.
 
 ECONOMIC VIABILITY:
 - estimatedCostUSD should reflect current gas price and maxGasLimit (e.g. 200000). Keep under protocol budget and per-tx caps (e.g. 0.50 USD).
@@ -64,14 +64,14 @@ ECONOMIC VIABILITY:
 CRITICAL RULES:
 1. Return a single decision in the exact JSON format required.
 2. If confidence < 0.8, choose WAIT.
-3. For SPONSOR_TRANSACTION, parameters must include userAddress (0x...), protocolId (string), estimatedCostUSD (number). Optionally maxGasLimit (e.g. 200000).
+3. For SPONSOR_TRANSACTION, parameters must include agentWallet (0x...), protocolId (string), estimatedCostUSD (number). Optionally maxGasLimit (e.g. 200000).
 4. For SWAP_RESERVES, parameters: tokenIn (e.g. USDC), tokenOut (ETH), amountIn (string amount).
 5. For ALERT_PROTOCOL, parameters: protocolId, budgetRemaining (number), optionally severity, estimatedDaysRemaining, topUpRecommendation.
 
 EXAMPLE DECISIONS (few-shot):
 
-1) Sponsor a user:
-{"action":"SPONSOR_TRANSACTION","confidence":0.9,"reasoning":"User 0x123... has 8 historical txs, low gas balance, protocol 'app.example' has budget. Gas price 1.2 Gwei acceptable.","parameters":{"userAddress":"0x1234567890123456789012345678901234567890","protocolId":"app.example","maxGasLimit":200000,"estimatedCostUSD":0.12},"preconditions":["Policy checks pass"],"expectedOutcome":"User tx sponsored and logged on-chain."}
+1) Sponsor an autonomous agent:
+{"action":"SPONSOR_TRANSACTION","confidence":0.9,"reasoning":"Agent 0x123... has 8 historical txs, low gas balance, protocol 'app.example' has budget. Gas price 1.2 Gwei acceptable.","parameters":{"agentWallet":"0x1234567890123456789012345678901234567890","protocolId":"app.example","maxGasLimit":200000,"estimatedCostUSD":0.12},"preconditions":["Policy checks pass"],"expectedOutcome":"Agent execution sponsored and logged on-chain."}
 
 2) Swap reserves:
 {"action":"SWAP_RESERVES","confidence":0.85,"reasoning":"Agent ETH 0.05 below 0.1 threshold; USDC balance 500. Swap 200 USDC to ETH to restore reserves.","parameters":{"tokenIn":"USDC","tokenOut":"ETH","amountIn":"200"},"preconditions":["Slippage acceptable"],"expectedOutcome":"Reserves above threshold."}
@@ -134,7 +134,7 @@ export async function generateSponsorshipDecisionWithClaude(
   const rawInstruction = `
 Respond with a single JSON object for your decision. Keys: action, confidence, reasoning, parameters (null for WAIT).
 Action must be one of: SPONSOR_TRANSACTION, SWAP_RESERVES, ALERT_PROTOCOL, WAIT.
-For SPONSOR_TRANSACTION use parameters: { "userAddress": "0x...", "protocolId": "string", "estimatedCostUSD": number, optional "maxGasLimit": 200000 }.
+For SPONSOR_TRANSACTION use parameters: { "agentWallet": "0x...", "protocolId": "string", "estimatedCostUSD": number, optional "maxGasLimit": 200000 }.
 For SWAP_RESERVES use parameters: { "tokenIn": "USDC", "tokenOut": "ETH", "amountIn": "string" }.
 For ALERT_PROTOCOL use parameters: { "protocolId": "string", "budgetRemaining": number, optional "severity", "estimatedDaysRemaining", "topUpRecommendation" }.
 Respond with only the JSON, no other text.`;

@@ -11,3 +11,9 @@ line_length = 100
 
 [rpc_endpoints]
 base_sepolia = "${RPC_URL_BASE_SEPOLIA}"
+base = "${RPC_URL_BASE}"
+
+# Keystore configuration (optional - can also use --account flag directly)
+[profile.deploy]
+# Account name to use from ~/.foundry/keystores/
+account = "${FOUNDRY_ACCOUNT:-deployer-onetruehmie}"
