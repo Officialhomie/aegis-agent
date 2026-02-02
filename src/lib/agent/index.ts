@@ -6,11 +6,14 @@
  */
 
 import { logger } from '../logger';
-import { observe } from './observe';
-import { reason } from './reason';
+import { observe, observeBaseSponsorshipOpportunities, observeGasPrice } from './observe';
+import { reason, reasonAboutSponsorship } from './reason';
 import { validatePolicy } from './policy';
 import { execute } from './execute';
 import { storeMemory, retrieveRelevantMemories } from './memory';
+import { getDefaultCircuitBreaker } from './execute/circuit-breaker';
+import { signDecision, sponsorTransaction, type SignedDecision } from './execute/paymaster';
+import { postSponsorshipProof } from './social/farcaster';
 import type { Observation } from './observe';
 import type { Decision } from './reason/schemas';
 import type { ExecutionResult } from './execute';
@@ -148,6 +151,144 @@ export async function startAgent(
     if (draining) return;
     try {
       await runAgentCycle(config);
+    } catch (error) {
+      logger.error('[Aegis] Cycle error', { error: error instanceof Error ? error.message : String(error) });
+    }
+  };
+
+  const shutdown = async () => {
+    draining = true;
+    if (cycleTimer) clearInterval(cycleTimer);
+    cycleTimer = null;
+    logger.info('[Aegis] Shutting down gracefully');
+    process.exit(0);
+  };
+
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
+
+  await runCycle();
+  cycleTimer = setInterval(runCycle, intervalMs);
+}
+
+const sponsorshipDefaultConfig: AgentConfig = {
+  confidenceThreshold: 0.8,
+  maxTransactionValueUsd: 100,
+  executionMode: 'LIVE',
+  triggerSource: 'autonomous-loop',
+  gasPriceMaxGwei: 2,
+};
+
+/**
+ * Sponsorship cycle: observe Base opportunities, reason, validate, execute (sponsor or swap reserves), prove (Farcaster), store memory.
+ */
+export async function runSponsorshipCycle(
+  config: AgentConfig = sponsorshipDefaultConfig
+): Promise<AgentState> {
+  const state: AgentState = {
+    observations: [],
+    memories: [],
+    currentDecision: null,
+    executionResult: null,
+  };
+
+  try {
+    logger.info('[Aegis] Observing Base for sponsorship opportunities...');
+    state.observations = await observeBaseSponsorshipOpportunities();
+
+    const circuitBreaker = getDefaultCircuitBreaker();
+    const health = await (circuitBreaker as { checkHealthBeforeExecution?: () => Promise<{ healthy: boolean; reason?: string }> }).checkHealthBeforeExecution?.();
+    if (health && !health.healthy) {
+      logger.warn('[Aegis] Health check failed, skipping cycle', { reason: health.reason });
+      return state;
+    }
+
+    logger.info('[Aegis] Retrieving relevant memories...');
+    state.memories = (await retrieveRelevantMemories(state.observations)) as AgentMemory[];
+
+    const gasObs = await observeGasPrice();
+    const gasData = gasObs[0]?.data as { gasPriceGwei?: string } | undefined;
+    const currentGasPriceGwei = gasData?.gasPriceGwei != null ? parseFloat(String(gasData.gasPriceGwei)) : undefined;
+    const configWithGas: AgentConfig = { ...config, currentGasPriceGwei };
+
+    logger.info('[Aegis] Reasoning about sponsorship opportunities...');
+    const decision = await reasonAboutSponsorship(state.observations, state.memories);
+    state.currentDecision = decision;
+
+    logger.info('[Aegis] Validating against policy rules...');
+    const policyResult = await validatePolicy(decision, configWithGas);
+
+    if (!policyResult.passed) {
+      logger.warn('[Aegis] Decision rejected by policy', { errors: policyResult.errors });
+      await storeMemory({
+        type: 'DECISION',
+        decision,
+        outcome: 'POLICY_REJECTED',
+        policyErrors: policyResult.errors,
+      });
+      return state;
+    }
+
+    if (decision.confidence >= config.confidenceThreshold) {
+      logger.info('[Aegis] Executing sponsorship...');
+      if (config.executionMode !== 'READONLY') {
+        if (decision.action === 'SPONSOR_TRANSACTION') {
+          const signed = await signDecision(decision);
+          state.executionResult = await sponsorTransaction(decision, config.executionMode === 'LIVE' ? 'LIVE' : 'SIMULATION');
+          await postSponsorshipProof(signed, state.executionResult as ExecutionResult & { sponsorshipHash?: string; decisionHash?: string });
+        } else {
+          state.executionResult = await execute(decision, config.executionMode);
+        }
+      }
+    } else {
+      logger.info('[Aegis] Confidence below threshold - waiting', {
+        confidence: decision.confidence,
+        threshold: config.confidenceThreshold,
+      });
+    }
+
+    await storeMemory({
+      type: 'DECISION',
+      observations: state.observations,
+      decision,
+      outcome: state.executionResult,
+    });
+
+    return state;
+  } catch (error) {
+    logger.error('[Aegis] Error in sponsorship cycle', { error: error instanceof Error ? error.message : String(error) });
+    await import('./execute/alerts').then(({ sendAlert }) =>
+      sendAlert({
+        severity: 'HIGH',
+        message: `Sponsorship cycle error: ${error instanceof Error ? error.message : String(error)}`,
+      })
+    ).catch(() => {});
+    return state;
+  }
+}
+
+/**
+ * Start autonomous Base paymaster loop (LIVE mode, 60s interval).
+ */
+export async function startAutonomousPaymaster(intervalMs: number = 60000): Promise<void> {
+  logger.info('[Aegis] Starting autonomous Base paymaster', {
+    executionMode: 'LIVE',
+    interval: `${intervalMs / 1000}s`,
+  });
+
+  let cycleTimer: ReturnType<typeof setInterval> | null = null;
+  let draining = false;
+
+  const runCycle = async () => {
+    if (draining) return;
+    try {
+      await runSponsorshipCycle({
+        ...sponsorshipDefaultConfig,
+        executionMode: 'LIVE',
+        confidenceThreshold: 0.8,
+        maxTransactionValueUsd: 100,
+        triggerSource: 'autonomous-loop',
+      });
     } catch (error) {
       logger.error('[Aegis] Cycle error', { error: error instanceof Error ? error.message : String(error) });
     }
