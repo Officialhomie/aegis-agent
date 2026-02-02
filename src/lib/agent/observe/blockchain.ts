@@ -7,6 +7,7 @@
 import { createPublicClient, http, formatEther } from 'viem';
 import type { Abi } from 'viem';
 import { base, baseSepolia, mainnet, sepolia } from 'viem/chains';
+import { logger } from '../../logger';
 import { getDefaultChainName, getSupportedChainNames } from './chains';
 import type { Observation } from './index';
 
@@ -59,7 +60,7 @@ export async function observeBlockchainState(): Promise<Observation[]> {
         context: `Current block state on ${name}`,
       });
     } catch (error) {
-      console.error('[Blockchain] Error observing state:', error);
+      logger.error('[Blockchain] Error observing state', { error });
     }
   }
   return observations;
