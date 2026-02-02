@@ -16,6 +16,8 @@ import type { PolicyRule, RuleResult } from './rules';
 const RESERVE_THRESHOLD_ETH = Number(process.env.RESERVE_THRESHOLD_ETH) || 0.1;
 const MAX_SPONSORSHIPS_PER_USER_DAY = Number(process.env.MAX_SPONSORSHIPS_PER_USER_DAY) || 3;
 const MAX_SPONSORSHIPS_PER_MINUTE = Number(process.env.MAX_SPONSORSHIPS_PER_MINUTE) || 10;
+const MAX_SPONSORSHIPS_PER_PROTOCOL_MINUTE = Number(process.env.MAX_SPONSORSHIPS_PER_PROTOCOL_MINUTE) || 5;
+const MAX_SPONSORSHIP_COST_USD = Number(process.env.MAX_SPONSORSHIP_COST_USD) || 0.5;
 const GAS_PRICE_MAX_GWEI = Number(process.env.GAS_PRICE_MAX_GWEI) || 2;
 const MIN_HISTORICAL_TXS = 5;
 
@@ -153,6 +155,92 @@ export const sponsorshipPolicyRules: PolicyRule[] = [
           : `Global rate limit exceeded (${trimmed.length}/${MAX_SPONSORSHIPS_PER_MINUTE})`,
         severity: 'ERROR',
       };
+    },
+  },
+  {
+    name: 'per-protocol-rate-limit',
+    description: 'Max sponsorships per minute per protocol',
+    severity: 'ERROR',
+    validate: async (decision): Promise<RuleResult> => {
+      if (!isSponsorshipDecision(decision)) {
+        return { ruleName: 'per-protocol-rate-limit', passed: true, message: 'N/A', severity: 'ERROR' };
+      }
+      const store = await getStateStore();
+      const key = `aegis:sponsorship:protocol:${decision.parameters.protocolId}:minute`;
+      const raw = await store.get(key);
+      const list: number[] = raw ? (JSON.parse(raw) as number[]) : [];
+      const now = Date.now();
+      const oneMinuteMs = 60 * 1000;
+      const trimmed = list.filter((t) => now - t < oneMinuteMs);
+      const passed = trimmed.length < MAX_SPONSORSHIPS_PER_PROTOCOL_MINUTE;
+      if (passed) {
+        trimmed.push(now);
+        await store.set(key, JSON.stringify(trimmed), { px: oneMinuteMs });
+      }
+      return {
+        ruleName: 'per-protocol-rate-limit',
+        passed,
+        message: passed
+          ? `Protocol rate OK (${trimmed.length}/${MAX_SPONSORSHIPS_PER_PROTOCOL_MINUTE})`
+          : `Protocol rate limit exceeded (${trimmed.length}/${MAX_SPONSORSHIPS_PER_PROTOCOL_MINUTE})`,
+        severity: 'ERROR',
+      };
+    },
+  },
+  {
+    name: 'per-sponsorship-cost-cap',
+    description: 'Max cost per sponsorship (default $0.50)',
+    severity: 'ERROR',
+    validate: async (decision): Promise<RuleResult> => {
+      if (!isSponsorshipDecision(decision)) {
+        return { ruleName: 'per-sponsorship-cost-cap', passed: true, message: 'N/A', severity: 'ERROR' };
+      }
+      const cost = decision.parameters.estimatedCostUSD ?? 0;
+      const passed = cost <= MAX_SPONSORSHIP_COST_USD;
+      return {
+        ruleName: 'per-sponsorship-cost-cap',
+        passed,
+        message: passed
+          ? `Cost OK ($${cost} <= $${MAX_SPONSORSHIP_COST_USD})`
+          : `Cost exceeds cap ($${cost} > $${MAX_SPONSORSHIP_COST_USD})`,
+        severity: 'ERROR',
+      };
+    },
+  },
+  {
+    name: 'contract-whitelist-check',
+    description: 'Target contract must be in protocol whitelist (when target provided)',
+    severity: 'ERROR',
+    validate: async (decision): Promise<RuleResult> => {
+      if (!isSponsorshipDecision(decision)) {
+        return { ruleName: 'contract-whitelist-check', passed: true, message: 'N/A', severity: 'ERROR' };
+      }
+      try {
+        const { PrismaClient } = await import('@prisma/client');
+        const db = new PrismaClient();
+        const protocol = await db.protocolSponsor.findUnique({
+          where: { protocolId: decision.parameters.protocolId },
+        });
+        if (!protocol || !protocol.whitelistedContracts?.length) {
+          return { ruleName: 'contract-whitelist-check', passed: true, message: 'No whitelist configured', severity: 'ERROR' };
+        }
+        const targetContract = (decision.parameters as SponsorParams & { targetContract?: string }).targetContract;
+        if (!targetContract) {
+          return { ruleName: 'contract-whitelist-check', passed: true, message: 'No target contract in decision', severity: 'ERROR' };
+        }
+        const normalized = targetContract.toLowerCase();
+        const allowed = protocol.whitelistedContracts.some((c) => c.toLowerCase() === normalized);
+        return {
+          ruleName: 'contract-whitelist-check',
+          passed: allowed,
+          message: allowed
+            ? `Target ${normalized.slice(0, 10)}... in whitelist`
+            : `Target ${normalized.slice(0, 10)}... not in protocol whitelist`,
+          severity: 'ERROR',
+        };
+      } catch {
+        return { ruleName: 'contract-whitelist-check', passed: true, message: 'Could not load protocol whitelist', severity: 'ERROR' };
+      }
     },
   },
   {
