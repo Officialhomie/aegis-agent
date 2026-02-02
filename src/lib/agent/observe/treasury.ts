@@ -7,6 +7,7 @@
 import { createPublicClient, http, formatUnits } from 'viem';
 import { getDeFiPositions as getDeFiPositionsFromDefi } from './defi';
 import { getGovernanceState as getGovernanceStateFromGov } from './governance';
+import { logger } from '../../logger';
 import { getDefaultChainName, getSupportedChainNames } from './chains';
 import { getPrice } from './oracles';
 import { base, baseSepolia, mainnet, sepolia } from 'viem/chains';
@@ -305,7 +306,7 @@ export async function observeTreasury(treasuryAddress: string): Promise<Observat
         });
       }
     } catch (error) {
-      console.error(`[Treasury] Error observing ${chainName}:`, error);
+      logger.error('[Treasury] Error observing chain', { chainName, error });
     }
   }
 

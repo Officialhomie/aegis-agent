@@ -7,6 +7,7 @@
 
 import { createPublicClient, http, formatEther } from 'viem';
 import { base, baseSepolia } from 'viem/chains';
+import { logger } from '../../logger';
 import { getBalance } from './blockchain';
 import { getDefaultChainName } from './chains';
 import { getPrice } from './oracles';
@@ -148,7 +149,7 @@ export async function observeGasPrice(): Promise<Observation[]> {
       },
     ];
   } catch (error) {
-    console.error('[Sponsorship] Error observing gas price:', error);
+    logger.error('[Sponsorship] Error observing gas price', { error });
     return [];
   }
 }

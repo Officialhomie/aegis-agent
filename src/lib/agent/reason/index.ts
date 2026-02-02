@@ -5,6 +5,7 @@
  * and propose actions. Implements the decision-making logic with constraints.
  */
 
+import { logger } from '../../logger';
 import { generateDecision } from './prompts';
 import { generateSponsorshipDecision } from './sponsorship-prompt';
 import { DecisionSchema, type Decision } from './schemas';
@@ -39,14 +40,14 @@ export async function reason(
     // Validate the decision against our schema
     const validated = DecisionSchema.parse(decision);
     
-    console.log('[Reason] Generated decision:', {
+    logger.info('[Reason] Generated decision', {
       action: validated.action,
       confidence: validated.confidence,
     });
 
     return validated;
   } catch (error) {
-    console.error('[Reason] Error generating decision:', error);
+    logger.error('[Reason] Error generating decision', { error });
     
     // Return a safe default decision on error
     return {
@@ -80,10 +81,10 @@ export async function reasonAboutSponsorship(
   try {
     const decision = await generateSponsorshipDecision(context);
     const validated = DecisionSchema.parse(decision);
-    console.log('[Reason] Sponsorship decision:', { action: validated.action, confidence: validated.confidence });
+    logger.info('[Reason] Sponsorship decision', { action: validated.action, confidence: validated.confidence });
     return validated;
   } catch (error) {
-    console.error('[Reason] Error generating sponsorship decision:', error);
+    logger.error('[Reason] Error generating sponsorship decision', { error });
     return {
       action: 'WAIT',
       confidence: 0,

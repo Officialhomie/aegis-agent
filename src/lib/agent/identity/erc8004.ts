@@ -1,15 +1,18 @@
 /**
  * Aegis Agent - ERC-8004 Identity Integration
  *
- * Agent registration and on-chain identity (when ERC-8004 mainnet is live).
- * When ERC8004_IDENTITY_REGISTRY_ADDRESS is set, mints via viem writeContract.
+ * Uses official ERC-8004 Identity Registry (https://github.com/erc-8004/erc-8004-contracts).
+ * When ERC8004_IDENTITY_REGISTRY_ADDRESS is set, calls register(agentURI) and parses Registered event.
  */
 
-import { createPublicClient, createWalletClient, http } from 'viem';
+import { createPublicClient, createWalletClient, http, decodeEventLog } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { baseSepolia } from 'viem/chains';
-
+import { baseSepolia, mainnet, sepolia } from 'viem/chains';
 import { PrismaClient } from '@prisma/client';
+
+import { IDENTITY_REGISTRY_ABI } from './abis/identity-registry';
+import { ERC8004_ADDRESSES, type ERC8004Network } from './constants';
+import { logger } from '../../logger';
 
 let prisma: PrismaClient | null = null;
 
@@ -20,15 +23,30 @@ function getPrisma(): PrismaClient {
   return prisma;
 }
 
-const MINT_ABI = [
-  {
-    inputs: [{ name: 'uri', type: 'string' }],
-    name: 'mint',
-    outputs: [{ name: '', type: 'uint256' }],
-    stateMutability: 'nonpayable',
-    type: 'function',
-  },
-] as const;
+function getERC8004Chain() {
+  const network = (process.env.ERC8004_NETWORK ?? 'sepolia') as ERC8004Network;
+  if (network === 'mainnet') return mainnet;
+  if (network === 'base-sepolia') return baseSepolia;
+  return sepolia;
+}
+
+export function getIdentityRegistryAddress(): `0x${string}` | undefined {
+  const override = process.env.ERC8004_IDENTITY_REGISTRY_ADDRESS?.trim();
+  if (override) return override as `0x${string}`;
+  const network = (process.env.ERC8004_NETWORK ?? 'sepolia') as ERC8004Network;
+  const addr = ERC8004_ADDRESSES[network]?.identityRegistry;
+  if (addr) return addr as `0x${string}`;
+  return undefined;
+}
+
+function getRpcUrl(): string | undefined {
+  const url = process.env.ERC8004_RPC_URL?.trim();
+  if (url) return url;
+  const network = process.env.ERC8004_NETWORK ?? 'sepolia';
+  if (network === 'mainnet') return process.env.RPC_URL_ETHEREUM;
+  if (network === 'base-sepolia') return process.env.RPC_URL_BASE_SEPOLIA ?? process.env.RPC_URL_84532;
+  return process.env.RPC_URL_SEPOLIA ?? process.env.RPC_URL_ETHEREUM;
+}
 
 export interface AgentMetadata {
   name: string;
@@ -38,11 +56,22 @@ export interface AgentMetadata {
   created: string;
 }
 
+/** ERC-8004 registration file format (agentURI content). */
+export interface AgentRegistrationFile {
+  type: 'erc8004-registration';
+  name: string;
+  description: string;
+  image?: string;
+  services: Array<{ type: 'a2a' | 'mcp' | 'oasf' | 'https' | 'email'; url: string }>;
+  registrations: Array<{ agentRegistry: string; agentId: string }>;
+  supportedTrust?: ('reputation' | 'crypto-economic' | 'tee-attestation')[];
+}
+
 /**
  * Upload agent metadata to IPFS using multipart/form-data (IPFS HTTP API /api/v0/add).
  * Validates CID in response. Throws on failure when NODE_ENV=production.
  */
-export async function uploadToIPFS(metadata: AgentMetadata): Promise<string> {
+export async function uploadToIPFS(metadata: AgentMetadata | AgentRegistrationFile): Promise<string> {
   const dataUri = `data:application/json,${encodeURIComponent(JSON.stringify(metadata))}`;
   const gateway = process.env.IPFS_GATEWAY_URL;
   if (!gateway) {
@@ -73,62 +102,136 @@ export async function uploadToIPFS(metadata: AgentMetadata): Promise<string> {
     if (process.env.NODE_ENV === 'production') {
       throw err;
     }
-    return `data:application/json,${encodeURIComponent(JSON.stringify(metadata))}`;
+    return dataUri;
   }
 }
 
 /**
- * Get ERC-8004 identity registry. When ERC8004_IDENTITY_REGISTRY_ADDRESS is set,
- * calls real contract via viem writeContract; otherwise returns mock mint.
+ * Register on Identity Registry with agentURI (official ERC-8004 register(string) ).
+ * Returns agentId from Registered event and txHash.
  */
-function getERC8004IdentityRegistry(): { mint: (uri: string) => Promise<{ tokenId: string; from: string }> } {
-  const registryAddress = process.env.ERC8004_IDENTITY_REGISTRY_ADDRESS as `0x${string}` | undefined;
+export async function registerWithRegistry(agentURI: string): Promise<{ agentId: bigint; txHash: string }> {
+  const registryAddress = getIdentityRegistryAddress();
   const privateKey = process.env.EXECUTE_WALLET_PRIVATE_KEY ?? process.env.AGENT_PRIVATE_KEY;
-  const walletAddress = process.env.AGENT_WALLET_ADDRESS ?? '0x0000000000000000000000000000000000000000';
-
-  return {
-    async mint(uri: string): Promise<{ tokenId: string; from: string }> {
-      if (registryAddress && privateKey) {
-        const rpcUrl = process.env.RPC_URL_BASE_SEPOLIA ?? process.env.RPC_URL_84532;
-        if (!rpcUrl) throw new Error('RPC URL not configured for ERC-8004 mint');
-        const account = privateKeyToAccount(privateKey as `0x${string}`);
-        const walletClient = createWalletClient({
-          account,
-          chain: baseSepolia,
-          transport: http(rpcUrl),
-        });
-        const publicClient = createPublicClient({
-          chain: baseSepolia,
-          transport: http(rpcUrl),
-        });
-        const hash = await walletClient.writeContract({
-          address: registryAddress,
-          abi: MINT_ABI,
-          functionName: 'mint',
-          args: [uri],
-        });
-        const receipt = await publicClient.waitForTransactionReceipt({ hash });
-        const firstLog = receipt.logs?.[0] as { topics?: readonly string[] } | undefined;
-        const tokenIdFromLog = firstLog?.topics?.[3];
-        const tokenId =
-          typeof tokenIdFromLog === 'string'
-            ? tokenIdFromLog
-            : receipt.transactionHash;
-        return {
-          tokenId,
-          from: account.address,
-        };
+  if (!registryAddress || !privateKey) {
+    const ts = Date.now();
+    return {
+      agentId: BigInt(ts),
+      txHash: `mock-${ts}`,
+    };
+  }
+  const rpcUrl = getRpcUrl();
+  if (!rpcUrl) throw new Error('RPC URL not configured for ERC-8004');
+  const chain = getERC8004Chain();
+  const account = privateKeyToAccount(privateKey as `0x${string}`);
+  const walletClient = createWalletClient({
+    account,
+    chain,
+    transport: http(rpcUrl),
+  });
+  const publicClient = createPublicClient({
+    chain,
+    transport: http(rpcUrl),
+  });
+  const hash = await walletClient.writeContract({
+    address: registryAddress,
+    abi: IDENTITY_REGISTRY_ABI,
+    functionName: 'register',
+    args: [agentURI],
+  });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  let agentId: bigint = BigInt(0);
+  for (const log of receipt.logs) {
+    try {
+      const decoded = decodeEventLog({
+        abi: IDENTITY_REGISTRY_ABI,
+        data: log.data,
+        topics: log.topics,
+      });
+      if (decoded.eventName === 'Registered' && 'agentId' in decoded.args) {
+        agentId = decoded.args.agentId as bigint;
+        break;
       }
-      return {
-        tokenId: `mock-${Date.now()}`,
-        from: walletAddress,
-      };
-    },
+    } catch {
+      continue;
+    }
+  }
+  if (agentId === BigInt(0) && receipt.logs?.[0]) {
+    const firstLog = receipt.logs[0] as { topics?: readonly string[] };
+    const tokenIdFromLog = firstLog?.topics?.[1];
+    if (typeof tokenIdFromLog === 'string') agentId = BigInt(tokenIdFromLog);
+  }
+  return { agentId, txHash: receipt.transactionHash };
+}
+
+/**
+ * Update agent URI on Identity Registry (official setAgentURI).
+ */
+export async function setAgentURI(agentId: bigint, newURI: string): Promise<string> {
+  const registryAddress = getIdentityRegistryAddress();
+  const privateKey = process.env.EXECUTE_WALLET_PRIVATE_KEY ?? process.env.AGENT_PRIVATE_KEY;
+  if (!registryAddress || !privateKey) throw new Error('ERC-8004 registry or private key not configured');
+  const rpcUrl = getRpcUrl();
+  if (!rpcUrl) throw new Error('RPC URL not configured for ERC-8004');
+  const chain = getERC8004Chain();
+  const account = privateKeyToAccount(privateKey as `0x${string}`);
+  const walletClient = createWalletClient({
+    account,
+    chain,
+    transport: http(rpcUrl),
+  });
+  const hash = await walletClient.writeContract({
+    address: registryAddress,
+    abi: IDENTITY_REGISTRY_ABI,
+    functionName: 'setAgentURI',
+    args: [agentId, newURI],
+  });
+  return hash;
+}
+
+/**
+ * Read agent identity from Identity Registry (tokenURI, ownerOf, getAgentWallet).
+ */
+export async function getAgentIdentity(agentId: bigint): Promise<{ uri: string; owner: string; wallet: string }> {
+  const registryAddress = getIdentityRegistryAddress();
+  if (!registryAddress) throw new Error('ERC-8004 registry not configured');
+  const rpcUrl = getRpcUrl();
+  if (!rpcUrl) throw new Error('RPC URL not configured for ERC-8004');
+  const publicClient = createPublicClient({
+    chain: getERC8004Chain(),
+    transport: http(rpcUrl),
+  });
+  const [uri, owner, wallet] = await Promise.all([
+    publicClient.readContract({
+      address: registryAddress,
+      abi: IDENTITY_REGISTRY_ABI,
+      functionName: 'tokenURI',
+      args: [agentId],
+    }),
+    publicClient.readContract({
+      address: registryAddress,
+      abi: IDENTITY_REGISTRY_ABI,
+      functionName: 'ownerOf',
+      args: [agentId],
+    }),
+    publicClient.readContract({
+      address: registryAddress,
+      abi: IDENTITY_REGISTRY_ABI,
+      functionName: 'getAgentWallet',
+      args: [agentId],
+    }),
+  ]);
+  const walletAddr = wallet && typeof wallet === 'string' ? wallet : (wallet as unknown as { toString: () => string })?.toString?.() ?? '0x0';
+  return {
+    uri: uri as string,
+    owner: owner as string,
+    wallet: walletAddr,
   };
 }
 
 /**
- * Register agent identity: upload metadata, mint ERC-721 identity NFT, store onChainId in DB.
+ * Register agent identity: upload metadata, call official register(agentURI), store onChainId in DB.
+ * Kept for backward compatibility with (agentId, agentName, capabilities, metadataUri?).
  */
 export async function registerAgentIdentity(
   agentId: string,
@@ -145,22 +248,23 @@ export async function registerAgentIdentity(
   };
 
   const uri = metadataUri ?? (await uploadToIPFS(metadata));
-  const identityRegistry = getERC8004IdentityRegistry();
-  const tx = await identityRegistry.mint(uri);
+  const { agentId: onChainId, txHash } = await registerWithRegistry(uri);
+  const onChainIdStr = txHash.startsWith('mock-') ? txHash : onChainId.toString();
 
   const db = getPrisma();
   try {
     await db.agent.update({
       where: { id: agentId },
       data: {
-        onChainId: tx.tokenId,
-        walletAddress: tx.from,
+        onChainId: onChainIdStr,
+        walletAddress: process.env.AGENT_WALLET_ADDRESS ?? undefined,
       },
     });
   } catch (error) {
-    console.error('[ERC-8004] Failed to update agent in DB:', error);
+    logger.error('[ERC-8004] Failed to update agent in DB', { error });
     throw error;
   }
 
-  return tx.tokenId;
+  logger.info('[ERC-8004] Agent registered', { agentId: onChainIdStr, txHash });
+  return onChainIdStr;
 }

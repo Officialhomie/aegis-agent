@@ -5,6 +5,7 @@
  * It connects all the agent components and manages the decision cycle.
  */
 
+import { PrismaClient } from '@prisma/client';
 import { logger } from '../logger';
 import { observe, observeBaseSponsorshipOpportunities, observeGasPrice } from './observe';
 import { reason, reasonAboutSponsorship } from './reason';
@@ -14,6 +15,12 @@ import { storeMemory, retrieveRelevantMemories } from './memory';
 import { getDefaultCircuitBreaker } from './execute/circuit-breaker';
 import { signDecision, sponsorTransaction, type SignedDecision } from './execute/paymaster';
 import { postSponsorshipProof } from './social/farcaster';
+import {
+  getIdentityRegistryAddress,
+  registerWithRegistry,
+  uploadToIPFS,
+  type AgentMetadata,
+} from './identity';
 import type { Observation } from './observe';
 import type { Decision } from './reason/schemas';
 import type { ExecutionResult } from './execute';
@@ -268,6 +275,38 @@ export async function runSponsorshipCycle(
 }
 
 /**
+ * Ensure agent is registered on ERC-8004 Identity Registry when configured.
+ * Skips when no active agent, agent already has onChainId, or registry not configured.
+ */
+export async function ensureAgentRegistered(): Promise<void> {
+  const registryAddress = getIdentityRegistryAddress();
+  if (!registryAddress) return;
+  const prisma = new PrismaClient();
+  try {
+    const agent = await prisma.agent.findFirst({ where: { isActive: true } });
+    if (!agent || agent.onChainId) return;
+    const metadata: AgentMetadata = {
+      name: agent.name,
+      description: agent.description ?? 'Aegis - Autonomous Treasury Management Agent',
+      capabilities: ['observe', 'reason', 'execute', 'sponsorship'],
+      version: '1.0.0',
+      created: agent.createdAt.toISOString(),
+    };
+    const uri = await uploadToIPFS(metadata);
+    const { agentId, txHash } = await registerWithRegistry(uri);
+    await prisma.agent.update({
+      where: { id: agent.id },
+      data: { onChainId: agentId.toString(), walletAddress: process.env.AGENT_WALLET_ADDRESS ?? undefined },
+    });
+    logger.info('[ERC-8004] Agent registered', { agentId: agentId.toString(), txHash });
+  } catch (error) {
+    logger.warn('[ERC-8004] ensureAgentRegistered failed', { error: error instanceof Error ? error.message : String(error) });
+  } finally {
+    await prisma.$disconnect();
+  }
+}
+
+/**
  * Start autonomous Base paymaster loop (LIVE mode, 60s interval).
  */
 export async function startAutonomousPaymaster(intervalMs: number = 60000): Promise<void> {
@@ -275,6 +314,8 @@ export async function startAutonomousPaymaster(intervalMs: number = 60000): Prom
     executionMode: 'LIVE',
     interval: `${intervalMs / 1000}s`,
   });
+
+  await ensureAgentRegistered();
 
   let cycleTimer: ReturnType<typeof setInterval> | null = null;
   let draining = false;

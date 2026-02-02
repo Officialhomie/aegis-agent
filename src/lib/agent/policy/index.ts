@@ -5,6 +5,7 @@
  * Acts as a guardrail between LLM reasoning and actual blockchain execution.
  */
 
+import { logger } from '../../logger';
 import { validateRules, type PolicyRule } from './rules';
 import type { Decision } from '../reason/schemas';
 import type { AgentConfig } from '../index';
@@ -46,7 +47,7 @@ export async function validatePolicy(
       }
     }
 
-    console.log('[Policy] Validation result:', {
+    logger.info('[Policy] Validation result', {
       passed: result.passed,
       errorCount: result.errors.length,
       warningCount: result.warnings.length,
@@ -54,7 +55,7 @@ export async function validatePolicy(
 
     return result;
   } catch (error) {
-    console.error('[Policy] Error during validation:', error);
+    logger.error('[Policy] Error during validation', { error });
     return {
       passed: false,
       errors: [`Policy validation error: ${error}`],

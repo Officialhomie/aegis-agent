@@ -24,6 +24,7 @@
     "db:studio": "prisma studio",
     "db:seed": "prisma db seed",
     "register:moltbook": "tsx scripts/register-moltbook.ts",
+    "env:merge": "tsx scripts/merge-env.ts",
     "typecheck": "tsc --noEmit"
   },
   "prisma": {

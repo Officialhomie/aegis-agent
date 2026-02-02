@@ -4,8 +4,13 @@
 
 export {
   registerAgentIdentity,
+  registerWithRegistry,
+  setAgentURI,
+  getAgentIdentity,
+  getIdentityRegistryAddress,
   uploadToIPFS,
   type AgentMetadata,
+  type AgentRegistrationFile,
 } from './erc8004';
 
 export {
@@ -13,6 +18,9 @@ export {
   recordExecution,
   getReputationScore,
   calculateQualityScore,
+  giveFeedback,
+  getFeedbackSummary,
+  readAgentFeedback,
   type ReputationAttestationInput,
 } from './reputation';
 
