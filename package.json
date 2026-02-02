@@ -10,6 +10,8 @@
     "agent:dev": "tsx watch src/lib/agent/index.ts",
     "agent:run": "tsx src/lib/agent/index.ts",
     "agent:paymaster": "tsx scripts/deploy-autonomous-paymaster.ts",
+    "deploy:activity-logger": "tsx scripts/deploy-activity-logger.ts",
+    "test:farcaster": "tsx scripts/test-farcaster.ts",
     "test": "vitest",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest run --coverage",
@@ -17,8 +19,12 @@
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
     "db:studio": "prisma studio",
+    "db:seed": "prisma db seed",
     "register:moltbook": "tsx scripts/register-moltbook.ts",
     "typecheck": "tsc --noEmit"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",
@@ -39,6 +45,7 @@
     "lru-cache": "^11.2.5",
     "next": "16.1.6",
     "openai": "^6.17.0",
+    "permissionless": "^0.3.4",
     "pg": "^8.17.2",
     "prisma": "^7.3.0",
     "react": "19.2.3",
