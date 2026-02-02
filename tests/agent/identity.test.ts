@@ -28,7 +28,7 @@ describe('uploadToIPFS', () => {
 
   it('returns data URI when IPFS_GATEWAY_URL not set (non-production)', async () => {
     delete process.env.IPFS_GATEWAY_URL;
-    process.env.NODE_ENV = 'test';
+    vi.stubEnv('NODE_ENV', 'test');
     const { uploadToIPFS } = await import('../../src/lib/agent/identity/erc8004');
     const metadata: AgentMetadata = {
       name: 'Test Agent',
@@ -43,7 +43,7 @@ describe('uploadToIPFS', () => {
 
   it('throws when IPFS_GATEWAY_URL not set in production', async () => {
     delete process.env.IPFS_GATEWAY_URL;
-    process.env.NODE_ENV = 'production';
+    vi.stubEnv('NODE_ENV', 'production');
     const { uploadToIPFS } = await import('../../src/lib/agent/identity/erc8004');
     const metadata: AgentMetadata = {
       name: 'Test',
