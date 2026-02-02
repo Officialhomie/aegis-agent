@@ -15,3 +15,10 @@ export {
   calculateQualityScore,
   type ReputationAttestationInput,
 } from './reputation';
+
+export {
+  getUnifiedReputation,
+  getPaymentSuccessRate,
+  type UnifiedReputation,
+  type PaymentSuccessMetrics,
+} from './unified-reputation';
