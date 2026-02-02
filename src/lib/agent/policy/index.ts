@@ -65,3 +65,4 @@ export async function validatePolicy(
 }
 
 export { validateRules, type PolicyRule } from './rules';
+export { validateSponsorshipPolicy, sponsorshipPolicyRules } from './sponsorship-rules';
