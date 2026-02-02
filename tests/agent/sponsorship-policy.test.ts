@@ -44,9 +44,9 @@ describe('validatePolicy for SPONSOR_TRANSACTION', () => {
     const decision: Decision = {
       action: 'SPONSOR_TRANSACTION',
       confidence: 0.9,
-      reasoning: 'Valid sponsorship with sufficient protocol budget and user history.',
+      reasoning: 'Valid sponsorship with sufficient protocol budget and agent history.',
       parameters: {
-        userAddress: '0x1234567890123456789012345678901234567890',
+        agentWallet: '0x1234567890123456789012345678901234567890',
         protocolId: 'test-protocol',
         maxGasLimit: 200000,
         estimatedCostUSD: 0.5,
@@ -63,7 +63,7 @@ describe('validatePolicy for SPONSOR_TRANSACTION', () => {
       confidence: 0.9,
       reasoning: 'Short',
       parameters: {
-        userAddress: '0x1234567890123456789012345678901234567890',
+        agentWallet: '0x1234567890123456789012345678901234567890',
         protocolId: 'test-protocol',
         maxGasLimit: 200000,
         estimatedCostUSD: 0.5,
@@ -79,9 +79,9 @@ describe('validatePolicy for SPONSOR_TRANSACTION', () => {
     const decision: Decision = {
       action: 'SPONSOR_TRANSACTION',
       confidence: 0.9,
-      reasoning: 'Valid sponsorship with sufficient protocol budget and user history.',
+      reasoning: 'Valid sponsorship with sufficient protocol budget and agent history.',
       parameters: {
-        userAddress: '0x1234567890123456789012345678901234567890',
+        agentWallet: '0x1234567890123456789012345678901234567890',
         protocolId: 'test-protocol',
         maxGasLimit: 200000,
         estimatedCostUSD: 0.5,
