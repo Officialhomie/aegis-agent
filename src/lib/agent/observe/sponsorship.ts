@@ -7,6 +7,7 @@
 
 import { createPublicClient, http, formatEther } from 'viem';
 import { base, baseSepolia } from 'viem/chains';
+import { DatabaseUnavailableError } from '../../errors';
 import { logger } from '../../logger';
 import { getBalance } from './blockchain';
 import { getDefaultChainName } from './chains';
@@ -67,15 +68,21 @@ export async function getProtocolBudget(
  * Get all protocol budgets for observation.
  */
 export async function getProtocolBudgets(): Promise<
-  { protocolId: string; name?: string; balanceUSD: number; totalSpent: number }[]
+  { protocolId: string; name?: string; balanceUSD: number; totalSpent: number; whitelistedContracts?: string[] }[]
 > {
   try {
     const { PrismaClient } = await import('@prisma/client');
     const db = new PrismaClient();
     const list = await db.protocolSponsor.findMany();
+    logger.debug('[Sponsorship] Fetched protocol budgets', { count: list.length });
     return list;
-  } catch {
-    return [];
+  } catch (error) {
+    logger.error('[Sponsorship] Cannot fetch protocol budgets - database unavailable', {
+      error,
+      severity: 'HIGH',
+      impact: 'Agent cannot observe protocol budget status',
+    });
+    throw new DatabaseUnavailableError('Cannot fetch protocol budgets');
   }
 }
 
@@ -180,9 +187,7 @@ export async function observeAgentReserves(): Promise<Observation[]> {
  */
 export async function observeProtocolBudgets(): Promise<Observation[]> {
   try {
-    const { PrismaClient } = await import('@prisma/client');
-    const db = new PrismaClient();
-    const protocols = await db.protocolSponsor.findMany();
+    const protocols = await getProtocolBudgets();
     return protocols.map((p) => ({
       id: `protocol-budget-${p.protocolId}-${Date.now()}`,
       timestamp: new Date(),
@@ -196,8 +201,9 @@ export async function observeProtocolBudgets(): Promise<Observation[]> {
       },
       context: `Protocol ${p.protocolId} sponsorship budget (${(p.whitelistedContracts ?? []).length} whitelisted contracts)`,
     }));
-  } catch {
-    return [];
+  } catch (error) {
+    logger.error('[Sponsorship] Cannot observe protocol budgets', { error, severity: 'HIGH' });
+    throw error;
   }
 }
 
@@ -212,12 +218,18 @@ const MAX_DISCOVERY_CANDIDATES = 25;
  */
 async function fetchRecentSendersFromBlockscout(): Promise<string[]> {
   const baseUrl = process.env.BLOCKSCOUT_API_URL?.trim();
-  if (!baseUrl) return [];
+  if (!baseUrl) {
+    logger.debug('[Sponsorship] Blockscout not configured - skipping sender lookup');
+    return [];
+  }
 
   try {
     const url = `${baseUrl.replace(/\/$/, '')}/api/v2/transactions?page=1`;
     const res = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(5000) });
-    if (!res.ok) return [];
+    if (!res.ok) {
+      logger.warn('[Sponsorship] Blockscout API request failed', { status: res.status, url: baseUrl });
+      return [];
+    }
     const data = (await res.json()) as { items?: { from?: { hash?: string } }[] };
     const items = data?.items ?? [];
     const senders = new Set<string>();
@@ -225,8 +237,13 @@ async function fetchRecentSendersFromBlockscout(): Promise<string[]> {
       const from = item?.from?.hash ?? (item as { from?: string }).from;
       if (typeof from === 'string' && from.startsWith('0x') && from.length === 42) senders.add(from.toLowerCase());
     }
+    logger.debug('[Sponsorship] Fetched recent senders from Blockscout', { count: senders.size });
     return Array.from(senders).slice(0, MAX_DISCOVERY_CANDIDATES);
-  } catch {
+  } catch (error) {
+    logger.warn('[Sponsorship] Blockscout API fetch failed', {
+      error,
+      impact: 'Cannot discover low-gas wallets via Blockscout - degraded functionality',
+    });
     return [];
   }
 }
@@ -287,7 +304,13 @@ export async function observeFailedTransactions(): Promise<Observation[]> {
   try {
     const url = `${baseUrl.replace(/\/$/, '')}/api/v2/transactions?status=error&page=1`;
     const res = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(5000) });
-    if (!res.ok) return [];
+    if (!res.ok) {
+      logger.warn('[Sponsorship] Blockscout failed-transactions API request failed', {
+        status: res.status,
+        url: baseUrl,
+      });
+      return [];
+    }
     const data = (await res.json()) as { items?: { from?: { hash?: string }; tx_error?: string }[] };
     const items = (data?.items ?? []).slice(0, 15);
     const chain = getDefaultChainName() === 'base' ? base : baseSepolia;
@@ -306,7 +329,11 @@ export async function observeFailedTransactions(): Promise<Observation[]> {
         context: 'Failed transaction (agent execution failure)',
       };
     });
-  } catch {
+  } catch (error) {
+    logger.warn('[Sponsorship] Blockscout failed-transactions fetch failed', {
+      error,
+      impact: 'Cannot observe failed transactions - degraded functionality',
+    });
     return [];
   }
 }
