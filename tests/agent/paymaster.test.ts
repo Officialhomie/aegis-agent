@@ -36,7 +36,7 @@ describe('signDecision', () => {
       confidence: 0.9,
       reasoning: 'Test sponsorship decision.',
       parameters: {
-        userAddress: '0x1234567890123456789012345678901234567890',
+        agentWallet: '0x1234567890123456789012345678901234567890',
         protocolId: 'test-protocol',
         maxGasLimit: 200000,
         estimatedCostUSD: 0.12,
@@ -76,7 +76,7 @@ describe('sponsorTransaction', () => {
       confidence: 0.9,
       reasoning: 'Test sponsorship for simulation.',
       parameters: {
-        userAddress: '0x1234567890123456789012345678901234567890',
+        agentWallet: '0x1234567890123456789012345678901234567890',
         protocolId: 'test-protocol',
         maxGasLimit: 200000,
         estimatedCostUSD: 0.12,
@@ -98,7 +98,7 @@ describe('executePaymasterSponsorship', () => {
 
   it('returns paymasterReady false when BUNDLER_RPC_URL not set', async () => {
     const result = await executePaymasterSponsorship({
-      userAddress: '0x1234567890123456789012345678901234567890',
+      agentWallet: '0x1234567890123456789012345678901234567890',
       maxGasLimit: 200000,
     });
     expect(result.paymasterReady).toBe(false);
