@@ -97,8 +97,30 @@ export async function getAgentWalletBalance(): Promise<{
   const ethBalance = await getBalance(address, chainName);
   const ethFormatted = Number(formatEther(ethBalance));
 
-  // USDC: optional - would need token contract read per chain
-  const usdcBalance = 0; // TODO: read USDC balance when token address configured
+  const usdcAddress = process.env.USDC_ADDRESS as `0x${string}` | undefined;
+  let usdcBalance = 0;
+  if (usdcAddress && usdcAddress !== '0x0000000000000000000000000000000000000000') {
+    try {
+      const client = getBasePublicClient();
+      const balance = await client.readContract({
+        address: usdcAddress,
+        abi: [
+          { inputs: [{ name: 'account', type: 'address' }], name: 'balanceOf', outputs: [{ name: '', type: 'uint256' }], stateMutability: 'view', type: 'function' },
+          { inputs: [], name: 'decimals', outputs: [{ name: '', type: 'uint8' }], stateMutability: 'view', type: 'function' },
+        ] as const,
+        functionName: 'balanceOf',
+        args: [address],
+      });
+      const decimals = await client.readContract({
+        address: usdcAddress,
+        abi: [{ inputs: [], name: 'decimals', outputs: [{ name: '', type: 'uint8' }], stateMutability: 'view', type: 'function' }] as const,
+        functionName: 'decimals',
+      });
+      usdcBalance = Number(balance) / 10 ** Number(decimals);
+    } catch {
+      // USDC read optional
+    }
+  }
   return { ETH: ethFormatted, USDC: usdcBalance, chainId };
 }
 
@@ -153,33 +175,76 @@ export async function observeAgentReserves(): Promise<Observation[]> {
 }
 
 /**
- * Observe protocol budgets (x402 balances per protocol). Returns [] until ProtocolSponsor table exists.
+ * Observe protocol budgets (x402 balances per protocol) with whitelisted contracts.
  */
 export async function observeProtocolBudgets(): Promise<Observation[]> {
-  const protocols = await getProtocolBudgets();
-  return protocols.map((p) => ({
-    id: `protocol-budget-${p.protocolId}-${Date.now()}`,
-    timestamp: new Date(),
-    source: 'api',
-    data: {
-      protocolId: p.protocolId,
-      name: p.name,
-      balanceUSD: p.balanceUSD,
-      totalSpent: p.totalSpent,
-    },
-    context: `Protocol ${p.protocolId} sponsorship budget`,
-  }));
+  try {
+    const { PrismaClient } = await import('@prisma/client');
+    const db = new PrismaClient();
+    const protocols = await db.protocolSponsor.findMany();
+    return protocols.map((p) => ({
+      id: `protocol-budget-${p.protocolId}-${Date.now()}`,
+      timestamp: new Date(),
+      source: 'api',
+      data: {
+        protocolId: p.protocolId,
+        name: p.name,
+        balanceUSD: p.balanceUSD,
+        totalSpent: p.totalSpent,
+        whitelistedContracts: p.whitelistedContracts ?? [],
+      },
+      context: `Protocol ${p.protocolId} sponsorship budget (${(p.whitelistedContracts ?? []).length} whitelisted contracts)`,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+/** Min historical txs for legitimacy when using Blockscout discovery */
+const MIN_TX_COUNT_FOR_LEGITIMACY = 5;
+/** Max candidates to check when discovering from Blockscout */
+const MAX_DISCOVERY_CANDIDATES = 25;
+
+/**
+ * Fetch recent transaction senders from Blockscout API (optional).
+ * Set BLOCKSCOUT_API_URL (e.g. https://base.blockscout.com) to enable.
+ */
+async function fetchRecentSendersFromBlockscout(): Promise<string[]> {
+  const baseUrl = process.env.BLOCKSCOUT_API_URL?.trim();
+  if (!baseUrl) return [];
+
+  try {
+    const url = `${baseUrl.replace(/\/$/, '')}/api/v2/transactions?page=1`;
+    const res = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return [];
+    const data = (await res.json()) as { items?: { from?: { hash?: string } }[] };
+    const items = data?.items ?? [];
+    const senders = new Set<string>();
+    for (const item of items) {
+      const from = item?.from?.hash ?? (item as { from?: string }).from;
+      if (typeof from === 'string' && from.startsWith('0x') && from.length === 42) senders.add(from.toLowerCase());
+    }
+    return Array.from(senders).slice(0, MAX_DISCOVERY_CANDIDATES);
+  } catch {
+    return [];
+  }
 }
 
 /**
- * Observe low-gas wallets. Requires candidate addresses (env or future indexer).
- * WHITELISTED_LOW_GAS_CANDIDATES = comma-separated addresses to check.
+ * Observe low-gas wallets. Uses BLOCKSCOUT_API_URL for discovery when set;
+ * otherwise WHITELISTED_LOW_GAS_CANDIDATES (comma-separated addresses).
  */
 export async function observeLowGasWallets(): Promise<Observation[]> {
-  const candidatesRaw = process.env.WHITELISTED_LOW_GAS_CANDIDATES;
-  if (!candidatesRaw?.trim()) return [];
+  let addresses: string[] = [];
+  const candidatesRaw = process.env.WHITELISTED_LOW_GAS_CANDIDATES?.trim();
+  if (candidatesRaw) {
+    addresses = candidatesRaw.split(',').map((s) => s.trim().toLowerCase()).filter((s) => s.startsWith('0x') && s.length === 42);
+  }
+  if (addresses.length === 0) {
+    addresses = await fetchRecentSendersFromBlockscout();
+  }
+  if (addresses.length === 0) return [];
 
-  const addresses = candidatesRaw.split(',').map((s) => s.trim().toLowerCase()).filter((s) => s.startsWith('0x') && s.length === 42);
   const client = getBasePublicClient();
   const chain = getDefaultChainName() === 'base' ? base : baseSepolia;
   const observations: Observation[] = [];
@@ -190,6 +255,7 @@ export async function observeLowGasWallets(): Promise<Observation[]> {
       const eth = Number(formatEther(balance));
       if (eth >= LOW_GAS_THRESHOLD_ETH) continue;
       const txCount = await client.getTransactionCount({ address: addr as `0x${string}` });
+      if (process.env.BLOCKSCOUT_API_URL && txCount < MIN_TX_COUNT_FOR_LEGITIMACY) continue;
       observations.push({
         id: `lowgas-${addr}-${Date.now()}`,
         timestamp: new Date(),
@@ -211,19 +277,76 @@ export async function observeLowGasWallets(): Promise<Observation[]> {
 }
 
 /**
- * Observe recent failed transactions (insufficient gas). Stub: would require indexer or explorer API.
+ * Observe recent failed transactions (insufficient gas). Uses Blockscout API when BLOCKSCOUT_API_URL set.
  */
 export async function observeFailedTransactions(): Promise<Observation[]> {
-  // TODO: integrate with Base indexer or blockscout API for failed txs
-  return [];
+  const baseUrl = process.env.BLOCKSCOUT_API_URL?.trim();
+  if (!baseUrl) return [];
+
+  try {
+    const url = `${baseUrl.replace(/\/$/, '')}/api/v2/transactions?status=error&page=1`;
+    const res = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return [];
+    const data = (await res.json()) as { items?: { from?: { hash?: string }; tx_error?: string }[] };
+    const items = (data?.items ?? []).slice(0, 15);
+    const chain = getDefaultChainName() === 'base' ? base : baseSepolia;
+    return items.map((item, i) => {
+      const from = item?.from?.hash ?? (item as { from?: string }).from ?? '0x0';
+      return {
+        id: `failed-tx-${i}-${Date.now()}`,
+        timestamp: new Date(),
+        source: 'api',
+        chainId: chain.id,
+        data: {
+          userAddress: from,
+          reason: (item as { tx_error?: string }).tx_error ?? 'error',
+          status: 'error',
+        },
+        context: 'Failed transaction (gas or revert)',
+      };
+    });
+  } catch {
+    return [];
+  }
 }
 
 /**
- * Observe new wallet activations (0-tx wallets with pending intents). Stub: would require UserOperation mempool.
+ * Observe new wallet activations (0-tx wallets with pending intents). Stub: returns [] unless WHITELISTED_LOW_GAS_CANDIDATES includes new wallets.
+ * Full implementation would require UserOperation mempool (Pimlico bundler) subscription.
  */
 export async function observeNewWalletActivations(): Promise<Observation[]> {
-  // TODO: detect pending UserOperations for new wallets
-  return [];
+  const candidatesRaw = process.env.WHITELISTED_NEW_WALLET_CANDIDATES?.trim();
+  if (!candidatesRaw) return [];
+
+  const addresses = candidatesRaw.split(',').map((s) => s.trim().toLowerCase()).filter((s) => s.startsWith('0x') && s.length === 42);
+  const client = getBasePublicClient();
+  const chain = getDefaultChainName() === 'base' ? base : baseSepolia;
+  const observations: Observation[] = [];
+
+  for (const addr of addresses.slice(0, 10)) {
+    try {
+      const txCount = await client.getTransactionCount({ address: addr as `0x${string}` });
+      if (txCount > 0) continue;
+      const balance = await client.getBalance({ address: addr as `0x${string}` });
+      const eth = Number(formatEther(balance));
+      observations.push({
+        id: `new-wallet-${addr}-${Date.now()}`,
+        timestamp: new Date(),
+        source: 'blockchain',
+        chainId: chain.id,
+        data: {
+          walletAddress: addr,
+          balanceETH: eth,
+          historicalTxCount: 0,
+          pendingIntent: true,
+        },
+        context: 'New wallet (0 txs) with potential pending intent',
+      });
+    } catch {
+      // Skip
+    }
+  }
+  return observations;
 }
 
 /**
