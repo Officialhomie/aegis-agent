@@ -5,6 +5,8 @@
  * agent reserves, daily cap per user, global rate limit, gas price.
  */
 
+import { getConfigNumber } from '../../config';
+import { logger } from '../../logger';
 import { getStateStore } from '../state-store';
 import { getOnchainTxCount, getProtocolBudget, getAgentWalletBalance } from '../observe/sponsorship';
 import { detectAbuse } from '../security/abuse-detection';
@@ -13,12 +15,12 @@ import type { SponsorParams } from '../reason/schemas';
 import type { AgentConfig } from '../index';
 import type { PolicyRule, RuleResult } from './rules';
 
-const RESERVE_THRESHOLD_ETH = Number(process.env.RESERVE_THRESHOLD_ETH) || 0.1;
-const MAX_SPONSORSHIPS_PER_USER_DAY = Number(process.env.MAX_SPONSORSHIPS_PER_USER_DAY) || 3;
-const MAX_SPONSORSHIPS_PER_MINUTE = Number(process.env.MAX_SPONSORSHIPS_PER_MINUTE) || 10;
-const MAX_SPONSORSHIPS_PER_PROTOCOL_MINUTE = Number(process.env.MAX_SPONSORSHIPS_PER_PROTOCOL_MINUTE) || 5;
-const MAX_SPONSORSHIP_COST_USD = Number(process.env.MAX_SPONSORSHIP_COST_USD) || 0.5;
-const GAS_PRICE_MAX_GWEI = Number(process.env.GAS_PRICE_MAX_GWEI) || 2;
+const RESERVE_THRESHOLD_ETH = getConfigNumber('RESERVE_THRESHOLD_ETH', 0.1, 0.01, 10);
+const MAX_SPONSORSHIPS_PER_USER_DAY = getConfigNumber('MAX_SPONSORSHIPS_PER_USER_DAY', 3, 1, 100);
+const MAX_SPONSORSHIPS_PER_MINUTE = getConfigNumber('MAX_SPONSORSHIPS_PER_MINUTE', 10, 1, 100);
+const MAX_SPONSORSHIPS_PER_PROTOCOL_MINUTE = getConfigNumber('MAX_SPONSORSHIPS_PER_PROTOCOL_MINUTE', 5, 1, 50);
+const MAX_SPONSORSHIP_COST_USD = getConfigNumber('MAX_SPONSORSHIP_COST_USD', 0.5, 0.01, 100);
+const GAS_PRICE_MAX_GWEI = getConfigNumber('GAS_PRICE_MAX_GWEI', 2, 0.1, 1000);
 const MIN_HISTORICAL_TXS = 5;
 
 function isSponsorshipDecision(decision: Decision): decision is Decision & { action: 'SPONSOR_TRANSACTION'; parameters: SponsorParams } {
@@ -111,7 +113,16 @@ export const sponsorshipPolicyRules: PolicyRule[] = [
       const store = await getStateStore();
       const dayKey = `aegis:sponsorship:agent:${agent}:day`;
       const raw = await store.get(dayKey);
-      const list: number[] = raw ? (JSON.parse(raw) as number[]) : [];
+      let list: number[] = [];
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw) as unknown;
+          list = Array.isArray(parsed) ? (parsed as number[]) : [];
+          if (list.some((x) => typeof x !== 'number')) list = [];
+        } catch (error) {
+          logger.warn('[Sponsorship] Invalid sponsorship list format in cache', { error, key: dayKey });
+        }
+      }
       const now = Date.now();
       const oneDayMs = 24 * 60 * 60 * 1000;
       const trimmed = list.filter((t) => now - t < oneDayMs);
@@ -138,7 +149,16 @@ export const sponsorshipPolicyRules: PolicyRule[] = [
       const store = await getStateStore();
       const key = 'aegis:sponsorship:global:minute';
       const raw = await store.get(key);
-      const list: number[] = raw ? (JSON.parse(raw) as number[]) : [];
+      let list: number[] = [];
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw) as unknown;
+          list = Array.isArray(parsed) ? (parsed as number[]) : [];
+          if (list.some((x) => typeof x !== 'number')) list = [];
+        } catch (error) {
+          logger.warn('[Sponsorship] Invalid sponsorship list format in cache', { error, key });
+        }
+      }
       const now = Date.now();
       const oneMinuteMs = 60 * 1000;
       const trimmed = list.filter((t) => now - t < oneMinuteMs);
@@ -168,7 +188,16 @@ export const sponsorshipPolicyRules: PolicyRule[] = [
       const store = await getStateStore();
       const key = `aegis:sponsorship:protocol:${decision.parameters.protocolId}:minute`;
       const raw = await store.get(key);
-      const list: number[] = raw ? (JSON.parse(raw) as number[]) : [];
+      let list: number[] = [];
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw) as unknown;
+          list = Array.isArray(parsed) ? (parsed as number[]) : [];
+          if (list.some((x) => typeof x !== 'number')) list = [];
+        } catch (error) {
+          logger.warn('[Sponsorship] Invalid sponsorship list format in cache', { error, key });
+        }
+      }
       const now = Date.now();
       const oneMinuteMs = 60 * 1000;
       const trimmed = list.filter((t) => now - t < oneMinuteMs);
@@ -224,7 +253,7 @@ export const sponsorshipPolicyRules: PolicyRule[] = [
         if (!protocol || !protocol.whitelistedContracts?.length) {
           return { ruleName: 'contract-whitelist-check', passed: true, message: 'No whitelist configured', severity: 'ERROR' };
         }
-        const targetContract = (decision.parameters as SponsorParams & { targetContract?: string }).targetContract;
+        const targetContract = decision.parameters.targetContract;
         if (!targetContract) {
           return { ruleName: 'contract-whitelist-check', passed: true, message: 'No target contract in decision', severity: 'ERROR' };
         }
@@ -238,8 +267,20 @@ export const sponsorshipPolicyRules: PolicyRule[] = [
             : `Target ${normalized.slice(0, 10)}... not in protocol whitelist`,
           severity: 'ERROR',
         };
-      } catch {
-        return { ruleName: 'contract-whitelist-check', passed: true, message: 'Could not load protocol whitelist', severity: 'ERROR' };
+      } catch (error) {
+        logger.error('[Policy] Cannot verify whitelist - database unavailable', {
+          error,
+          protocolId: decision.parameters.protocolId,
+          targetContract: decision.parameters.targetContract,
+          severity: 'CRITICAL',
+          securityImpact: 'FAIL CLOSED - rejecting transaction',
+        });
+        return {
+          ruleName: 'contract-whitelist-check',
+          passed: false,
+          message: 'Cannot verify whitelist - database unavailable (failing CLOSED for security)',
+          severity: 'ERROR',
+        };
       }
     },
   },
