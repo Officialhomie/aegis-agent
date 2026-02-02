@@ -298,11 +298,11 @@ export async function observeFailedTransactions(): Promise<Observation[]> {
         source: 'api',
         chainId: chain.id,
         data: {
-          userAddress: from,
+          agentWallet: from,
           reason: (item as { tx_error?: string }).tx_error ?? 'error',
           status: 'error',
         },
-        context: 'Failed transaction (gas or revert)',
+        context: 'Failed transaction (agent execution failure)',
       };
     });
   } catch {
