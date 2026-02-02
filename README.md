@@ -1,8 +1,8 @@
 # Aegis Agent
 
-**AI-Powered Autonomous Treasury Management Agent**
+**Autonomous Gas Reliability Infrastructure for Agents on Base**
 
-Aegis is an intelligent agent that manages blockchain treasury operations through a secure observe-reason-decide-act-memory loop. Built with Coinbase AgentKit, LangGraph, and modern AI infrastructure.
+Aegis is autonomous gas reliability infrastructure for agents on Base. It prevents execution failure by autonomously sponsoring transactions for legitimate agents who are low on gas—with zero human intervention. Designed as agent-native infrastructure, Aegis serves trading bots, deployment agents, DAO executors, and other autonomous systems, ensuring the Base agent economy never stalls due to gas constraints. Humans benefit indirectly via the agents acting on their behalf.
 
 ## Architecture
 
