@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { DatabaseUnavailableError } from '../../src/lib/errors';
 import { MemoryStore } from '../../src/lib/agent/memory/store';
 
 const mockCreate = vi.fn();
@@ -109,6 +110,29 @@ describe('MemoryStore', () => {
         importance: 0.7,
       }),
     });
+  });
+
+  it('findByIds throws DatabaseUnavailableError when DB fails', async () => {
+    mockFindMany.mockRejectedValueOnce(new Error('Connection refused'));
+    const store = new MemoryStore('agent-1');
+    const err = await store.findByIds(['mem-1']).catch((e) => e);
+    expect(err).toBeInstanceOf(DatabaseUnavailableError);
+    expect((err as Error).message).toMatch(/Cannot retrieve memories/);
+  });
+
+  it('getRecent throws DatabaseUnavailableError when DB fails', async () => {
+    mockFindMany.mockRejectedValueOnce(new Error('Connection refused'));
+    const store = new MemoryStore('agent-1');
+    const err = await store.getRecent(undefined, 10).catch((e) => e);
+    expect(err).toBeInstanceOf(DatabaseUnavailableError);
+    expect((err as Error).message).toMatch(/Cannot retrieve recent memories/);
+  });
+
+  it('updateImportance throws DatabaseUnavailableError when DB fails', async () => {
+    mockFindUnique.mockResolvedValueOnce({ id: 'mem-1', importance: 0.5 });
+    mockUpdate.mockRejectedValueOnce(new Error('Connection refused'));
+    const store = new MemoryStore('agent-1');
+    await expect(store.updateImportance('mem-1', 0.2)).rejects.toThrow(DatabaseUnavailableError);
   });
 });
 
