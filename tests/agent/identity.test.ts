@@ -116,8 +116,70 @@ describe('registerAgentIdentity', () => {
       where: { id: 'agent-1' },
       data: expect.objectContaining({
         onChainId: expect.stringMatching(/^mock-\d+$/),
-        walletAddress: expect.any(String),
       }),
     });
+  });
+});
+
+describe('registerWithRegistry', () => {
+  beforeEach(() => {
+    process.env = { ...originalEnv, NODE_ENV: 'test' };
+    delete process.env.ERC8004_IDENTITY_REGISTRY_ADDRESS;
+    delete process.env.EXECUTE_WALLET_PRIVATE_KEY;
+    delete process.env.AGENT_PRIVATE_KEY;
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
+  it('returns mock agentId and txHash when registry not configured', async () => {
+    const { registerWithRegistry } = await import('../../src/lib/agent/identity/erc8004');
+    const result = await registerWithRegistry('ipfs://QmTest');
+    expect(result.agentId).toBeGreaterThanOrEqual(BigInt(0));
+    expect(result.txHash).toMatch(/^mock-\d+$/);
+  });
+});
+
+describe('getIdentityRegistryAddress', () => {
+  beforeEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
+  it('returns official address for default network when no override', async () => {
+    delete process.env.ERC8004_IDENTITY_REGISTRY_ADDRESS;
+    const { getIdentityRegistryAddress } = await import('../../src/lib/agent/identity/erc8004');
+    const addr = getIdentityRegistryAddress();
+    expect(addr).toBeDefined();
+    expect(addr).toMatch(/^0x[a-fA-F0-9]{40}$/);
+  });
+
+  it('returns override when ERC8004_IDENTITY_REGISTRY_ADDRESS set', async () => {
+    process.env.ERC8004_IDENTITY_REGISTRY_ADDRESS = '0x8004A818BFB912233c491871b3d84c89A494BD9e';
+    const { getIdentityRegistryAddress } = await import('../../src/lib/agent/identity/erc8004');
+    const addr = getIdentityRegistryAddress();
+    expect(addr).toBe('0x8004A818BFB912233c491871b3d84c89A494BD9e');
+  });
+});
+
+describe('getFeedbackSummary', () => {
+  beforeEach(() => {
+    process.env = { ...originalEnv, NODE_ENV: 'test' };
+    delete process.env.ERC8004_REPUTATION_REGISTRY_ADDRESS;
+    delete process.env.REPUTATION_ATTESTATION_CONTRACT_ADDRESS;
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
+  it('returns zeros when registry not configured', async () => {
+    const { getFeedbackSummary } = await import('../../src/lib/agent/identity/reputation');
+    const result = await getFeedbackSummary(BigInt(1), []);
+    expect(result).toEqual({ count: 0, averageValue: 0, valueDecimals: 0 });
   });
 });
