@@ -24,6 +24,11 @@ model Agent {
   onChainId     String?  @unique
   walletAddress String?  @unique
 
+  // Moltbook social identity
+  moltbookApiKey    String?   @unique
+  moltbookAgentName String?
+  moltbookClaimedAt DateTime?
+
   // Configuration
   confidenceThreshold Float    @default(0.75)
   maxTransactionValue BigInt?
@@ -232,4 +237,39 @@ model ReputationAttestation {
 
   @@index([agentOnChainId])
   @@index([attestor])
+}
+
+// ============================================
+// PAYMASTER SPONSORSHIP (Base Paymaster Agent)
+// ============================================
+
+model ProtocolSponsor {
+  id                String   @id @default(cuid())
+  protocolId        String   @unique
+  name              String
+  balanceUSD        Float    @default(0)
+  totalSpent        Float    @default(0)
+  sponsorshipCount  Int      @default(0)
+  whitelistedContracts String[] // Contract addresses allowed for this protocol
+  tier              String   @default("bronze") // bronze, silver, gold
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([protocolId])
+}
+
+model SponsorshipRecord {
+  id                String   @id @default(cuid())
+  userAddress       String
+  protocolId        String
+  decisionHash      String   @unique
+  estimatedCostUSD  Float
+  actualCostUSD     Float?
+  txHash            String?
+  signature         String
+  createdAt         DateTime @default(now())
+
+  @@index([userAddress])
+  @@index([protocolId])
+  @@index([decisionHash])
 }
