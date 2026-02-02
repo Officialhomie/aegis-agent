@@ -29,7 +29,7 @@ export interface DailyStats {
  */
 export async function postSponsorshipProof(
   signedDecision: SignedDecision,
-  result: ExecutionResult & { sponsorshipHash?: string; decisionHash?: string }
+  result: ExecutionResult & { sponsorshipHash?: string; decisionHash?: string; ipfsCid?: string }
 ): Promise<{ success: boolean; castHash?: string; error?: string }> {
   const apiKey = process.env.NEYNAR_API_KEY;
   const signerUuid = process.env.FARCASTER_SIGNER_UUID ?? process.env.NEYNAR_SIGNER_UUID;
@@ -46,6 +46,10 @@ export async function postSponsorshipProof(
   const decisionHash = result.decisionHash ?? signedDecision.decisionHash;
   const reasoning = signedDecision.decision.reasoning?.slice(0, 100) ?? '';
 
+  const ipfsCid = result.ipfsCid;
+  const ipfsGateway = process.env.IPFS_GATEWAY_URL ?? 'https://gateway.pinata.cloud';
+  const ipfsLine = ipfsCid ? `\n📄 Decision JSON: ${ipfsGateway}/ipfs/${ipfsCid}` : '';
+
   const castText = `⛽ Sponsored tx for ${truncate(userAddress)}
 
 Protocol: ${protocolId}
@@ -55,13 +59,14 @@ Gas saved: ~200k units
 Reasoning: ${truncate(reasoning, 100)}
 
 🔗 View TX: ${txHash ? `${BASESCAN_TX_URL}/${txHash}` : 'N/A'}
-📋 Decision: ${typeof decisionHash === 'string' ? truncate(decisionHash, 10) : 'N/A'}
+📋 Decision: ${typeof decisionHash === 'string' ? truncate(decisionHash, 10) : 'N/A'}${ipfsLine}
 
 #BasePaymaster #AutonomousAgent #BuildOnBase`;
 
   const embeds: { url: string }[] = [];
   if (txHash) embeds.push({ url: `${BASESCAN_TX_URL}/${txHash}` });
   embeds.push({ url: `${AEGIS_DASHBOARD_URL}/decisions/${typeof decisionHash === 'string' ? decisionHash : ''}` });
+  if (ipfsCid) embeds.push({ url: `${ipfsGateway}/ipfs/${ipfsCid}` });
 
   try {
     const { NeynarAPIClient, Configuration } = await import('@neynar/nodejs-sdk');
