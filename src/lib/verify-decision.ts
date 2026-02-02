@@ -27,14 +27,14 @@ export interface VerifyResult {
   onChain: boolean;
   signatureValid: boolean;
   record?: {
-    userAddress: string;
+    userAddress: string; // Agent wallet address (DB column still named userAddress)
     protocolId: string;
     estimatedCostUSD: number;
     txHash?: string;
     createdAt: string;
   };
   onChainEvent?: {
-    user: string;
+    user: string; // Agent wallet address (contract event still uses 'user' parameter)
     protocolId: string;
     estimatedCostUSD: bigint;
     timestamp: bigint;
