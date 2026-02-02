@@ -5,6 +5,8 @@
  * Rules are checked in order and can be configured per-agent.
  */
 
+import { OraclePriceUnavailableError } from '../../errors';
+import { logger } from '../../logger';
 import { getPrice } from '../observe/oracles';
 import { getDefaultChainName } from '../observe/chains';
 import { getStateStore } from '../state-store';
@@ -27,12 +29,9 @@ export interface RuleResult {
   severity: 'ERROR' | 'WARNING';
 }
 
-/** Fallback ETH price when oracle unavailable */
-const FALLBACK_ETH_USD = 2000;
-
 /**
  * Extract estimated USD value from decision parameters for value-limit rules.
- * Uses real-time oracle price for EXECUTE when available.
+ * Uses real-time oracle price for EXECUTE; throws when oracle unavailable.
  */
 async function extractTransactionValueUsd(decision: Decision): Promise<number> {
   const params = decision.parameters;
@@ -52,7 +51,17 @@ async function extractTransactionValueUsd(decision: Decision): Promise<number> {
     const wei = p.value ? BigInt(p.value) : BigInt(0);
     const eth = Number(wei) / 1e18;
     const priceResult = await getPrice('ETH/USD', getDefaultChainName());
-    const ethUsd = priceResult ? parseFloat(priceResult.price) : FALLBACK_ETH_USD;
+    if (!priceResult || !priceResult.price) {
+      logger.error('[Policy] Cannot validate transaction value - oracle price unavailable', {
+        decision: decision.action,
+        severity: 'CRITICAL',
+        actionNeeded: 'Reject transaction - cannot verify value limits',
+      });
+      throw new OraclePriceUnavailableError(
+        'Cannot validate transaction value without fresh price data'
+      );
+    }
+    const ethUsd = parseFloat(priceResult.price);
     return eth * ethUsd;
   }
   return 0;
@@ -67,7 +76,16 @@ async function recordActionAndCheckRateLimit(config: AgentConfig): Promise<{ all
   const now = Date.now();
   const store = await getStateStore();
   const raw = await store.get(RATE_LIMIT_KEY);
-  const list: number[] = raw ? (JSON.parse(raw) as number[]) : [];
+  let list: number[] = [];
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      list = Array.isArray(parsed) ? (parsed as number[]) : [];
+      if (list.some((x) => typeof x !== 'number')) list = [];
+    } catch (error) {
+      logger.warn('[Policy] Failed to parse rate limit list from cache', { error });
+    }
+  }
   const trimmed = list.filter((t) => now - t < windowMs);
   if (trimmed.length >= max) {
     return {
