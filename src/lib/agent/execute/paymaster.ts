@@ -122,10 +122,10 @@ export async function verifyDecisionSignature(signedDecision: SignedDecision, ex
 }
 
 /**
- * Log sponsorship to AegisActivityLogger contract on Base.
+ * Log sponsorship to AegisActivityLogger contract on Base (for autonomous agent execution).
  */
 export async function logSponsorshipOnchain(params: {
-  userAddress: string;
+  agentWallet: string;
   protocolId: string;
   decisionHash: `0x${string}`;
   estimatedCostUSD: number;
@@ -156,7 +156,7 @@ export async function logSponsorshipOnchain(params: {
       abi: ACTIVITY_LOGGER_ABI,
       functionName: 'logSponsorship',
       args: [
-        params.userAddress as `0x${string}`,
+        params.agentWallet as `0x${string}`,
         params.protocolId,
         params.decisionHash,
         BigInt(Math.round(params.estimatedCostUSD * 1e6)), // e.g. 0.08 USD as 80_000 (6 decimals)
@@ -209,11 +209,11 @@ export interface SponsorshipExecutionResult extends ExecutionResult {
 const PAYMASTER_APPROVAL_TTL_MS = 60 * 60 * 1000;
 
 /**
- * Execute paymaster sponsorship: get paymaster stub data for the user and store approval
- * so the bundler can sponsor the user's next UserOperation. Requires BUNDLER_RPC_URL (e.g. Pimlico).
+ * Execute paymaster sponsorship: get paymaster stub data for the agent and store approval
+ * so the bundler can sponsor the agent's next UserOperation. Requires BUNDLER_RPC_URL (e.g. Pimlico).
  */
 export async function executePaymasterSponsorship(params: {
-  userAddress: string;
+  agentWallet: string;
   maxGasLimit: number;
 }): Promise<{ paymasterReady: boolean; userOpHash?: string; error?: string }> {
   const rpcUrl = process.env.BUNDLER_RPC_URL ?? process.env.PAYMASTER_RPC_URL;
@@ -233,7 +233,7 @@ export async function executePaymasterSponsorship(params: {
     const stub = await getPaymasterStubData(paymasterClient, {
       chainId: chain.id,
       entryPointAddress: entryPoint,
-      sender: params.userAddress as `0x${string}`,
+      sender: params.agentWallet as `0x${string}`,
       nonce: BigInt(0),
       callData: '0x' as `0x${string}`,
       callGasLimit: BigInt(params.maxGasLimit),
@@ -244,7 +244,7 @@ export async function executePaymasterSponsorship(params: {
     }
 
     const store = await getStateStore();
-    const key = `paymaster:approved:${params.userAddress.toLowerCase()}`;
+    const key = `paymaster:approved:${params.agentWallet.toLowerCase()}`;
     await store.set(
       key,
       JSON.stringify({
@@ -254,8 +254,8 @@ export async function executePaymasterSponsorship(params: {
       { px: PAYMASTER_APPROVAL_TTL_MS }
     );
 
-    logger.info('[Paymaster] Paymaster sponsorship ready for user', {
-      userAddress: params.userAddress,
+    logger.info('[Paymaster] Paymaster sponsorship ready for agent', {
+      agentWallet: params.agentWallet,
       maxGasLimit: params.maxGasLimit,
     });
     return { paymasterReady: true };
@@ -268,7 +268,7 @@ export async function executePaymasterSponsorship(params: {
 
 /**
  * Execute SPONSOR_TRANSACTION: sign decision, log on-chain, deduct protocol budget,
- * and in LIVE mode execute paymaster sponsorship (get paymaster stub + store approval).
+ * and in LIVE mode execute paymaster sponsorship (sponsors autonomous agent execution).
  */
 export async function sponsorTransaction(
   decision: Decision,
@@ -293,7 +293,7 @@ export async function sponsorTransaction(
       success: true,
       simulationResult: {
         action: 'SPONSOR_TRANSACTION',
-        userAddress: params.userAddress,
+        agentWallet: params.agentWallet,
         protocolId: params.protocolId,
         decisionHash: signed.decisionHash,
         signature: signed.signature,
@@ -305,7 +305,7 @@ export async function sponsorTransaction(
   }
 
   const logResult = await logSponsorshipOnchain({
-    userAddress: params.userAddress,
+    agentWallet: params.agentWallet,
     protocolId: params.protocolId,
     decisionHash: signed.decisionHash,
     estimatedCostUSD: params.estimatedCostUSD,
@@ -332,7 +332,7 @@ export async function sponsorTransaction(
     const db = new PrismaClient();
     await db.sponsorshipRecord.create({
       data: {
-        userAddress: params.userAddress,
+        userAddress: params.agentWallet, // DB column still 'userAddress' for now
         protocolId: params.protocolId,
         decisionHash: signed.decisionHash,
         estimatedCostUSD: params.estimatedCostUSD,
@@ -347,7 +347,7 @@ export async function sponsorTransaction(
 
   const maxGasLimit = params.maxGasLimit ?? 200_000;
   const paymasterResult = await executePaymasterSponsorship({
-    userAddress: params.userAddress,
+    agentWallet: params.agentWallet,
     maxGasLimit,
   });
 
@@ -361,7 +361,7 @@ export async function sponsorTransaction(
     ipfsCid: ipfsCid ?? undefined,
     simulationResult: {
       action: 'SPONSOR_TRANSACTION',
-      userAddress: params.userAddress,
+      agentWallet: params.agentWallet,
       protocolId: params.protocolId,
       onChainTxHash: logResult.txHash,
       paymasterReady: paymasterResult.paymasterReady,
