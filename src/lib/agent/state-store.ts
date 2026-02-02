@@ -26,15 +26,23 @@ export const memoryStore: StateStore = {
   },
 };
 
-let redisClient: import('redis').RedisClientType | null = null;
+/** Minimal Redis client interface to avoid package type conflicts (redis vs @redis/client) */
+interface RedisClientLike {
+  get(key: string): Promise<string | null>;
+  set(key: string, value: string): Promise<unknown>;
+  setEx(key: string, seconds: number, value: string): Promise<unknown>;
+  connect(): Promise<unknown>;
+}
 
-async function getRedisClient(): Promise<import('redis').RedisClientType | null> {
+let redisClient: RedisClientLike | null = null;
+
+async function getRedisClient(): Promise<RedisClientLike | null> {
   const url = process.env.REDIS_URL;
   if (!url?.trim()) return null;
   if (redisClient) return redisClient;
   try {
     const { createClient } = await import('redis');
-    const client = createClient({ url });
+    const client = createClient({ url }) as unknown as RedisClientLike;
     await client.connect();
     redisClient = client;
     return client;
