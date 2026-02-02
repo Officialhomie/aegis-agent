@@ -116,12 +116,12 @@ describe('Alerts', () => {
     process.env.SLACK_WEBHOOK_URL = 'https://hooks.slack.com/test';
     const { sendAlert: send } = await import('../../src/lib/agent/execute');
     await send({ severity: 'HIGH', message: 'Slack test' });
-    const slackCall = mockFetch.mock.calls.find(
-      (c: [string]) => typeof c[0] === 'string' && c[0].includes('slack')
-    );
+    const slackCall = mockFetch.mock.calls.find((call: unknown[]) =>
+      Array.isArray(call) && typeof call[0] === 'string' && (call[0] as string).includes('slack')
+    ) as [string, RequestInit?] | undefined;
     expect(slackCall).toBeDefined();
-    expect(slackCall[1]?.method).toBe('POST');
-    expect(slackCall[1]?.body).toBeDefined();
+    expect(slackCall![1]?.method).toBe('POST');
+    expect(slackCall![1]?.body).toBeDefined();
   });
 
   it('should call ALERT_WEBHOOK_URL when set', async () => {
@@ -130,11 +130,11 @@ describe('Alerts', () => {
     process.env.ALERT_WEBHOOK_URL = 'https://alert.example.com/webhook';
     const { sendAlert: send } = await import('../../src/lib/agent/execute');
     await send({ severity: 'MEDIUM', message: 'Webhook test' });
-    const webhookCall = mockFetch.mock.calls.find(
-      (c: [string]) => typeof c[0] === 'string' && c[0].includes('alert.example')
-    );
+    const webhookCall = mockFetch.mock.calls.find((call: unknown[]) =>
+      Array.isArray(call) && typeof call[0] === 'string' && (call[0] as string).includes('alert.example')
+    ) as [string, RequestInit?] | undefined;
     expect(webhookCall).toBeDefined();
-    const body = JSON.parse(webhookCall[1]?.body as string);
+    const body = JSON.parse((webhookCall![1]?.body as string) ?? '{}');
     expect(body.severity).toBe('MEDIUM');
     expect(body.message).toBe('Webhook test');
   });
