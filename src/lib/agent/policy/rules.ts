@@ -8,6 +8,7 @@
 import { getPrice } from '../observe/oracles';
 import { getDefaultChainName } from '../observe/chains';
 import { getStateStore } from '../state-store';
+import { sponsorshipPolicyRules } from './sponsorship-rules';
 import type { Decision } from '../reason/schemas';
 import type { ExecuteParams, SwapParams, TransferParams } from '../reason/schemas';
 import type { AgentConfig } from '../index';
@@ -306,6 +307,13 @@ export async function validateRules(
   for (const rule of builtInRules) {
     const result = await rule.validate(decision, config);
     results.push(result);
+  }
+
+  if (decision.action === 'SPONSOR_TRANSACTION') {
+    for (const rule of sponsorshipPolicyRules) {
+      const result = await rule.validate(decision, config);
+      results.push(result);
+    }
   }
 
   return results;
