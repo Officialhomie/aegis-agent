@@ -7,6 +7,7 @@
 
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
+import { logger } from '../../logger';
 import { DecisionSchema, type Decision } from './schemas';
 import type { ReasoningContext } from './index';
 import { maskSensitiveData } from '../../security/data-masking';
@@ -123,7 +124,7 @@ Based on the above, what action should be taken? Analyze the situation and provi
     const decision = JSON.parse(args);
     return DecisionSchema.parse(decision);
   } catch (error) {
-    console.error('[Prompts] Error generating decision:', error);
+    logger.error('[Prompts] Error generating decision', { error });
     throw error;
   }
 }
