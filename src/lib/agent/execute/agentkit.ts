@@ -90,7 +90,7 @@ export async function initializeAgentKit(
     mnemonicPhrase: resolved.mnemonicPhrase,
   });
 
-  console.log('[AgentKit] Initialized for network:', resolved.networkId);
+  logger.info('[AgentKit] Initialized for network', { networkId: resolved.networkId });
   return agentkit;
 }
 
@@ -151,7 +151,7 @@ function getSimulationClient() {
  * Validates reverts, estimates gas where possible.
  */
 async function simulateExecution(decision: Decision): Promise<ExecutionResult> {
-  console.log('[AgentKit] Simulating execution:', decision.action);
+  logger.info('[AgentKit] Simulating execution', { action: decision.action });
 
   if (decision.action === 'TRANSFER') {
     const params = decision.parameters as TransferParams | null;
