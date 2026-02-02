@@ -1,0 +1,152 @@
+/**
+ * Aegis Agent - Farcaster Integration (Neynar SDK)
+ *
+ * Posts sponsorship proofs and stats to Farcaster for public transparency.
+ */
+
+import { logger } from '../../logger';
+import type { SignedDecision } from '../execute/paymaster';
+import type { ExecutionResult } from '../execute/index';
+
+const BASESCAN_TX_URL = 'https://basescan.org/tx';
+const AEGIS_DASHBOARD_URL = process.env.NEXT_PUBLIC_APP_URL ?? process.env.AEGIS_DASHBOARD_URL ?? 'https://aegis.example.com';
+
+function truncate(str: string, len: number = 10): string {
+  if (str.length <= len) return str;
+  return `${str.slice(0, 6)}...${str.slice(-4)}`;
+}
+
+export interface DailyStats {
+  sponsorshipsToday: number;
+  activeProtocols: number;
+  reserveETH: number;
+  totalGasSavedUSD: number;
+  uniqueUsers: number;
+}
+
+/**
+ * Post sponsorship proof to Farcaster (cast with tx link, decision hash, reasoning).
+ */
+export async function postSponsorshipProof(
+  signedDecision: SignedDecision,
+  result: ExecutionResult & { sponsorshipHash?: string; decisionHash?: string }
+): Promise<{ success: boolean; castHash?: string; error?: string }> {
+  const apiKey = process.env.NEYNAR_API_KEY;
+  const signerUuid = process.env.FARCASTER_SIGNER_UUID ?? process.env.NEYNAR_SIGNER_UUID;
+  if (!apiKey?.trim() || !signerUuid?.trim()) {
+    logger.debug('[Farcaster] NEYNAR_API_KEY or FARCASTER_SIGNER_UUID not set - skipping cast');
+    return { success: true };
+  }
+
+  const params = signedDecision.decision.parameters as { userAddress?: string; protocolId?: string; estimatedCostUSD?: number };
+  const userAddress = params?.userAddress ?? '0x...';
+  const protocolId = params?.protocolId ?? 'unknown';
+  const costUSD = params?.estimatedCostUSD ?? 0;
+  const txHash = result.sponsorshipHash ?? result.transactionHash ?? '';
+  const decisionHash = result.decisionHash ?? signedDecision.decisionHash;
+  const reasoning = signedDecision.decision.reasoning?.slice(0, 100) ?? '';
+
+  const castText = `⛽ Sponsored tx for ${truncate(userAddress)}
+
+Protocol: ${protocolId}
+Cost: $${costUSD.toFixed(2)}
+Gas saved: ~200k units
+
+Reasoning: ${truncate(reasoning, 100)}
+
+🔗 View TX: ${txHash ? `${BASESCAN_TX_URL}/${txHash}` : 'N/A'}
+📋 Decision: ${typeof decisionHash === 'string' ? truncate(decisionHash, 10) : 'N/A'}
+
+#BasePaymaster #AutonomousAgent #BuildOnBase`;
+
+  const embeds: { url: string }[] = [];
+  if (txHash) embeds.push({ url: `${BASESCAN_TX_URL}/${txHash}` });
+  embeds.push({ url: `${AEGIS_DASHBOARD_URL}/decisions/${typeof decisionHash === 'string' ? decisionHash : ''}` });
+
+  try {
+    const { NeynarAPIClient, Configuration } = await import('@neynar/nodejs-sdk');
+    const config = new Configuration({ apiKey });
+    const client = new NeynarAPIClient(config);
+    const publish = await client.publishCast({
+      signerUuid,
+      text: castText,
+      embeds: embeds.length > 0 ? embeds : undefined,
+    });
+    const castHash = publish?.cast?.hash;
+    logger.info('[Farcaster] Sponsorship proof published', { castHash, decisionHash: typeof decisionHash === 'string' ? truncate(decisionHash) : '' });
+    return { success: true, castHash };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.warn('[Farcaster] Failed to publish cast', { error: message });
+    return { success: false, error: message };
+  }
+}
+
+/**
+ * Post daily stats summary to Farcaster.
+ */
+export async function postDailyStats(stats: DailyStats): Promise<{ success: boolean; castHash?: string; error?: string }> {
+  const apiKey = process.env.NEYNAR_API_KEY;
+  const signerUuid = process.env.FARCASTER_SIGNER_UUID ?? process.env.NEYNAR_SIGNER_UUID;
+  if (!apiKey?.trim() || !signerUuid?.trim()) {
+    return { success: true };
+  }
+
+  const castText = `📊 Daily Stats:
+• ${stats.sponsorshipsToday} transactions sponsored
+• ${stats.uniqueUsers} unique users helped
+• ${stats.activeProtocols} protocols active
+• Total gas saved: $${stats.totalGasSavedUSD.toFixed(2)}
+• Reserve: ${stats.reserveETH.toFixed(2)} ETH
+
+#BasePaymaster #BuildOnBase`;
+
+  try {
+    const { NeynarAPIClient, Configuration } = await import('@neynar/nodejs-sdk');
+    const config = new Configuration({ apiKey });
+    const client = new NeynarAPIClient(config);
+    const publish = await client.publishCast({ signerUuid, text: castText });
+    logger.info('[Farcaster] Daily stats published', { castHash: publish?.cast?.hash });
+    return { success: true, castHash: publish?.cast?.hash };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.warn('[Farcaster] Failed to publish daily stats', { error: message });
+    return { success: false, error: message };
+  }
+}
+
+/**
+ * Post reserve swap notification to Farcaster.
+ */
+export async function postReserveSwapProof(params: {
+  tokenIn: string;
+  tokenOut: string;
+  amountIn: string;
+  amountOut: string;
+  txHash?: string;
+  decisionHash?: string;
+  reasoning?: string;
+}): Promise<{ success: boolean; castHash?: string }> {
+  const apiKey = process.env.NEYNAR_API_KEY;
+  const signerUuid = process.env.FARCASTER_SIGNER_UUID ?? process.env.NEYNAR_SIGNER_UUID;
+  if (!apiKey?.trim() || !signerUuid?.trim()) return { success: true };
+
+  const castText = `🔄 Swapped reserves: ${params.amountIn} ${params.tokenIn} → ${params.amountOut} ${params.tokenOut}
+
+${params.reasoning ?? ''}
+
+🔗 View TX: ${params.txHash ? `${BASESCAN_TX_URL}/${params.txHash}` : 'N/A'}
+📋 Decision: ${params.decisionHash ? params.decisionHash.slice(0, 10) + '...' : 'N/A'}
+
+#BasePaymaster #BuildOnBase`;
+
+  try {
+    const { NeynarAPIClient, Configuration } = await import('@neynar/nodejs-sdk');
+    const config = new Configuration({ apiKey });
+    const client = new NeynarAPIClient(config);
+    const publish = await client.publishCast({ signerUuid, text: castText });
+    return { success: true, castHash: publish?.cast?.hash };
+  } catch {
+    return { success: false };
+  }
+}
