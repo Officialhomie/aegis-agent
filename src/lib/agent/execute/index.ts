@@ -9,8 +9,10 @@ import { logger } from '../../logger';
 import { executeWithAgentKit } from './agentkit';
 import { sendAlert } from './alerts';
 import { getDefaultCircuitBreaker } from './circuit-breaker';
+import { sponsorTransaction } from './paymaster';
+import { executeReserveSwap } from './reserve-manager';
 import type { Decision } from '../reason/schemas';
-import type { AlertParams } from '../reason/schemas';
+import type { AlertParams, AlertProtocolParams } from '../reason/schemas';
 
 export interface ExecutionResult {
   success: boolean;
@@ -69,6 +71,27 @@ export async function execute(
       };
     }
 
+    if (decision.action === 'ALERT_PROTOCOL') {
+      const params = decision.parameters as AlertProtocolParams | null;
+      const message = params
+        ? `Protocol ${params.protocolId}: budget $${params.budgetRemaining.toFixed(2)} remaining (~${params.estimatedDaysRemaining ?? '?'} days). ${params.topUpRecommendation != null ? `Top-up recommendation: $${params.topUpRecommendation.toFixed(2)}` : ''}`
+        : 'Protocol budget low';
+      await sendAlert({
+        severity: (params?.severity as 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL') ?? 'HIGH',
+        message,
+        suggestedAction: 'Top up protocol sponsorship budget via x402',
+      });
+      return { success: true, simulationResult: 'Protocol alerted' };
+    }
+
+    if (decision.action === 'SPONSOR_TRANSACTION') {
+      return await sponsorTransaction(decision, mode);
+    }
+
+    if (decision.action === 'SWAP_RESERVES') {
+      return await executeReserveSwap(decision, mode);
+    }
+
     if (mode === 'LIVE') {
       const validation = validateForLiveExecution(decision);
       if (!validation.valid) {
@@ -91,3 +114,13 @@ export async function execute(
 export { executeWithAgentKit } from './agentkit';
 export { sendAlert } from './alerts';
 export { getDefaultCircuitBreaker, CircuitBreaker } from './circuit-breaker';
+export {
+  sponsorTransaction,
+  signDecision,
+  verifyDecisionSignature,
+  logSponsorshipOnchain,
+  deductProtocolBudget,
+  type SignedDecision,
+  type SponsorshipExecutionResult,
+} from './paymaster';
+export { manageReserves, executeReserveSwap } from './reserve-manager';
