@@ -7,6 +7,7 @@
 
 import OpenAI from 'openai';
 import { Pinecone } from '@pinecone-database/pinecone';
+import { logger } from '../../logger';
 
 export class EmbeddingService {
   private openai: OpenAI;
@@ -72,12 +73,12 @@ export class EmbeddingService {
           },
         ]);
       } catch (pineconeError) {
-        console.warn('[Embeddings] Pinecone storage failed, continuing without vector storage:', pineconeError);
+        logger.warn('[Embeddings] Pinecone storage failed, continuing without vector storage', { error: pineconeError });
       }
 
       return embeddingId;
     } catch (error) {
-      console.error('[Embeddings] Error creating embedding:', error);
+      logger.error('[Embeddings] Error creating embedding', { error });
       // Return a placeholder ID if embedding fails
       return `temp-${Date.now()}`;
     }
@@ -108,7 +109,7 @@ export class EmbeddingService {
 
       return results.matches?.map(match => match.id) || [];
     } catch (error) {
-      console.error('[Embeddings] Error searching similar:', error);
+      logger.error('[Embeddings] Error searching similar', { error });
       return [];
     }
   }

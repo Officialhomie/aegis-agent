@@ -5,6 +5,7 @@
  * Uses PostgreSQL for structured data and Pinecone for semantic search.
  */
 
+import { logger } from '../../logger';
 import { MemoryStore } from './store';
 import { EmbeddingService } from './embeddings';
 
@@ -55,10 +56,10 @@ export async function storeMemory(data: Record<string, unknown>): Promise<string
       embeddingId,
     });
 
-    console.log('[Memory] Stored memory:', memoryId);
+    logger.info('[Memory] Stored memory', { memoryId });
     return memoryId;
   } catch (error) {
-    console.error('[Memory] Error storing memory:', error);
+    logger.error('[Memory] Error storing memory', { error });
     throw error;
   }
 }
@@ -87,10 +88,10 @@ export async function retrieveRelevantMemories(
     // Fetch full memory records from PostgreSQL
     const memories = await store.findByIds(similarMemoryIds);
     
-    console.log(`[Memory] Retrieved ${memories.length} relevant memories`);
+    logger.info('[Memory] Retrieved relevant memories', { count: memories.length });
     return memories;
   } catch (error) {
-    console.error('[Memory] Error retrieving memories:', error);
+    logger.error('[Memory] Error retrieving memories', { error });
     return [];
   }
 }
