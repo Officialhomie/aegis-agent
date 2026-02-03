@@ -2,7 +2,7 @@
  * Policy rules validation tests
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { validateRules } from '../../src/lib/agent/policy/rules';
 import type { Decision } from '../../src/lib/agent/reason/schemas';
 import type { AgentConfig } from '../../src/lib/agent';
