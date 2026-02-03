@@ -11,6 +11,7 @@ import { getPrice } from '../observe/oracles';
 import { getDefaultChainName } from '../observe/chains';
 import { getStateStore } from '../state-store';
 import { sponsorshipPolicyRules } from './sponsorship-rules';
+import { reservePolicyRules } from './reserve-rules';
 import type { Decision } from '../reason/schemas';
 import type { ExecuteParams, SwapParams, TransferParams } from '../reason/schemas';
 import type { AgentConfig } from '../index';
@@ -67,7 +68,9 @@ async function extractTransactionValueUsd(decision: Decision): Promise<number> {
   return 0;
 }
 
-const RATE_LIMIT_KEY = 'aegis:rate_limit:default';
+function getRateLimitKey(mode?: string): string {
+  return `aegis:rate_limit:${mode ?? 'default'}`;
+}
 
 async function recordActionAndCheckRateLimit(config: AgentConfig): Promise<{ allowed: boolean; message: string }> {
   const max = config.maxActionsPerWindow ?? 0;
@@ -75,7 +78,7 @@ async function recordActionAndCheckRateLimit(config: AgentConfig): Promise<{ all
   if (max <= 0) return { allowed: true, message: 'Rate limit not configured' };
   const now = Date.now();
   const store = await getStateStore();
-  const raw = await store.get(RATE_LIMIT_KEY);
+  const raw = await store.get(getRateLimitKey(config.mode));
   let list: number[] = [];
   if (raw) {
     try {
@@ -94,7 +97,7 @@ async function recordActionAndCheckRateLimit(config: AgentConfig): Promise<{ all
     };
   }
   trimmed.push(now);
-  await store.set(RATE_LIMIT_KEY, JSON.stringify(trimmed));
+  await store.set(getRateLimitKey(config.mode), JSON.stringify(trimmed));
   return { allowed: true, message: 'Rate limit check passed' };
 }
 
@@ -329,6 +332,14 @@ export async function validateRules(
 
   if (decision.action === 'SPONSOR_TRANSACTION') {
     for (const rule of sponsorshipPolicyRules) {
+      const result = await rule.validate(decision, config);
+      results.push(result);
+    }
+  }
+
+  const reserveActions = ['REPLENISH_RESERVES', 'ALLOCATE_BUDGET', 'ALERT_LOW_RUNWAY', 'REBALANCE_RESERVES'];
+  if (reserveActions.includes(decision.action)) {
+    for (const rule of reservePolicyRules) {
       const result = await rule.validate(decision, config);
       results.push(result);
     }

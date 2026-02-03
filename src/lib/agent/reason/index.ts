@@ -6,7 +6,6 @@
  */
 
 import { logger } from '../../logger';
-import { generateDecision } from './prompts';
 import { generateSponsorshipDecision } from './sponsorship-prompt';
 import { DecisionSchema, type Decision } from './schemas';
 
@@ -14,55 +13,6 @@ export interface ReasoningContext {
   observations: unknown[];
   memories: unknown[];
   constraints?: string[];
-}
-
-/**
- * Main reasoning function - analyzes observations and proposes an action
- */
-export async function reason(
-  observations: unknown[],
-  memories: unknown[]
-): Promise<Decision> {
-  const context: ReasoningContext = {
-    observations,
-    memories,
-    constraints: [
-      'Never propose actions with value exceeding the configured maximum',
-      'Always include reasoning for the decision',
-      'When uncertain, prefer WAIT over EXECUTE',
-      'Consider gas costs in transaction decisions',
-    ],
-  };
-
-  try {
-    const decision = await generateDecision(context);
-    
-    // Validate the decision against our schema
-    const validated = DecisionSchema.parse(decision);
-    
-    logger.info('[Reason] Generated decision', {
-      action: validated.action,
-      confidence: validated.confidence,
-    });
-
-    return validated;
-  } catch (error) {
-    logger.error('[Reason] LLM reasoning failed', {
-      error,
-      severity: 'HIGH',
-      impact: 'Agent cannot generate decisions - may be stuck in WAIT loop',
-    });
-    return {
-      action: 'WAIT',
-      confidence: 0,
-      reasoning: `Error during reasoning: ${error}`,
-      parameters: null,
-      metadata: {
-        reasoningFailed: true,
-        error: error instanceof Error ? error.message : String(error),
-      },
-    };
-  }
 }
 
 /**
@@ -108,6 +58,7 @@ export async function reasonAboutSponsorship(
   }
 }
 
-export { generateDecision } from './prompts';
 export { generateSponsorshipDecision } from './sponsorship-prompt';
+export { reasonAboutReserves } from './reserve-reasoning';
+export { generateReserveDecision } from './reserve-prompt';
 export { DecisionSchema, type Decision } from './schemas';

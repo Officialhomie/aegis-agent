@@ -7,8 +7,8 @@
 
 import { PrismaClient } from '@prisma/client';
 import { logger } from '../logger';
-import { observe, observeBaseSponsorshipOpportunities, observeGasPrice } from './observe';
-import { reason, reasonAboutSponsorship } from './reason';
+import { observeBaseSponsorshipOpportunities, observeGasPrice } from './observe';
+import { reasonAboutSponsorship } from './reason';
 import { validatePolicy } from './policy';
 import { execute } from './execute';
 import { storeMemory, retrieveRelevantMemories } from './memory';
@@ -42,6 +42,8 @@ export interface AgentConfig {
   maxActionsPerWindow?: number;
   /** Rate limit: window in ms */
   rateLimitWindowMs?: number;
+  /** Agent mode (e.g. 'reserve-pipeline', 'gas-sponsorship') for isolated rate limit / circuit breaker */
+  mode?: string;
   /** Trigger source (e.g. 'reactive', 'polling') */
   triggerSource?: string;
   /** Event payload when triggered by external source (e.g. Reactive Network) */
@@ -72,111 +74,11 @@ const defaultConfig: AgentConfig = {
 };
 
 /**
- * Main agent loop - observes, reasons, decides, and executes
+ * @deprecated Use runSponsorshipCycle() or MultiModeAgent for unified reserve + sponsorship. Runs a single sponsorship cycle for backward compatibility.
  */
 export async function runAgentCycle(config: AgentConfig = defaultConfig): Promise<AgentState> {
-  const state: AgentState = {
-    observations: [],
-    memories: [],
-    currentDecision: null,
-    executionResult: null,
-  };
-
-  try {
-    // Step 1: OBSERVE - Gather current state from blockchain and other sources
-    logger.info('[Aegis] Observing current state...');
-    state.observations = await observe();
-
-    // Step 2: RETRIEVE MEMORIES - Get relevant past experiences
-    logger.info('[Aegis] Retrieving relevant memories...');
-    state.memories = (await retrieveRelevantMemories(state.observations)) as AgentMemory[];
-
-    // Step 3: REASON - Use LLM to analyze state and propose action
-    logger.info('[Aegis] Reasoning about state...');
-    const decision = await reason(state.observations, state.memories);
-    state.currentDecision = decision;
-
-    // Step 4: VALIDATE POLICY - Check decision against safety rules
-    logger.info('[Aegis] Validating against policy rules...');
-    const policyResult = await validatePolicy(decision, config);
-
-    if (!policyResult.passed) {
-      logger.warn('[Aegis] Decision rejected by policy', { errors: policyResult.errors });
-      await storeMemory({
-        type: 'DECISION',
-        decision,
-        outcome: 'POLICY_REJECTED',
-        policyErrors: policyResult.errors,
-      });
-      return state;
-    }
-
-    // Step 5: EXECUTE - Perform the action (if confidence threshold met)
-    if (decision.confidence >= config.confidenceThreshold) {
-      logger.info('[Aegis] Executing decision...');
-
-      if (config.executionMode === 'READONLY') {
-        logger.info('[Aegis] READONLY mode - skipping execution');
-      } else {
-        state.executionResult = await execute(decision, config.executionMode);
-      }
-    } else {
-      logger.info('[Aegis] Confidence below threshold - waiting', {
-        confidence: decision.confidence,
-        threshold: config.confidenceThreshold,
-      });
-    }
-
-    // Step 6: STORE MEMORY - Record the experience for future learning
-    logger.info('[Aegis] Storing memory...');
-    await storeMemory({
-      type: 'DECISION',
-      observations: state.observations,
-      decision,
-      outcome: state.executionResult,
-    });
-
-    return state;
-  } catch (error) {
-    logger.error('[Aegis] Error in agent cycle', { error: error instanceof Error ? error.message : String(error) });
-    throw error;
-  }
-}
-
-/**
- * Start the agent in continuous monitoring mode with graceful shutdown.
- */
-export async function startAgent(
-  config: AgentConfig = defaultConfig,
-  intervalMs: number = 60000
-): Promise<void> {
-  logger.info('[Aegis] Starting agent', { executionMode: config.executionMode, confidenceThreshold: config.confidenceThreshold });
-
-  let cycleTimer: ReturnType<typeof setInterval> | null = null;
-  let draining = false;
-
-  const runCycle = async () => {
-    if (draining) return;
-    try {
-      await runAgentCycle(config);
-    } catch (error) {
-      logger.error('[Aegis] Cycle error', { error: error instanceof Error ? error.message : String(error) });
-    }
-  };
-
-  const shutdown = async () => {
-    draining = true;
-    if (cycleTimer) clearInterval(cycleTimer);
-    cycleTimer = null;
-    logger.info('[Aegis] Shutting down gracefully');
-    process.exit(0);
-  };
-
-  process.on('SIGTERM', shutdown);
-  process.on('SIGINT', shutdown);
-
-  await runCycle();
-  cycleTimer = setInterval(runCycle, intervalMs);
+  logger.warn('[Aegis] runAgentCycle is deprecated; use runSponsorshipCycle() or MultiModeAgent');
+  return runSponsorshipCycle({ ...sponsorshipDefaultConfig, ...config });
 }
 
 const sponsorshipDefaultConfig: AgentConfig = {
@@ -245,6 +147,27 @@ export async function runSponsorshipCycle(
           state.executionResult = await sponsorTransaction(decision, config.executionMode === 'LIVE' ? 'LIVE' : 'SIMULATION');
           await postSponsorshipProof(signed, state.executionResult as ExecutionResult & { sponsorshipHash?: string; decisionHash?: string });
           postSponsorshipToBotchan(signed, state.executionResult as ExecutionResult & { sponsorshipHash?: string; decisionHash?: string }).catch(() => {});
+          if (state.executionResult?.success) {
+            const { getAgentWalletBalance } = await import('./observe/sponsorship');
+            const { getReserveState, updateReserveState } = await import('./state/reserve-state');
+            const reserves = await getAgentWalletBalance();
+            const current = await getReserveState();
+            const updates: Parameters<typeof updateReserveState>[0] = {
+              ethBalance: reserves.ETH,
+              usdcBalance: reserves.USDC,
+              chainId: reserves.chainId,
+              sponsorshipsLast24h: (current?.sponsorshipsLast24h ?? 0) + 1,
+            };
+            const result = state.executionResult as ExecutionResult & { gasUsed?: bigint };
+            if (result.gasUsed != null) {
+              const gasPriceGwei = config.currentGasPriceGwei ?? 0.001;
+              const ethBurned = (Number(result.gasUsed) * gasPriceGwei) / 1e9;
+              const snapshot = { timestamp: new Date().toISOString(), sponsorships: 1, ethBurned };
+              const history = [...(current?.burnRateHistory ?? []).slice(-29), snapshot];
+              Object.assign(updates, { burnRateHistory: history });
+            }
+            await updateReserveState(updates);
+          }
         } else {
           state.executionResult = await execute(decision, config.executionMode);
           if (decision.action === 'SWAP_RESERVES' && state.executionResult) {
@@ -313,51 +236,24 @@ export async function ensureAgentRegistered(): Promise<void> {
 }
 
 /**
- * Start autonomous Base paymaster loop (LIVE mode, 60s interval).
+ * Start unified agent: Reserve Pipeline + Gas Sponsorship (multi-mode).
+ * Use scripts/run-agent.ts for CLI. Reserve runs every 5 min, sponsorship every 1 min.
  */
 export async function startAutonomousPaymaster(intervalMs: number = 60000): Promise<void> {
-  logger.info('[Aegis] Starting autonomous Base paymaster', {
-    executionMode: 'LIVE',
-    interval: `${intervalMs / 1000}s`,
-  });
-
   await ensureAgentRegistered();
-
-  let cycleTimer: ReturnType<typeof setInterval> | null = null;
-  let draining = false;
-
-  const runCycle = async () => {
-    if (draining) return;
-    try {
-      await runSponsorshipCycle({
-        ...sponsorshipDefaultConfig,
-        executionMode: 'LIVE',
-        confidenceThreshold: 0.8,
-        maxTransactionValueUsd: 100,
-        triggerSource: 'autonomous-loop',
-      });
-    } catch (error) {
-      logger.error('[Aegis] Cycle error', { error: error instanceof Error ? error.message : String(error) });
-    }
-  };
-
-  const shutdown = async () => {
-    draining = true;
-    if (cycleTimer) clearInterval(cycleTimer);
-    cycleTimer = null;
-    logger.info('[Aegis] Shutting down gracefully');
-    process.exit(0);
-  };
-
-  process.on('SIGTERM', shutdown);
-  process.on('SIGINT', shutdown);
-
-  await runCycle();
-  cycleTimer = setInterval(runCycle, intervalMs);
+  const { MultiModeAgent } = await import('./multi-mode-agent');
+  const { reservePipelineMode, gasSponsorshipMode } = await import('./modes');
+  const agent = new MultiModeAgent({
+    modes: [reservePipelineMode, gasSponsorshipMode],
+    intervals: {
+      'reserve-pipeline': Number(process.env.RESERVE_PIPELINE_INTERVAL_MS) || 5 * 60 * 1000,
+      'gas-sponsorship': intervalMs,
+    },
+  });
+  await agent.start();
 }
 
 export { observe } from './observe';
-export { reason } from './reason';
 export { validatePolicy } from './policy';
 export { execute } from './execute';
 export { storeMemory, retrieveRelevantMemories } from './memory';

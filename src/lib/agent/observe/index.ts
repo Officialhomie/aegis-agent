@@ -10,7 +10,6 @@
 import { logger } from '../../logger';
 import { getDefaultChainName } from './chains';
 import { observeBlockchainState } from './blockchain';
-import { observeTreasury } from './treasury';
 import { observeOraclePrices } from './oracles';
 import { observeBotchanRequests } from './botchan';
 import type { GovernanceState } from './governance';
@@ -46,12 +45,6 @@ export async function observe(): Promise<Observation[]> {
     const blockchainState = await observeBlockchainState();
     observations.push(...blockchainState);
 
-    const treasuryAddress = process.env.TREASURY_ADDRESS;
-    if (treasuryAddress) {
-      const treasuryObs = await observeTreasury(treasuryAddress);
-      observations.push(...treasuryObs);
-    }
-
     const defaultChain = getDefaultChainName();
     const oracleObs = await observeOraclePrices(['ETH/USD'], defaultChain);
     observations.push(...oracleObs);
@@ -67,7 +60,6 @@ export async function observe(): Promise<Observation[]> {
 
 export { observeBlockchainState } from './blockchain';
 export {
-  observeTreasury,
   observeTreasuryState,
   getTokenBalances,
   getTokenBalancesForChain,
@@ -108,4 +100,11 @@ export {
   getProtocolBudgets,
   getAgentWalletBalance,
 } from './sponsorship';
+export {
+  observeReservePipeline,
+  observeBurnRate,
+  observeRunway,
+  observePendingPayments,
+  observeForecastedBurnRate,
+} from './reserve-pipeline';
 export { observeBotchanRequests } from './botchan';
