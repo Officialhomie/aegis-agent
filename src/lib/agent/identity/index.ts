@@ -9,6 +9,7 @@ export {
   getAgentIdentity,
   getIdentityRegistryAddress,
   uploadToIPFS,
+  buildRegistrationFile,
   type AgentMetadata,
   type AgentRegistrationFile,
 } from './erc8004';
@@ -30,3 +31,5 @@ export {
   type UnifiedReputation,
   type PaymentSuccessMetrics,
 } from './unified-reputation';
+
+export { setPrimaryName, getPrimaryName } from './ens';
