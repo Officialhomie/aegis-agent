@@ -2,7 +2,7 @@
  * Sponsorship policy rules tests
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { validatePolicy } from '../../src/lib/agent/policy';
 import type { Decision } from '../../src/lib/agent/reason/schemas';
 import type { AgentConfig } from '../../src/lib/agent';
