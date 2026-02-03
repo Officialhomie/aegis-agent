@@ -30,7 +30,7 @@ const DECISION_TOOL = {
       properties: {
         action: {
           type: 'string',
-          enum: ['EXECUTE', 'WAIT', 'ALERT_HUMAN', 'REBALANCE', 'SWAP', 'TRANSFER', 'SPONSOR_TRANSACTION', 'SWAP_RESERVES', 'ALERT_PROTOCOL'],
+          enum: ['EXECUTE', 'WAIT', 'ALERT_HUMAN', 'REBALANCE', 'SWAP', 'TRANSFER', 'SPONSOR_TRANSACTION', 'SWAP_RESERVES', 'ALERT_PROTOCOL', 'DONATE_TO_CHARITY', 'DEPLOY_TOKEN'],
           description: 'The action to take',
         },
         confidence: { type: 'number', minimum: 0, maximum: 1, description: 'Confidence score from 0 to 1' },
@@ -67,6 +67,8 @@ Available actions:
 - SPONSOR_TRANSACTION: Sponsor a user's next tx (Base paymaster)
 - SWAP_RESERVES: Auto-swap USDC→ETH for agent reserves
 - ALERT_PROTOCOL: Notify protocol of low budget
+- DONATE_TO_CHARITY: Donate USDC to 501(c)(3) via Endaoment (parameters: ein, amountUsd)
+- DEPLOY_TOKEN: Deploy ERC20 + Uniswap V4 LP via Clanker on Base (parameters: name, symbol, image?, description?)
 
 Your confidence score should reflect:
 - Data quality (is the observation data fresh and complete?)
@@ -147,7 +149,7 @@ ${maskedMemories && Array.isArray(maskedMemories) && maskedMemories.length > 0 ?
 ${constraints ? `Additional Constraints:\n${constraints.map((c) => `- ${c}`).join('\n')}` : ''}
 
 Based on the above, respond with a single JSON object for your decision with exactly these keys: action, confidence, reasoning, parameters (use null for WAIT).
-Action must be one of: EXECUTE, WAIT, ALERT_HUMAN, REBALANCE, SWAP, TRANSFER, SPONSOR_TRANSACTION, SWAP_RESERVES, ALERT_PROTOCOL.
+Action must be one of: EXECUTE, WAIT, ALERT_HUMAN, REBALANCE, SWAP, TRANSFER, SPONSOR_TRANSACTION, SWAP_RESERVES, ALERT_PROTOCOL, DONATE_TO_CHARITY, DEPLOY_TOKEN.
 Confidence is a number between 0 and 1.
 Respond with only the JSON, no other text.
 `;
