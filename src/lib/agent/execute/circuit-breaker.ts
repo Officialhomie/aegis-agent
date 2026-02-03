@@ -11,7 +11,7 @@ import { getAgentWalletBalance } from '../observe/sponsorship';
 
 const RESERVE_CRITICAL_ETH = Number(process.env.RESERVE_CRITICAL_ETH) || 0.05;
 
-const CIRCUIT_BREAKER_KEY = 'aegis:circuit_breaker';
+const CIRCUIT_BREAKER_KEY_PREFIX = 'aegis:circuit_breaker';
 
 export interface CircuitBreakerOptions {
   /** Number of failures before opening the circuit */
@@ -43,9 +43,17 @@ export class CircuitBreaker {
   private lastFailureTime: number | null = null;
   private lastSuccessTime: number | null = null;
   private readonly options: Required<CircuitBreakerOptions>;
+  /** Instance key for isolated persistence (Redis key suffix) */
+  private readonly key: string;
 
-  constructor(options: CircuitBreakerOptions = {}) {
-    this.options = { ...DEFAULTS, ...options };
+  constructor(options: CircuitBreakerOptions & { key?: string } = {}) {
+    const { key = 'default', ...opts } = options;
+    this.key = key;
+    this.options = { ...DEFAULTS, ...opts };
+  }
+
+  private get storeKey(): string {
+    return `${CIRCUIT_BREAKER_KEY_PREFIX}:${this.key}`;
   }
 
   getState(): State {
@@ -92,7 +100,7 @@ export class CircuitBreaker {
   private async loadFromStore(): Promise<void> {
     try {
       const store = await getStateStore();
-      const raw = await store.get(CIRCUIT_BREAKER_KEY);
+      const raw = await store.get(this.storeKey);
       if (!raw) {
         logger.debug('[CircuitBreaker] No persisted state found, starting fresh');
         return;
@@ -117,7 +125,7 @@ export class CircuitBreaker {
   private async saveToStore(): Promise<void> {
     try {
       const store = await getStateStore();
-      await store.set(CIRCUIT_BREAKER_KEY, JSON.stringify(this.getPersistedState()));
+      await store.set(this.storeKey, JSON.stringify(this.getPersistedState()));
       logger.debug('[CircuitBreaker] State persisted successfully');
     } catch (error) {
       logger.error('[CircuitBreaker] FAILED to persist state - circuit breaker state will be lost on restart', {
@@ -184,11 +192,23 @@ export class CircuitBreaker {
   }
 }
 
-let defaultBreaker: CircuitBreaker | null = null;
+const breakers = new Map<string, CircuitBreaker>();
 
-export function getDefaultCircuitBreaker(): CircuitBreaker {
-  if (!defaultBreaker) {
-    defaultBreaker = new CircuitBreaker();
+/**
+ * Get a circuit breaker instance by key. Each key has an isolated state (including Redis persistence).
+ * Use different keys per mode (e.g. 'reserve-pipeline', 'gas-sponsorship') for isolation.
+ */
+export function getCircuitBreaker(
+  key: string = 'default',
+  options?: CircuitBreakerOptions
+): CircuitBreaker {
+  if (!breakers.has(key)) {
+    breakers.set(key, new CircuitBreaker({ ...options, key }));
   }
-  return defaultBreaker;
+  return breakers.get(key)!;
+}
+
+/** @deprecated Use getCircuitBreaker('default') or getCircuitBreaker(mode) for isolation */
+export function getDefaultCircuitBreaker(): CircuitBreaker {
+  return getCircuitBreaker('default');
 }
