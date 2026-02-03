@@ -121,6 +121,29 @@ export async function postDailyStats(stats: DailyStats): Promise<{ success: bool
 }
 
 /**
+ * Post arbitrary text to Farcaster (e.g. emergency alerts, health summaries).
+ */
+export async function postToFarcaster(text: string): Promise<{ success: boolean; castHash?: string; error?: string }> {
+  const apiKey = process.env.NEYNAR_API_KEY;
+  const signerUuid = process.env.FARCASTER_SIGNER_UUID ?? process.env.NEYNAR_SIGNER_UUID;
+  if (!apiKey?.trim() || !signerUuid?.trim()) {
+    logger.debug('[Farcaster] NEYNAR_API_KEY or FARCASTER_SIGNER_UUID not set - skipping cast');
+    return { success: true };
+  }
+  try {
+    const { NeynarAPIClient, Configuration } = await import('@neynar/nodejs-sdk');
+    const config = new Configuration({ apiKey });
+    const client = new NeynarAPIClient(config);
+    const publish = await client.publishCast({ signerUuid, text });
+    return { success: true, castHash: publish?.cast?.hash };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.warn('[Farcaster] Failed to publish cast', { error: message });
+    return { success: false, error: message };
+  }
+}
+
+/**
  * Post reserve swap notification to Farcaster.
  */
 export async function postReserveSwapProof(params: {
