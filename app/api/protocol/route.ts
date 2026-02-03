@@ -3,9 +3,9 @@
  */
 
 import { NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
+import { getPrisma } from '@/src/lib/db';
 
-const prisma = new PrismaClient();
+const prisma = getPrisma();
 
 export const dynamic = 'force-dynamic';
 
