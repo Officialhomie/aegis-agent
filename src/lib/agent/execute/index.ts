@@ -11,8 +11,10 @@ import { sendAlert } from './alerts';
 import { getDefaultCircuitBreaker } from './circuit-breaker';
 import { sponsorTransaction } from './paymaster';
 import { executeReserveSwap } from './reserve-manager';
+import { executeDonateToCharity } from './endaoment';
+import { executeDeployToken } from './clanker';
 import type { Decision } from '../reason/schemas';
-import type { AlertParams, AlertProtocolParams } from '../reason/schemas';
+import type { AlertParams, AlertProtocolParams, DonateParams, DeployTokenParams } from '../reason/schemas';
 
 export interface ExecutionResult {
   success: boolean;
@@ -31,7 +33,7 @@ function validateForLiveExecution(decision: Decision): { valid: boolean; error?:
   if (decision.action === 'WAIT' || decision.action === 'ALERT_HUMAN') {
     return { valid: true };
   }
-  if (['TRANSFER', 'SWAP', 'REBALANCE', 'EXECUTE'].includes(decision.action) && !decision.parameters) {
+  if (['TRANSFER', 'SWAP', 'REBALANCE', 'EXECUTE', 'DONATE_TO_CHARITY', 'DEPLOY_TOKEN'].includes(decision.action) && !decision.parameters) {
     return { valid: false, error: 'Parameters required for this action' };
   }
   return { valid: true };
@@ -92,6 +94,18 @@ export async function execute(
       return await executeReserveSwap(decision, mode);
     }
 
+    if (decision.action === 'DONATE_TO_CHARITY') {
+      const params = decision.parameters as DonateParams | null;
+      if (!params) return { success: false, error: 'DONATE_TO_CHARITY requires parameters' };
+      return await executeDonateToCharity(params, mode);
+    }
+
+    if (decision.action === 'DEPLOY_TOKEN') {
+      const params = decision.parameters as DeployTokenParams | null;
+      if (!params) return { success: false, error: 'DEPLOY_TOKEN requires parameters' };
+      return await executeDeployToken(params, mode);
+    }
+
     if (mode === 'LIVE') {
       const validation = validateForLiveExecution(decision);
       if (!validation.valid) {
@@ -124,3 +138,4 @@ export {
   type SponsorshipExecutionResult,
 } from './paymaster';
 export { manageReserves, executeReserveSwap } from './reserve-manager';
+export { toBankrPrompt, type BankrOutput } from './bankr-output';
