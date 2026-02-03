@@ -7,6 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "agent:start": "tsx scripts/run-agent.ts",
+    "agent:sponsorship-only": "tsx scripts/deploy-autonomous-paymaster.ts",
     "agent:dev": "tsx watch src/lib/agent/index.ts",
     "agent:run": "tsx src/lib/agent/index.ts",
     "agent:paymaster": "tsx scripts/deploy-autonomous-paymaster.ts",
