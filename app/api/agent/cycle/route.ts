@@ -1,5 +1,5 @@
 /**
- * Trigger a single agent cycle (manual override)
+ * Trigger a single agent cycle (manual override).
  */
 
 import { NextResponse } from 'next/server';

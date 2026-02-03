@@ -15,11 +15,12 @@ import { storeMemory, retrieveRelevantMemories } from './memory';
 import { getDefaultCircuitBreaker } from './execute/circuit-breaker';
 import { signDecision, sponsorTransaction, type SignedDecision } from './execute/paymaster';
 import { postSponsorshipProof } from './social/farcaster';
+import { postSponsorshipToBotchan, postReserveSwapToBotchan } from './social/botchan';
 import {
   getIdentityRegistryAddress,
   registerWithRegistry,
   uploadToIPFS,
-  type AgentMetadata,
+  buildRegistrationFile,
 } from './identity';
 import type { Observation } from './observe';
 import type { Decision } from './reason/schemas';
@@ -243,8 +244,12 @@ export async function runSponsorshipCycle(
           const signed = await signDecision(decision);
           state.executionResult = await sponsorTransaction(decision, config.executionMode === 'LIVE' ? 'LIVE' : 'SIMULATION');
           await postSponsorshipProof(signed, state.executionResult as ExecutionResult & { sponsorshipHash?: string; decisionHash?: string });
+          postSponsorshipToBotchan(signed, state.executionResult as ExecutionResult & { sponsorshipHash?: string; decisionHash?: string }).catch(() => {});
         } else {
           state.executionResult = await execute(decision, config.executionMode);
+          if (decision.action === 'SWAP_RESERVES' && state.executionResult) {
+            postReserveSwapToBotchan(decision, state.executionResult).catch(() => {});
+          }
         }
       }
     } else {
@@ -285,14 +290,15 @@ export async function ensureAgentRegistered(): Promise<void> {
   try {
     const agent = await prisma.agent.findFirst({ where: { isActive: true } });
     if (!agent || agent.onChainId) return;
-    const metadata: AgentMetadata = {
+    const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? process.env.AEGIS_DASHBOARD_URL ?? '';
+    const registrationFile = buildRegistrationFile({
       name: agent.name,
       description: agent.description ?? 'Aegis - Autonomous Treasury Management Agent',
-      capabilities: ['observe', 'reason', 'execute', 'sponsorship'],
-      version: '1.0.0',
-      created: agent.createdAt.toISOString(),
-    };
-    const uri = await uploadToIPFS(metadata);
+      webEndpoint: baseUrl ? `${baseUrl.replace(/\/$/, '')}` : undefined,
+      a2aEndpoint: baseUrl ? `${baseUrl.replace(/\/$/, '')}/.well-known/agent-card.json` : undefined,
+      x402Support: true,
+    });
+    const uri = await uploadToIPFS(registrationFile);
     const { agentId, txHash } = await registerWithRegistry(uri);
     await prisma.agent.update({
       where: { id: agent.id },

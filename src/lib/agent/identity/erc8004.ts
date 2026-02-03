@@ -56,15 +56,50 @@ export interface AgentMetadata {
   created: string;
 }
 
-/** ERC-8004 registration file format (agentURI content). */
+/** ERC-8004 registration file format (agentURI content). Aligns with official spec / 8004.org. */
 export interface AgentRegistrationFile {
-  type: 'erc8004-registration';
+  type: 'https://eips.ethereum.org/EIPS/eip-8004#registration-v1';
   name: string;
   description: string;
   image?: string;
-  services: Array<{ type: 'a2a' | 'mcp' | 'oasf' | 'https' | 'email'; url: string }>;
-  registrations: Array<{ agentRegistry: string; agentId: string }>;
-  supportedTrust?: ('reputation' | 'crypto-economic' | 'tee-attestation')[];
+  services: Array<{
+    name: 'web' | 'A2A' | 'mcp' | 'oasf' | 'https' | 'email';
+    endpoint: string;
+    version?: string;
+  }>;
+  x402Support: boolean;
+  active: boolean;
+  registrations: Array<{
+    agentId: number;
+    agentRegistry: string;
+  }>;
+  supportedTrust: ('reputation' | 'crypto-economic' | 'tee-attestation')[];
+}
+
+/** Build a spec-compliant registration file for IPFS / 8004.org. */
+export function buildRegistrationFile(opts: {
+  name: string;
+  description: string;
+  image?: string;
+  webEndpoint?: string;
+  a2aEndpoint?: string;
+  x402Support?: boolean;
+  existingRegistration?: { agentId: number; agentRegistry: string };
+}): AgentRegistrationFile {
+  const services: AgentRegistrationFile['services'] = [];
+  if (opts.webEndpoint) services.push({ name: 'web', endpoint: opts.webEndpoint });
+  if (opts.a2aEndpoint) services.push({ name: 'A2A', endpoint: opts.a2aEndpoint, version: '0.3.0' });
+  return {
+    type: 'https://eips.ethereum.org/EIPS/eip-8004#registration-v1',
+    name: opts.name,
+    description: opts.description,
+    image: opts.image,
+    services: services.length > 0 ? services : [{ name: 'web', endpoint: 'https://aegis.example.com' }],
+    x402Support: opts.x402Support ?? true,
+    active: true,
+    registrations: opts.existingRegistration ? [opts.existingRegistration] : [],
+    supportedTrust: ['reputation'],
+  };
 }
 
 /**

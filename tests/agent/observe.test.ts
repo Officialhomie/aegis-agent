@@ -8,6 +8,10 @@ import { getTokenBalances, observeTreasuryState } from '../../src/lib/agent/obse
 import { getPrice, getCoinGeckoPrice } from '../../src/lib/agent/observe/oracles';
 import { observe } from '../../src/lib/agent/observe';
 
+vi.mock('../../src/lib/agent/observe/botchan', () => ({
+  observeBotchanRequests: vi.fn().mockResolvedValue([]),
+}));
+
 describe('Observation Layer', () => {
   beforeEach(() => {
     vi.stubEnv('BASE_SEPOLIA_RPC_URL', 'https://sepolia.base.org');
