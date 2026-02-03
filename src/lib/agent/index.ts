@@ -13,7 +13,7 @@ import { validatePolicy } from './policy';
 import { execute } from './execute';
 import { storeMemory, retrieveRelevantMemories } from './memory';
 import { getDefaultCircuitBreaker } from './execute/circuit-breaker';
-import { signDecision, sponsorTransaction, type SignedDecision } from './execute/paymaster';
+import { signDecision, sponsorTransaction } from './execute/paymaster';
 import { postSponsorshipProof } from './social/farcaster';
 import { postSponsorshipToBotchan, postReserveSwapToBotchan } from './social/botchan';
 import {
