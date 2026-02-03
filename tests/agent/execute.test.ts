@@ -31,30 +31,30 @@ describe('Execution Layer', () => {
     expect(result.success).toBe(true);
   });
 
-  it('should simulate TRANSFER without real tx', async () => {
+  it('should simulate SPONSOR_TRANSACTION without real tx', async () => {
     vi.stubEnv('RPC_URL_BASE_SEPOLIA', 'https://sepolia.base.org');
-    const transferDecision: Decision = {
-      action: 'TRANSFER',
+    const sponsorDecision: Decision = {
+      action: 'SPONSOR_TRANSACTION',
       confidence: 0.9,
-      reasoning: 'Simulate transfer.',
+      reasoning: 'Simulate sponsorship.',
       parameters: {
-        token: 'USDC',
-        recipient: '0x1234567890123456789012345678901234567890',
-        amount: '100',
+        agentWallet: '0x1234567890123456789012345678901234567890',
+        protocolId: 'test',
+        estimatedCostUSD: 0.05,
       },
     };
-    const result = await execute(transferDecision, 'SIMULATION');
+    const result = await execute(sponsorDecision, 'SIMULATION');
     expect(result.success).toBe(true);
     expect(result.simulationResult).toBeDefined();
   });
 
   it('should validate params before LIVE execution', async () => {
-    const decisionNoParams: Decision = {
-      action: 'TRANSFER',
+    const decisionNoParams = {
+      action: 'SPONSOR_TRANSACTION',
       confidence: 0.9,
       reasoning: 'Missing params.',
       parameters: null,
-    } as unknown as import('@/src/lib/agent/reason/schemas').Decision;
+    } as unknown as Decision;
     const result = await execute(decisionNoParams, 'LIVE');
     expect(result.success).toBe(false);
     expect(result.error).toContain('Parameters');
