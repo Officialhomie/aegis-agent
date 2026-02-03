@@ -29,3 +29,9 @@ export {
   runMoltbookHeartbeat,
   runMoltbookHeartbeatNow,
 } from './heartbeat';
+
+export {
+  postToFeed,
+  postSponsorshipToBotchan,
+  postReserveSwapToBotchan,
+} from './botchan';
