@@ -12,7 +12,7 @@ import { getDefaultCircuitBreaker } from './circuit-breaker';
 import { sponsorTransaction } from './paymaster';
 import { executeReserveSwap } from './reserve-manager';
 import type { Decision } from '../reason/schemas';
-import type { AlertParams, AlertProtocolParams } from '../reason/schemas';
+import type { AlertParams, AlertProtocolParams, AlertRunwayParams } from '../reason/schemas';
 
 export interface ExecutionResult {
   success: boolean;
@@ -28,10 +28,12 @@ export interface ExecutionResult {
  * Full viem.simulateTransaction can be added when building raw transactions.
  */
 function validateForLiveExecution(decision: Decision): { valid: boolean; error?: string } {
-  if (decision.action === 'WAIT' || decision.action === 'ALERT_HUMAN') {
+  const action = decision.action;
+  if (action === 'WAIT' || action === 'ALERT_HUMAN') {
     return { valid: true };
   }
-  if (['TRANSFER', 'SWAP', 'REBALANCE', 'EXECUTE'].includes(decision.action) && !decision.parameters) {
+  const noParamActions = ['ALERT_PROTOCOL', 'ALERT_LOW_RUNWAY'];
+  if (!decision.parameters && !noParamActions.includes(action)) {
     return { valid: false, error: 'Parameters required for this action' };
   }
   return { valid: true };
@@ -92,6 +94,23 @@ export async function execute(
       return await executeReserveSwap(decision, mode);
     }
 
+    if (decision.action === 'REPLENISH_RESERVES') {
+      return await executeReserveSwap({ ...decision, action: 'SWAP_RESERVES', parameters: decision.parameters }, mode);
+    }
+
+    if (decision.action === 'ALERT_LOW_RUNWAY') {
+      const params = decision.parameters as AlertRunwayParams | null;
+      const message = params
+        ? `Low runway: ${params.currentRunwayDays.toFixed(1)} days (threshold ${params.thresholdDays}). ETH: ${params.ethBalance.toFixed(4)}, burn: ${params.dailyBurnRate.toFixed(6)} ETH/day.`
+        : 'Reserve runway below threshold';
+      await sendAlert({ severity: 'HIGH', message, suggestedAction: 'Replenish reserves or reduce sponsorship rate' });
+      return { success: true, simulationResult: 'Low runway alert sent' };
+    }
+
+    if (decision.action === 'ALLOCATE_BUDGET' || decision.action === 'REBALANCE_RESERVES') {
+      return { success: true, simulationResult: `${decision.action} acknowledged (execution TBD)` };
+    }
+
     if (mode === 'LIVE') {
       const validation = validateForLiveExecution(decision);
       if (!validation.valid) {
@@ -113,7 +132,8 @@ export async function execute(
 
 export { executeWithAgentKit } from './agentkit';
 export { sendAlert } from './alerts';
-export { getDefaultCircuitBreaker, CircuitBreaker } from './circuit-breaker';
+export { getCircuitBreaker, getDefaultCircuitBreaker, CircuitBreaker } from './circuit-breaker';
+export { executeWithWalletLock } from './wallet-lock';
 export {
   sponsorTransaction,
   signDecision,
@@ -124,3 +144,8 @@ export {
   type SponsorshipExecutionResult,
 } from './paymaster';
 export { manageReserves, executeReserveSwap } from './reserve-manager';
+export {
+  prioritizeOpportunities,
+  type SponsorshipOpportunity,
+  type PrioritizedOpportunity,
+} from './protocol-priority';
