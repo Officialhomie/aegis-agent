@@ -5,7 +5,7 @@
  */
 
 import { NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
+import { getPrisma } from '@/src/lib/db';
 import { verifyApiAuth } from '../../../../src/lib/auth/api-auth';
 import {
   getIdentityRegistryAddress,
@@ -28,7 +28,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const prisma = new PrismaClient();
+  const prisma = getPrisma();
   try {
     const agent = await prisma.agent.findFirst({ where: { isActive: true } });
     if (!agent) {

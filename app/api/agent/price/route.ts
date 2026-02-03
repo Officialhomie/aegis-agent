@@ -33,7 +33,8 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const action = searchParams.get('action') ?? 'TRANSFER';
     const token = searchParams.get('token') ?? 'USDC';
-    const amount = searchParams.get('amount') ?? '0';
+    const _amount = searchParams.get('amount') ?? '0';
+    void _amount; // reserved for amount-based pricing
 
     const multiplier = ACTION_MULTIPLIERS[action] ?? 1;
     if (multiplier === 0) {
