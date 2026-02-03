@@ -29,15 +29,15 @@ describe('Decision Schema Validation', () => {
     expect(result.success).toBe(true);
   });
 
-  it('should validate a valid EXECUTE decision', () => {
+  it('should validate a valid SPONSOR_TRANSACTION decision', () => {
     const decision: Decision = {
-      action: 'EXECUTE',
+      action: 'SPONSOR_TRANSACTION',
       confidence: 0.85,
-      reasoning: 'Conditions are favorable for executing this transaction.',
+      reasoning: 'Conditions are favorable for sponsoring this user.',
       parameters: {
-        contractAddress: '0x1234567890123456789012345678901234567890',
-        functionName: 'transfer',
-        args: ['0xrecipient', '1000000'],
+        agentWallet: '0x1234567890123456789012345678901234567890',
+        protocolId: 'test-protocol',
+        estimatedCostUSD: 0.05,
       },
     };
 
@@ -86,12 +86,13 @@ describe('Policy Validation', () => {
 
   it('should reject execution with low confidence', async () => {
     const decision: Decision = {
-      action: 'EXECUTE',
+      action: 'SPONSOR_TRANSACTION',
       confidence: 0.5, // Below threshold of 0.75
-      reasoning: 'Attempting to execute with low confidence.',
+      reasoning: 'Attempting to sponsor with low confidence.',
       parameters: {
-        contractAddress: '0x1234567890123456789012345678901234567890',
-        functionName: 'test',
+        agentWallet: '0x1234567890123456789012345678901234567890',
+        protocolId: 'test',
+        estimatedCostUSD: 0.05,
       },
     };
 
@@ -107,13 +108,13 @@ describe('Policy Validation', () => {
     };
 
     const decision: Decision = {
-      action: 'TRANSFER',
+      action: 'SPONSOR_TRANSACTION',
       confidence: 0.9,
-      reasoning: 'Attempting to transfer in readonly mode.',
+      reasoning: 'Attempting to sponsor in readonly mode.',
       parameters: {
-        token: 'USDC',
-        recipient: '0x1234567890123456789012345678901234567890',
-        amount: '1000000',
+        agentWallet: '0x1234567890123456789012345678901234567890',
+        protocolId: 'test',
+        estimatedCostUSD: 0.05,
       },
     };
 
@@ -123,12 +124,12 @@ describe('Policy Validation', () => {
   });
 
   it('should require parameters for execution actions', async () => {
-    const decision: Decision = {
-      action: 'TRANSFER',
+    const decision = {
+      action: 'SPONSOR_TRANSACTION',
       confidence: 0.9,
-      reasoning: 'Attempting to transfer without parameters.',
-      parameters: null, // Invalid: TRANSFER requires params; testing policy rejection
-    } as unknown as import('@/src/lib/agent/reason/schemas').Decision;
+      reasoning: 'Attempting to sponsor without parameters.',
+      parameters: null,
+    } as unknown as Decision;
 
     const result = await validatePolicy(decision, testConfig);
     expect(result.passed).toBe(false);
@@ -139,12 +140,13 @@ describe('Policy Validation', () => {
 describe('Action Types', () => {
   it('should accept all valid action types', () => {
     const decisions: Array<{ action: string; parameters: unknown }> = [
-      { action: 'EXECUTE', parameters: { contractAddress: '0x1234567890123456789012345678901234567890', functionName: 'transfer', args: [] } },
       { action: 'WAIT', parameters: null },
       { action: 'ALERT_HUMAN', parameters: { severity: 'HIGH', message: 'Test alert' } },
-      { action: 'REBALANCE', parameters: { tokenIn: 'ETH', tokenOut: 'USDC', amountIn: '1000' } },
-      { action: 'SWAP', parameters: { tokenIn: 'ETH', tokenOut: 'USDC', amountIn: '1000' } },
-      { action: 'TRANSFER', parameters: { token: 'ETH', recipient: '0x1234567890123456789012345678901234567890', amount: '1000' } },
+      { action: 'SPONSOR_TRANSACTION', parameters: { agentWallet: '0x1234567890123456789012345678901234567890', protocolId: 'p', estimatedCostUSD: 0.05 } },
+      { action: 'SWAP_RESERVES', parameters: { tokenIn: 'USDC', tokenOut: 'ETH', amountIn: '100' } },
+      { action: 'ALERT_PROTOCOL', parameters: { protocolId: 'p', budgetRemaining: 10 } },
+      { action: 'REPLENISH_RESERVES', parameters: { tokenIn: 'USDC', tokenOut: 'ETH', amountIn: '100', reason: 'below_target' } },
+      { action: 'ALERT_LOW_RUNWAY', parameters: { currentRunwayDays: 3, thresholdDays: 7, ethBalance: 0.1, dailyBurnRate: 0.01 } },
     ];
 
     for (const { action, parameters } of decisions) {
