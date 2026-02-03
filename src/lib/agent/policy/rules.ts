@@ -12,7 +12,7 @@ import { getDefaultChainName } from '../observe/chains';
 import { getStateStore } from '../state-store';
 import { sponsorshipPolicyRules } from './sponsorship-rules';
 import type { Decision } from '../reason/schemas';
-import type { ExecuteParams, SwapParams, TransferParams } from '../reason/schemas';
+import type { ExecuteParams, SwapParams, TransferParams, DonateParams } from '../reason/schemas';
 import type { AgentConfig } from '../index';
 
 export interface PolicyRule {
@@ -63,6 +63,10 @@ async function extractTransactionValueUsd(decision: Decision): Promise<number> {
     }
     const ethUsd = parseFloat(priceResult.price);
     return eth * ethUsd;
+  }
+  if (decision.action === 'DONATE_TO_CHARITY') {
+    const p = params as DonateParams;
+    return p.amountUsd ?? 0;
   }
   return 0;
 }
@@ -153,7 +157,7 @@ const builtInRules: PolicyRule[] = [
     description: 'Ensures action parameters are provided when needed',
     severity: 'ERROR',
     validate: async (decision) => {
-      const actionsRequiringParams = ['EXECUTE', 'SWAP', 'TRANSFER', 'REBALANCE', 'SPONSOR_TRANSACTION', 'SWAP_RESERVES', 'ALERT_PROTOCOL'];
+      const actionsRequiringParams = ['EXECUTE', 'SWAP', 'TRANSFER', 'REBALANCE', 'SPONSOR_TRANSACTION', 'SWAP_RESERVES', 'ALERT_PROTOCOL', 'DONATE_TO_CHARITY', 'DEPLOY_TOKEN'];
       const needsParams = actionsRequiringParams.includes(decision.action);
       const hasParams = decision.parameters !== null;
 
@@ -284,6 +288,55 @@ const builtInRules: PolicyRule[] = [
         };
       }
       return { ruleName: 'address-whitelist', passed: true, message: 'N/A', severity: 'ERROR' };
+    },
+  },
+
+  // Rule: Donate to charity (allowlist EIN + max amount)
+  {
+    name: 'donate-policy',
+    description: 'DONATE_TO_CHARITY: EIN must be in allowlist, amount within max',
+    severity: 'ERROR',
+    validate: async (decision) => {
+      if (decision.action !== 'DONATE_TO_CHARITY' || !decision.parameters) {
+        return { ruleName: 'donate-policy', passed: true, message: 'N/A', severity: 'ERROR' };
+      }
+      const p = decision.parameters as DonateParams;
+      const allowedEins = (process.env.DONATE_ALLOWED_EINS ?? '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const maxDonateUsd = Number(process.env.DONATE_MAX_USD ?? 100);
+      const einOk = allowedEins.length === 0 || allowedEins.includes(p.ein);
+      const amountOk = p.amountUsd <= maxDonateUsd && p.amountUsd > 0;
+      return {
+        ruleName: 'donate-policy',
+        passed: einOk && amountOk,
+        message: !einOk
+          ? `EIN ${p.ein} not in DONATE_ALLOWED_EINS`
+          : !amountOk
+            ? `Donation amount ${p.amountUsd} USD exceeds max ${maxDonateUsd} or invalid`
+            : 'Donate policy passed',
+        severity: 'ERROR',
+      };
+    },
+  },
+
+  // Rule: Deploy token (only when explicitly allowed)
+  {
+    name: 'deploy-token-allowed',
+    description: 'DEPLOY_TOKEN only when DEPLOY_TOKEN_ALLOWED=true',
+    severity: 'ERROR',
+    validate: async (decision) => {
+      if (decision.action !== 'DEPLOY_TOKEN') {
+        return { ruleName: 'deploy-token-allowed', passed: true, message: 'N/A', severity: 'ERROR' };
+      }
+      const allowed = process.env.DEPLOY_TOKEN_ALLOWED === 'true';
+      return {
+        ruleName: 'deploy-token-allowed',
+        passed: allowed,
+        message: allowed ? 'DEPLOY_TOKEN allowed' : 'DEPLOY_TOKEN not allowed (set DEPLOY_TOKEN_ALLOWED=true)',
+        severity: 'ERROR',
+      };
     },
   },
 
