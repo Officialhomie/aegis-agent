@@ -20,6 +20,8 @@ export const ActionType = z.enum([
   'SPONSOR_TRANSACTION', // Sponsor user's next tx via Base paymaster
   'SWAP_RESERVES',       // Auto-swap USDC→ETH for agent reserves
   'ALERT_PROTOCOL',      // Notify protocol of low budget
+  'DONATE_TO_CHARITY',   // Donate USDC to 501(c)(3) via Endaoment
+  'DEPLOY_TOKEN',        // Deploy ERC20 + Uniswap V4 LP via Clanker (Base)
 ]);
 
 export type ActionType = z.infer<typeof ActionType>;
@@ -88,6 +90,22 @@ export const AlertProtocolParams = z.object({
 });
 export type AlertProtocolParams = z.infer<typeof AlertProtocolParams>;
 
+/** Parameters for DONATE_TO_CHARITY (Endaoment 501(c)(3) on Base) */
+export const DonateParams = z.object({
+  ein: z.string().min(1),
+  amountUsd: z.number().min(0.01),
+});
+export type DonateParams = z.infer<typeof DonateParams>;
+
+/** Parameters for DEPLOY_TOKEN (Clanker SDK on Base) */
+export const DeployTokenParams = z.object({
+  name: z.string().min(1),
+  symbol: z.string().min(1).max(10),
+  image: z.string().url().optional(),
+  description: z.string().optional(),
+});
+export type DeployTokenParams = z.infer<typeof DeployTokenParams>;
+
 /** Optional metadata (e.g. reasoningFailed when LLM/reasoning threw) */
 export const DecisionMetadata = z
   .object({
@@ -116,6 +134,8 @@ export const DecisionSchema = z.discriminatedUnion('action', [
   DecisionBase.extend({ action: z.literal('SPONSOR_TRANSACTION'), parameters: SponsorParams }),
   DecisionBase.extend({ action: z.literal('SWAP_RESERVES'), parameters: SwapReservesParams }),
   DecisionBase.extend({ action: z.literal('ALERT_PROTOCOL'), parameters: AlertProtocolParams }),
+  DecisionBase.extend({ action: z.literal('DONATE_TO_CHARITY'), parameters: DonateParams }),
+  DecisionBase.extend({ action: z.literal('DEPLOY_TOKEN'), parameters: DeployTokenParams }),
 ]);
 
 export type Decision = z.infer<typeof DecisionSchema>;
