@@ -12,6 +12,7 @@ import { getDefaultChainName } from './chains';
 import { observeBlockchainState } from './blockchain';
 import { observeTreasury } from './treasury';
 import { observeOraclePrices } from './oracles';
+import { observeBotchanRequests } from './botchan';
 import type { GovernanceState } from './governance';
 import type { DeFiPosition } from './defi';
 import type { TokenBalance } from './treasury';
@@ -54,6 +55,9 @@ export async function observe(): Promise<Observation[]> {
     const defaultChain = getDefaultChainName();
     const oracleObs = await observeOraclePrices(['ETH/USD'], defaultChain);
     observations.push(...oracleObs);
+
+    const botchanObs = await observeBotchanRequests();
+    observations.push(...botchanObs);
   } catch (error) {
     logger.error('[Observe] Error gathering observations', { error: error instanceof Error ? error.message : String(error) });
   }
@@ -104,3 +108,4 @@ export {
   getProtocolBudgets,
   getAgentWalletBalance,
 } from './sponsorship';
+export { observeBotchanRequests } from './botchan';
