@@ -11,15 +11,16 @@ import { z } from 'zod';
  * Available actions the agent can take
  */
 export const ActionType = z.enum([
-  'EXECUTE',             // Execute an on-chain transaction
   'WAIT',                // Wait and observe more
   'ALERT_HUMAN',         // Request human intervention
-  'REBALANCE',           // Treasury rebalancing action
-  'SWAP',                // Token swap action
-  'TRANSFER',            // Token transfer action
   'SPONSOR_TRANSACTION', // Sponsor user's next tx via Base paymaster
   'SWAP_RESERVES',       // Auto-swap USDC→ETH for agent reserves
   'ALERT_PROTOCOL',      // Notify protocol of low budget
+  // Reserve Pipeline (supply side)
+  'REPLENISH_RESERVES',  // Convert USDC→ETH when reserves below target
+  'ALLOCATE_BUDGET',     // Assign x402 payment to protocol budget
+  'ALERT_LOW_RUNWAY',    // Alert when runway below threshold
+  'REBALANCE_RESERVES',  // Maintain target ETH/USDC ratio
 ]);
 
 export type ActionType = z.infer<typeof ActionType>;
@@ -88,6 +89,46 @@ export const AlertProtocolParams = z.object({
 });
 export type AlertProtocolParams = z.infer<typeof AlertProtocolParams>;
 
+/** Parameters for REPLENISH_RESERVES (Reserve Pipeline) */
+export const ReplenishParams = z.object({
+  tokenIn: z.literal('USDC'),
+  tokenOut: z.literal('ETH'),
+  amountIn: z.string(),
+  slippageTolerance: z.number().min(0).max(0.05).default(0.01),
+  reason: z.enum(['below_target', 'high_burn_rate', 'scheduled']),
+});
+export type ReplenishParams = z.infer<typeof ReplenishParams>;
+
+/** Parameters for ALLOCATE_BUDGET (Reserve Pipeline) */
+export const AllocateBudgetParams = z.object({
+  protocolId: z.string().min(1),
+  paymentHash: z.string(),
+  amountUSD: z.number().min(0),
+  currency: z.string(),
+});
+export type AllocateBudgetParams = z.infer<typeof AllocateBudgetParams>;
+
+/** Parameters for ALERT_LOW_RUNWAY (Reserve Pipeline) */
+export const AlertRunwayParams = z.object({
+  currentRunwayDays: z.number().min(0),
+  thresholdDays: z.number().min(0),
+  ethBalance: z.number().min(0),
+  dailyBurnRate: z.number().min(0),
+  severity: z.enum(['MEDIUM', 'HIGH', 'CRITICAL']),
+  suggestedAction: z.string(),
+});
+export type AlertRunwayParams = z.infer<typeof AlertRunwayParams>;
+
+/** Parameters for REBALANCE_RESERVES (Reserve Pipeline) */
+export const RebalanceReservesParams = z.object({
+  currentETH: z.number(),
+  currentUSDC: z.number(),
+  targetRatioETH: z.number().min(0).max(1).default(0.7),
+  swapAmount: z.string(),
+  swapDirection: z.enum(['USDC_TO_ETH', 'ETH_TO_USDC']),
+});
+export type RebalanceReservesParams = z.infer<typeof RebalanceReservesParams>;
+
 /** Optional metadata (e.g. reasoningFailed when LLM/reasoning threw) */
 export const DecisionMetadata = z
   .object({
@@ -116,6 +157,10 @@ export const DecisionSchema = z.discriminatedUnion('action', [
   DecisionBase.extend({ action: z.literal('SPONSOR_TRANSACTION'), parameters: SponsorParams }),
   DecisionBase.extend({ action: z.literal('SWAP_RESERVES'), parameters: SwapReservesParams }),
   DecisionBase.extend({ action: z.literal('ALERT_PROTOCOL'), parameters: AlertProtocolParams }),
+  DecisionBase.extend({ action: z.literal('REPLENISH_RESERVES'), parameters: ReplenishParams }),
+  DecisionBase.extend({ action: z.literal('ALLOCATE_BUDGET'), parameters: AllocateBudgetParams }),
+  DecisionBase.extend({ action: z.literal('ALERT_LOW_RUNWAY'), parameters: AlertRunwayParams }),
+  DecisionBase.extend({ action: z.literal('REBALANCE_RESERVES'), parameters: RebalanceReservesParams }),
 ]);
 
 export type Decision = z.infer<typeof DecisionSchema>;
