@@ -13,7 +13,6 @@ import { getStateStore } from '../state-store';
 import { sponsorshipPolicyRules } from './sponsorship-rules';
 import { reservePolicyRules } from './reserve-rules';
 import type { Decision } from '../reason/schemas';
-import type { ExecuteParams, SwapParams, TransferParams } from '../reason/schemas';
 import type { AgentConfig } from '../index';
 
 export interface PolicyRule {
@@ -32,38 +31,18 @@ export interface RuleResult {
 
 /**
  * Extract estimated USD value from decision parameters for value-limit rules.
- * Uses real-time oracle price for EXECUTE; throws when oracle unavailable.
+ * SPONSOR_TRANSACTION uses estimatedCostUSD; other actions return 0.
  */
 async function extractTransactionValueUsd(decision: Decision): Promise<number> {
   const params = decision.parameters;
   if (!params) return 0;
-  if (decision.action === 'TRANSFER') {
-    const p = params as TransferParams;
-    const amount = parseFloat(p.amount);
+  if (decision.action === 'SPONSOR_TRANSACTION' && 'estimatedCostUSD' in params) {
+    const amount = Number((params as { estimatedCostUSD: number }).estimatedCostUSD);
     return isNaN(amount) ? 0 : amount;
   }
-  if (decision.action === 'SWAP' || decision.action === 'REBALANCE') {
-    const p = params as SwapParams;
-    const amount = parseFloat(p.amountIn);
-    return isNaN(amount) ? 0 : amount;
-  }
-  if (decision.action === 'EXECUTE') {
-    const p = params as ExecuteParams;
-    const wei = p.value ? BigInt(p.value) : BigInt(0);
-    const eth = Number(wei) / 1e18;
-    const priceResult = await getPrice('ETH/USD', getDefaultChainName());
-    if (!priceResult || !priceResult.price) {
-      logger.error('[Policy] Cannot validate transaction value - oracle price unavailable', {
-        decision: decision.action,
-        severity: 'CRITICAL',
-        actionNeeded: 'Reject transaction - cannot verify value limits',
-      });
-      throw new OraclePriceUnavailableError(
-        'Cannot validate transaction value without fresh price data'
-      );
-    }
-    const ethUsd = parseFloat(priceResult.price);
-    return eth * ethUsd;
+  if ((decision.action === 'SWAP_RESERVES' || decision.action === 'REPLENISH_RESERVES') && 'amountIn' in params) {
+    const amount = parseFloat((params as { amountIn: string }).amountIn);
+    return isNaN(amount) ? 0 : amount / 1e6;
   }
   return 0;
 }
@@ -266,25 +245,17 @@ const builtInRules: PolicyRule[] = [
       }
       const normalize = (a: string) => a.toLowerCase();
       const set = new Set(allowed.map(normalize));
-      if (decision.action === 'TRANSFER' && decision.parameters) {
-        const recipient = (decision.parameters as TransferParams).recipient?.toLowerCase();
-        const ok = recipient && set.has(recipient);
-        return {
-          ruleName: 'address-whitelist',
-          passed: !!ok,
-          message: ok ? 'Recipient allowed' : `Recipient not in whitelist`,
-          severity: 'ERROR',
-        };
-      }
-      if (decision.action === 'EXECUTE' && decision.parameters) {
-        const contract = (decision.parameters as ExecuteParams).contractAddress?.toLowerCase();
-        const ok = contract && set.has(contract);
-        return {
-          ruleName: 'address-whitelist',
-          passed: !!ok,
-          message: ok ? 'Contract allowed' : 'Contract not in whitelist',
-          severity: 'ERROR',
-        };
+      if (decision.action === 'SPONSOR_TRANSACTION' && decision.parameters && 'targetContract' in decision.parameters) {
+        const contract = (decision.parameters as { targetContract?: string }).targetContract?.toLowerCase();
+        if (contract) {
+          const ok = set.has(contract);
+          return {
+            ruleName: 'address-whitelist',
+            passed: ok,
+            message: ok ? 'Target contract allowed' : 'Target contract not in whitelist',
+            severity: 'ERROR',
+          };
+        }
       }
       return { ruleName: 'address-whitelist', passed: true, message: 'N/A', severity: 'ERROR' };
     },
@@ -296,14 +267,14 @@ const builtInRules: PolicyRule[] = [
     description: 'Enforce max slippage tolerance for swaps',
     severity: 'ERROR',
     validate: async (decision, config) => {
-      if ((decision.action !== 'SWAP' && decision.action !== 'REBALANCE' && decision.action !== 'SWAP_RESERVES') || !decision.parameters) {
+      if ((decision.action !== 'SWAP_RESERVES' && decision.action !== 'REPLENISH_RESERVES') || !decision.parameters) {
         return { ruleName: 'slippage-protection', passed: true, message: 'N/A', severity: 'ERROR' };
       }
       const maxSlippage = config.maxSlippageTolerance;
       if (maxSlippage == null) {
         return { ruleName: 'slippage-protection', passed: true, message: 'Max slippage not configured', severity: 'ERROR' };
       }
-      const p = decision.parameters as SwapParams;
+      const p = decision.parameters as { slippageTolerance?: number };
       const decisionSlippage = p.slippageTolerance ?? 0;
       const over = decisionSlippage > maxSlippage;
       return {
