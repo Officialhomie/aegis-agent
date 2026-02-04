@@ -8,10 +8,16 @@
 import { getAgentWalletBalance } from '../observe/sponsorship';
 import { getPrice } from '../observe/oracles';
 import { getDefaultChainName } from '../observe/chains';
-import type { Decision } from '../reason/schemas';
+import type { Decision, ExecutableDecision } from '../reason/schemas';
 import type { SwapReservesParams } from '../reason/schemas';
 import { executeWithAgentKit } from './agentkit';
 import type { ExecutionResult } from './index';
+
+/** Parameters for ETH→USDC rebalance (swapAmount is ETH amount as string, e.g. wei or ether) */
+export interface EthToUsdcSwapParams {
+  swapAmount: string;
+  slippageTolerance?: number;
+}
 
 const RESERVE_THRESHOLD_ETH = Number(process.env.RESERVE_THRESHOLD_ETH) || 0.1;
 const TARGET_RESERVE_ETH = Number(process.env.TARGET_RESERVE_ETH) || 0.5;
@@ -69,12 +75,36 @@ export async function executeReserveSwap(
     };
   }
 
-  return executeWithAgentKit(
-    {
-      ...decision,
-      action: 'SWAP',
-      parameters: decision.parameters,
-    },
-    mode
-  );
+  const internalDecision: ExecutableDecision = {
+    ...decision,
+    action: 'SWAP',
+    parameters: decision.parameters,
+  };
+  return executeWithAgentKit(internalDecision, mode);
+}
+
+/**
+ * Execute ETH→USDC swap for rebalancing reserves (e.g. excess ETH → USDC).
+ */
+export async function executeEthToUsdcSwap(
+  params: EthToUsdcSwapParams,
+  mode: 'LIVE' | 'SIMULATION'
+): Promise<ExecutionResult> {
+  const decision: Decision = {
+    action: 'SWAP_RESERVES',
+    confidence: 0.95,
+    reasoning: `Rebalance: swap ${params.swapAmount} ETH to USDC`,
+    parameters: {
+      tokenIn: 'ETH',
+      tokenOut: 'USDC',
+      amountIn: params.swapAmount,
+      slippageTolerance: params.slippageTolerance ?? 0.01,
+    } as SwapReservesParams,
+  };
+  const internalDecision: ExecutableDecision = {
+    ...decision,
+    action: 'SWAP',
+    parameters: decision.parameters,
+  };
+  return executeWithAgentKit(internalDecision, mode);
 }

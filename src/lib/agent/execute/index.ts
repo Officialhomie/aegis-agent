@@ -6,13 +6,24 @@
  */
 
 import { logger } from '../../logger';
+import { getPrisma } from '../../db';
 import { executeWithAgentKit } from './agentkit';
 import { sendAlert } from './alerts';
 import { getDefaultCircuitBreaker } from './circuit-breaker';
 import { sponsorTransaction } from './paymaster';
 import { executeReserveSwap } from './reserve-manager';
-import type { Decision } from '../reason/schemas';
-import type { AlertParams, AlertProtocolParams, AlertRunwayParams } from '../reason/schemas';
+import type { Decision, SwapReservesParams } from '../reason/schemas';
+import type {
+  AlertParams,
+  AlertProtocolParams,
+  AlertRunwayParams,
+  AllocateBudgetParams,
+  RebalanceReservesParams,
+} from '../reason/schemas';
+import { getReserveState, updateReserveState } from '../state/reserve-state';
+import type { ProtocolBudgetState } from '../state/reserve-state';
+import { getAgentWalletBalance } from '../observe/sponsorship';
+import { executeEthToUsdcSwap } from './reserve-manager';
 
 export interface ExecutionResult {
   success: boolean;
@@ -107,8 +118,108 @@ export async function execute(
       return { success: true, simulationResult: 'Low runway alert sent' };
     }
 
-    if (decision.action === 'ALLOCATE_BUDGET' || decision.action === 'REBALANCE_RESERVES') {
-      return { success: true, simulationResult: `${decision.action} acknowledged (execution TBD)` };
+    if (decision.action === 'ALLOCATE_BUDGET') {
+      const params = decision.parameters as AllocateBudgetParams;
+      const db = getPrisma();
+
+      const payment = await db.paymentRecord.findUnique({
+        where: { paymentHash: params.paymentHash },
+      });
+      if (!payment) {
+        return { success: false, error: `Payment ${params.paymentHash} not found` };
+      }
+      if (payment.status !== 'CONFIRMED') {
+        return {
+          success: false,
+          error: `Payment ${params.paymentHash} not confirmed (status: ${payment.status})`,
+        };
+      }
+
+      await db.paymentRecord.update({
+        where: { paymentHash: params.paymentHash },
+        data: { status: 'EXECUTED' },
+      });
+
+      const amount = params.amountUSD;
+      await db.protocolSponsor.upsert({
+        where: { protocolId: params.protocolId },
+        create: {
+          protocolId: params.protocolId,
+          name: params.protocolId,
+          balanceUSD: amount,
+          totalSpent: 0,
+          sponsorshipCount: 0,
+          whitelistedContracts: [],
+        },
+        update: {
+          balanceUSD: { increment: amount },
+        },
+      });
+
+      const current = await getReserveState();
+      const budgets = current?.protocolBudgets ?? [];
+      const existing = budgets.find((b) => b.protocolId === params.protocolId);
+      const updatedBudgets: ProtocolBudgetState[] = existing
+        ? budgets.map((b) =>
+            b.protocolId === params.protocolId
+              ? { ...b, balanceUSD: b.balanceUSD + amount }
+              : b
+          )
+        : [...budgets, { protocolId: params.protocolId, balanceUSD: amount, totalSpent: 0, burnRateUSDPerDay: 0, estimatedDaysRemaining: 0 }];
+      await updateReserveState({ protocolBudgets: updatedBudgets });
+
+      return {
+        success: true,
+        simulationResult: `Allocated ${amount} USD to ${params.protocolId}`,
+      };
+    }
+
+    if (decision.action === 'REBALANCE_RESERVES') {
+      const params = decision.parameters as RebalanceReservesParams;
+      const reserves = await getAgentWalletBalance();
+      const ethTolerance = Math.max(params.currentETH * 0.05, 0.001);
+      if (Math.abs(reserves.ETH - params.currentETH) > ethTolerance) {
+        return {
+          success: false,
+          error: `Balance mismatch: current ETH ${reserves.ETH} vs params ${params.currentETH} (stale data)`,
+        };
+      }
+      if (params.swapDirection === 'USDC_TO_ETH') {
+        const swapDecision: Decision = {
+          action: 'SWAP_RESERVES',
+          confidence: 0.95,
+          reasoning: 'Rebalance reserves: USDC→ETH',
+          parameters: {
+            tokenIn: 'USDC',
+            tokenOut: 'ETH',
+            amountIn: params.swapAmount,
+            slippageTolerance: 0.01,
+          },
+        };
+        const result = await executeReserveSwap(swapDecision, mode);
+        if (result.success) {
+          const after = await getAgentWalletBalance();
+          await updateReserveState({
+            ethBalance: after.ETH,
+            usdcBalance: after.USDC,
+            chainId: after.chainId,
+          });
+        }
+        return result;
+      }
+      const result = await executeEthToUsdcSwap(
+        { swapAmount: params.swapAmount, slippageTolerance: 0.01 },
+        mode
+      );
+      if (result.success) {
+        const after = await getAgentWalletBalance();
+        await updateReserveState({
+          ethBalance: after.ETH,
+          usdcBalance: after.USDC,
+          chainId: after.chainId,
+        });
+      }
+      return result;
     }
 
     if (mode === 'LIVE') {
@@ -143,7 +254,12 @@ export {
   type SignedDecision,
   type SponsorshipExecutionResult,
 } from './paymaster';
-export { manageReserves, executeReserveSwap } from './reserve-manager';
+export {
+  manageReserves,
+  executeReserveSwap,
+  executeEthToUsdcSwap,
+  type EthToUsdcSwapParams,
+} from './reserve-manager';
 export {
   prioritizeOpportunities,
   type SponsorshipOpportunity,

@@ -15,7 +15,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { baseSepolia } from 'viem/chains';
 
 import { logger } from '../../logger';
-import type { Decision } from '../reason/schemas';
+import type { Decision, ExecutableDecision } from '../reason/schemas';
 import type { TransferParams, SwapParams, ExecuteParams } from '../reason/schemas';
 import type { ExecutionResult } from './index';
 
@@ -100,7 +100,7 @@ let cachedAgentKit: AgentKitInstance | null = null;
  * Execute a decision using AgentKit (reuses cached instance when available)
  */
 export async function executeWithAgentKit(
-  decision: Decision,
+  decision: ExecutableDecision,
   mode: 'LIVE' | 'SIMULATION'
 ): Promise<ExecutionResult> {
   logger.info('[AgentKit] Executing', { action: decision.action, mode });
@@ -115,13 +115,13 @@ export async function executeWithAgentKit(
 
     switch (decision.action) {
       case 'TRANSFER':
-        return await executeTransfer(agentkit, decision);
+        return await executeTransfer(agentkit, decision as ExecutableDecision & { action: 'TRANSFER' });
       case 'SWAP':
-        return await executeSwap(agentkit, decision);
+        return await executeSwap(agentkit, decision as ExecutableDecision & { action: 'SWAP' });
       case 'EXECUTE':
-        return await executeContractCall(agentkit, decision);
+        return await executeContractCall(agentkit, decision as ExecutableDecision & { action: 'EXECUTE' });
       case 'REBALANCE':
-        return await executeRebalance(agentkit, decision);
+        return await executeRebalance(agentkit, decision as ExecutableDecision & { action: 'REBALANCE' });
       default:
         return {
           success: false,
@@ -153,7 +153,7 @@ function getSimulationClient() {
  * Simulate execution using viem simulateContract / eth_call.
  * Validates reverts, estimates gas where possible.
  */
-async function simulateExecution(decision: Decision): Promise<ExecutionResult> {
+async function simulateExecution(decision: ExecutableDecision): Promise<ExecutionResult> {
   logger.info('[AgentKit] Simulating execution', { action: decision.action });
 
   if (decision.action === 'TRANSFER') {
@@ -350,7 +350,7 @@ function toAssetId(token: string, networkId: string = 'base-sepolia'): string {
  */
 async function executeTransfer(
   agentkit: AgentKitInstance,
-  decision: Decision
+  decision: ExecutableDecision & { action: 'TRANSFER' }
 ): Promise<ExecutionResult> {
   const params = decision.parameters as TransferParams | null;
   if (!params) {
@@ -388,7 +388,7 @@ async function executeTransfer(
  */
 async function executeSwap(
   agentkit: AgentKitInstance,
-  decision: Decision
+  decision: ExecutableDecision & { action: 'SWAP' | 'REBALANCE' }
 ): Promise<ExecutionResult> {
   const params = decision.parameters as SwapParams | null;
   if (!params) {
@@ -433,7 +433,7 @@ function getExecuteAllowlist(): string[] {
  */
 async function executeContractCall(
   _agentkit: AgentKitInstance,
-  decision: Decision
+  decision: ExecutableDecision & { action: 'EXECUTE' }
 ): Promise<ExecutionResult> {
   const params = decision.parameters as ExecuteParams | null;
   if (!params) {
@@ -529,7 +529,7 @@ async function executeContractCall(
  */
 async function executeRebalance(
   agentkit: AgentKitInstance,
-  decision: Decision
+  decision: ExecutableDecision & { action: 'REBALANCE' }
 ): Promise<ExecutionResult> {
   const params = decision.parameters as SwapParams | null;
   if (!params) {

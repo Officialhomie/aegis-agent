@@ -6,6 +6,8 @@
 export interface StateStore {
   get(key: string): Promise<string | null>;
   set(key: string, value: string, options?: { px?: number }): Promise<void>;
+  /** Atomic set-if-not-exists. Returns true if key was set, false if key already existed. */
+  setNX(key: string, value: string, options?: { px?: number }): Promise<boolean>;
 }
 
 const memory = new Map<string, { value: string; expires?: number }>();
@@ -24,12 +26,21 @@ export const memoryStore: StateStore = {
     const expires = options?.px != null ? Date.now() + options.px : undefined;
     memory.set(key, { value, expires });
   },
+  async setNX(key: string, value: string, options?: { px?: number }): Promise<boolean> {
+    const entry = memory.get(key);
+    if (entry != null && (entry.expires == null || Date.now() <= entry.expires)) return false;
+    if (entry != null) memory.delete(key);
+    const expires = options?.px != null ? Date.now() + options.px : undefined;
+    memory.set(key, { value, expires });
+    return true;
+  },
 };
 
 /** Minimal Redis client interface to avoid package type conflicts (redis vs @redis/client) */
 interface RedisClientLike {
   get(key: string): Promise<string | null>;
   set(key: string, value: string): Promise<unknown>;
+  set(key: string, value: string, options: { NX?: boolean; PX?: number }): Promise<string | null>;
   setEx(key: string, seconds: number, value: string): Promise<unknown>;
   connect(): Promise<unknown>;
 }
@@ -61,6 +72,11 @@ export async function getRedisStore(): Promise<StateStore | null> {
     async set(key: string, value: string, options?: { px?: number }): Promise<void> {
       if (options?.px != null) await client.setEx(key, options.px / 1000, value);
       else await client.set(key, value);
+    },
+    async setNX(key: string, value: string, options?: { px?: number }): Promise<boolean> {
+      const px = options?.px ?? 30_000;
+      const result = await client.set(key, value, { NX: true, PX: px });
+      return result === 'OK';
     },
   };
 }

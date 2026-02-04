@@ -4,6 +4,7 @@
  */
 
 import { logger } from '../../logger';
+import { getPrisma } from '../../db';
 import { getDefaultChainName } from './chains';
 import { getReserveState } from '../state/reserve-state';
 import type { Observation } from './index';
@@ -16,8 +17,7 @@ const AVG_GAS_COST_ETH = 0.00005;
  */
 export async function observeBurnRate(): Promise<Observation[]> {
   try {
-    const { PrismaClient } = await import('@prisma/client');
-    const db = new PrismaClient();
+    const db = getPrisma();
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
     const recentSponsorships = await db.decision.count({
@@ -29,7 +29,6 @@ export async function observeBurnRate(): Promise<Observation[]> {
     });
 
     const dailyBurnETH = recentSponsorships * AVG_GAS_COST_ETH;
-    await db.$disconnect();
 
     return [
       {
@@ -89,16 +88,13 @@ export async function observeRunway(): Promise<Observation[]> {
  */
 export async function observePendingPayments(): Promise<Observation[]> {
   try {
-    const { PrismaClient } = await import('@prisma/client');
-    const db = new PrismaClient();
+    const db = getPrisma();
 
     const pending = await db.paymentRecord.findMany({
       where: { status: 'CONFIRMED' },
       orderBy: { createdAt: 'desc' },
       take: 20,
     });
-
-    await db.$disconnect();
 
     if (pending.length === 0) return [];
 

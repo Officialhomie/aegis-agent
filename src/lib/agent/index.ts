@@ -148,25 +148,8 @@ export async function runSponsorshipCycle(
           await postSponsorshipProof(signed, state.executionResult as ExecutionResult & { sponsorshipHash?: string; decisionHash?: string });
           postSponsorshipToBotchan(signed, state.executionResult as ExecutionResult & { sponsorshipHash?: string; decisionHash?: string }).catch(() => {});
           if (state.executionResult?.success) {
-            const { getAgentWalletBalance } = await import('./observe/sponsorship');
-            const { getReserveState, updateReserveState } = await import('./state/reserve-state');
-            const reserves = await getAgentWalletBalance();
-            const current = await getReserveState();
-            const updates: Parameters<typeof updateReserveState>[0] = {
-              ethBalance: reserves.ETH,
-              usdcBalance: reserves.USDC,
-              chainId: reserves.chainId,
-              sponsorshipsLast24h: (current?.sponsorshipsLast24h ?? 0) + 1,
-            };
-            const result = state.executionResult as ExecutionResult & { gasUsed?: bigint };
-            if (result.gasUsed != null) {
-              const gasPriceGwei = config.currentGasPriceGwei ?? 0.001;
-              const ethBurned = (Number(result.gasUsed) * gasPriceGwei) / 1e9;
-              const snapshot = { timestamp: new Date().toISOString(), sponsorships: 1, ethBurned };
-              const history = [...(current?.burnRateHistory ?? []).slice(-29), snapshot];
-              Object.assign(updates, { burnRateHistory: history });
-            }
-            await updateReserveState(updates);
+            const { updateReservesAfterSponsorship } = await import('./execute/post-sponsorship');
+            await updateReservesAfterSponsorship(state.executionResult, config.currentGasPriceGwei);
           }
         } else {
           state.executionResult = await execute(decision, config.executionMode);

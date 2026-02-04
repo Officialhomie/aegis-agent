@@ -146,14 +146,10 @@ const DecisionBase = z.object({
   metadata: DecisionMetadata,
 });
 
-/** Discriminated union: action determines required parameters type */
+/** Discriminated union: action determines required parameters type (LLM output only; EXECUTE/SWAP/TRANSFER/REBALANCE removed) */
 export const DecisionSchema = z.discriminatedUnion('action', [
-  DecisionBase.extend({ action: z.literal('EXECUTE'), parameters: ExecuteParams }),
   DecisionBase.extend({ action: z.literal('WAIT'), parameters: z.null() }),
   DecisionBase.extend({ action: z.literal('ALERT_HUMAN'), parameters: AlertParams }),
-  DecisionBase.extend({ action: z.literal('REBALANCE'), parameters: SwapParams }),
-  DecisionBase.extend({ action: z.literal('SWAP'), parameters: SwapParams }),
-  DecisionBase.extend({ action: z.literal('TRANSFER'), parameters: TransferParams }),
   DecisionBase.extend({ action: z.literal('SPONSOR_TRANSACTION'), parameters: SponsorParams }),
   DecisionBase.extend({ action: z.literal('SWAP_RESERVES'), parameters: SwapReservesParams }),
   DecisionBase.extend({ action: z.literal('ALERT_PROTOCOL'), parameters: AlertProtocolParams }),
@@ -165,9 +161,25 @@ export const DecisionSchema = z.discriminatedUnion('action', [
 
 export type Decision = z.infer<typeof DecisionSchema>;
 
+/** Base fields required for any decision (LLM or internal) */
+type DecisionBaseFields = {
+  confidence: number;
+  reasoning: string;
+  preconditions?: string[];
+  expectedOutcome?: string;
+  metadata?: z.infer<typeof DecisionMetadata>;
+};
+
 /**
- * Schema for LLM response wrapper (includes reasoning before decision)
+ * Internal execution actions (used by reserve-manager/agentkit only; not emitted by LLM).
+ * Union with Decision for executeWithAgentKit and execution layer.
  */
+export type ExecutableDecision =
+  | Decision
+  | ({ action: 'SWAP' | 'REBALANCE'; parameters: SwapParams } & DecisionBaseFields)
+  | ({ action: 'TRANSFER'; parameters: TransferParams } & DecisionBaseFields)
+  | ({ action: 'EXECUTE'; parameters: ExecuteParams } & DecisionBaseFields);
+
 export const LLMResponseSchema = z.object({
   thinking: z.string().optional(),
   decision: DecisionSchema,

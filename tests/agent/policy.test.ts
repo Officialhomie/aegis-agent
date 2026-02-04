@@ -19,7 +19,26 @@ vi.mock('../../src/lib/agent/state-store', () => ({
   getStateStore: vi.fn().mockResolvedValue({
     get: vi.fn().mockResolvedValue(null),
     set: vi.fn().mockResolvedValue(undefined),
+    setNX: vi.fn().mockResolvedValue(true),
   }),
+}));
+
+vi.mock('../../src/lib/db', () => ({
+  getPrisma: vi.fn().mockReturnValue({
+    protocolSponsor: {
+      findUnique: vi.fn().mockResolvedValue(null),
+    },
+  }),
+}));
+
+vi.mock('../../src/lib/agent/observe/sponsorship', () => ({
+  getOnchainTxCount: vi.fn().mockResolvedValue(10),
+  getProtocolBudget: vi.fn().mockResolvedValue({ balanceUSD: 100 }),
+  getAgentWalletBalance: vi.fn().mockResolvedValue({ ETH: 0.5, USDC: 0, chainId: 8453 }),
+}));
+
+vi.mock('../../src/lib/agent/security/abuse-detection', () => ({
+  detectAbuse: vi.fn().mockResolvedValue({ isAbusive: false }),
 }));
 
 describe('validateRules', () => {
@@ -43,16 +62,19 @@ describe('validateRules', () => {
     expect(failed).toHaveLength(0);
   });
 
+  const validSponsorParams = {
+    agentWallet: '0x1234567890123456789012345678901234567890',
+    protocolId: 'test-protocol',
+    maxGasLimit: 200000,
+    estimatedCostUSD: 0.5,
+  };
+
   it('fails when confidence below threshold', async () => {
     const decision: Decision = {
-      action: 'TRANSFER',
+      action: 'SPONSOR_TRANSACTION',
       confidence: 0.5,
-      reasoning: 'Transfer funds.',
-      parameters: {
-        token: 'USDC',
-        recipient: '0x1234567890123456789012345678901234567890',
-        amount: '100',
-      },
+      reasoning: 'Sponsor user transaction for protocol.',
+      parameters: validSponsorParams,
     };
     const results = await validateRules(decision, baseConfig);
     const confidenceRule = results.find((r) => r.ruleName === 'confidence-threshold');
@@ -61,25 +83,21 @@ describe('validateRules', () => {
 
   it('fails when reasoning too short', async () => {
     const decision: Decision = {
-      action: 'TRANSFER',
+      action: 'SPONSOR_TRANSACTION',
       confidence: 0.9,
       reasoning: 'Short',
-      parameters: {
-        token: 'USDC',
-        recipient: '0x1234567890123456789012345678901234567890',
-        amount: '100',
-      },
+      parameters: validSponsorParams,
     };
     const results = await validateRules(decision, baseConfig);
     const reasoningRule = results.find((r) => r.ruleName === 'reasoning-required');
     expect(reasoningRule?.passed).toBe(false);
   });
 
-  it('fails when parameters missing for TRANSFER', async () => {
+  it('fails when parameters missing for SPONSOR_TRANSACTION', async () => {
     const decision: Decision = {
-      action: 'TRANSFER',
+      action: 'SPONSOR_TRANSACTION',
       confidence: 0.9,
-      reasoning: 'Valid reasoning for transfer decision.',
+      reasoning: 'Valid reasoning for sponsorship decision.',
       parameters: null,
     } as unknown as Decision;
     const results = await validateRules(decision, baseConfig);
@@ -89,14 +107,10 @@ describe('validateRules', () => {
 
   it('passes when decision and config valid', async () => {
     const decision: Decision = {
-      action: 'TRANSFER',
+      action: 'SPONSOR_TRANSACTION',
       confidence: 0.9,
-      reasoning: 'Valid reasoning for transfer with sufficient length.',
-      parameters: {
-        token: 'USDC',
-        recipient: '0x1234567890123456789012345678901234567890',
-        amount: '100',
-      },
+      reasoning: 'Valid reasoning for sponsorship with sufficient length.',
+      parameters: validSponsorParams,
     };
     const results = await validateRules(decision, baseConfig);
     const failed = results.filter((r) => !r.passed);
@@ -105,14 +119,10 @@ describe('validateRules', () => {
 
   it('fails readonly mode for execution action', async () => {
     const decision: Decision = {
-      action: 'TRANSFER',
+      action: 'SPONSOR_TRANSACTION',
       confidence: 0.9,
-      reasoning: 'Valid reasoning for transfer with sufficient length.',
-      parameters: {
-        token: 'USDC',
-        recipient: '0x1234567890123456789012345678901234567890',
-        amount: '100',
-      },
+      reasoning: 'Valid reasoning for sponsorship with sufficient length.',
+      parameters: validSponsorParams,
     };
     const results = await validateRules(decision, {
       ...baseConfig,

@@ -24,11 +24,8 @@ export async function executeWithWalletLock<T>(
   const deadline = Date.now() + timeoutMs;
 
   while (!acquired && Date.now() < deadline) {
-    const existing = await store.get(LOCK_KEY);
-    if (!existing) {
-      await store.set(LOCK_KEY, lockId, { px: LOCK_TTL_MS });
-      acquired = true;
-    } else {
+    acquired = await store.setNX(LOCK_KEY, lockId, { px: LOCK_TTL_MS });
+    if (!acquired) {
       await new Promise((r) => setTimeout(r, 100));
     }
   }

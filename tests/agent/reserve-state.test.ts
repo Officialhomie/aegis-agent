@@ -11,6 +11,7 @@ vi.mock('../../src/lib/agent/state-store', () => ({
   getStateStore: vi.fn().mockResolvedValue({
     get: mockGet,
     set: mockSet,
+    setNX: vi.fn().mockResolvedValue(true),
   }),
 }));
 

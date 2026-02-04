@@ -245,8 +245,8 @@ export const sponsorshipPolicyRules: PolicyRule[] = [
         return { ruleName: 'contract-whitelist-check', passed: true, message: 'N/A', severity: 'ERROR' };
       }
       try {
-        const { PrismaClient } = await import('@prisma/client');
-        const db = new PrismaClient();
+        const { getPrisma } = await import('../../db');
+        const db = getPrisma();
         const protocol = await db.protocolSponsor.findUnique({
           where: { protocolId: decision.parameters.protocolId },
         });

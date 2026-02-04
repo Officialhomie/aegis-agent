@@ -76,8 +76,8 @@ export class MultiModeAgent {
       logger.info('[MultiMode] Shutting down gracefully');
       process.exit(0);
     };
-    process.on('SIGTERM', shutdown);
-    process.on('SIGINT', shutdown);
+    process.once('SIGTERM', shutdown);
+    process.once('SIGINT', shutdown);
   }
 
   stop(): void {
@@ -141,25 +141,11 @@ export class MultiModeAgent {
         await postSponsorshipProof(signed, executionResult as ExecutionResult & { sponsorshipHash?: string; decisionHash?: string });
         postSponsorshipToBotchan(signed, executionResult as ExecutionResult & { sponsorshipHash?: string; decisionHash?: string }).catch(() => {});
         if (executionResult?.success) {
-          const { getAgentWalletBalance } = await import('./observe/sponsorship');
-          const { getReserveState, updateReserveState } = await import('./state/reserve-state');
-          const reserves = await getAgentWalletBalance();
-          const current = await getReserveState();
-          const updates: Parameters<typeof updateReserveState>[0] = {
-            ethBalance: reserves.ETH,
-            usdcBalance: reserves.USDC,
-            chainId: reserves.chainId,
-            sponsorshipsLast24h: (current?.sponsorshipsLast24h ?? 0) + 1,
-          };
-          const result = executionResult as ExecutionResult & { gasUsed?: bigint };
-          if (result.gasUsed != null) {
-            const gasPriceGwei = configWithGas.currentGasPriceGwei ?? 0.001;
-            const ethBurned = (Number(result.gasUsed) * gasPriceGwei) / 1e9;
-            const snapshot = { timestamp: new Date().toISOString(), sponsorships: 1, ethBurned };
-            const history = [...(current?.burnRateHistory ?? []).slice(-29), snapshot];
-            Object.assign(updates, { burnRateHistory: history });
-          }
-          await updateReserveState(updates);
+          const { updateReservesAfterSponsorship } = await import('./execute/post-sponsorship');
+          await updateReservesAfterSponsorship(
+            executionResult as ExecutionResult & { gasUsed?: bigint },
+            configWithGas.currentGasPriceGwei
+          );
         }
       } else {
         executionResult = await executeWithWalletLock(() => execute(decision, configWithGas.executionMode === 'LIVE' ? 'LIVE' : 'SIMULATION'));
