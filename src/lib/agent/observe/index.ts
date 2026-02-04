@@ -12,8 +12,6 @@ import { getDefaultChainName } from './chains';
 import { observeBlockchainState } from './blockchain';
 import { observeOraclePrices } from './oracles';
 import { observeBotchanRequests } from './botchan';
-import type { GovernanceState } from './governance';
-import type { DeFiPosition } from './defi';
 import type { TokenBalance } from './treasury';
 
 /** Union of observation payloads from different sources */
@@ -21,8 +19,6 @@ export type ObservationData =
   | { blockNumber?: string; gasPrice?: string; gasPriceGwei?: string }
   | { treasuryAddress: string; chainName?: string; tokens: TokenBalance[] }
   | { pair: string; price: string; source?: string }
-  | GovernanceState
-  | { treasuryAddress: string; positions: DeFiPosition[] }
   | Record<string, unknown>;
 
 export interface Observation {
@@ -74,19 +70,6 @@ export {
   getCoinGeckoPrice,
   type PriceFeedResult,
 } from './oracles';
-export {
-  getDeFiPositions as getDeFiPositionsFromDefi,
-  observeDeFiPositions,
-  type DeFiPosition,
-  type LendingPosition,
-  type LiquidityPosition,
-} from './defi';
-export {
-  getGovernanceState as getGovernanceStateFromGov,
-  observeGovernance,
-  type GovernanceState,
-  type GovernanceProposal,
-} from './governance';
 export {
   observeBaseSponsorshipOpportunities,
   observeLowGasWallets,
