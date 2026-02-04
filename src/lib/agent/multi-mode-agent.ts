@@ -15,7 +15,6 @@ import { checkAndUpdateEmergencyMode } from './emergency';
 import type { AgentMode, AgentModeContext } from './types';
 import type { AgentConfig } from './index';
 import type { AgentMemory } from './index';
-import type { Decision } from './reason/schemas';
 import type { ExecutionResult } from './execute';
 
 const DEFAULT_RESERVE_INTERVAL_MS = 5 * 60 * 1000;

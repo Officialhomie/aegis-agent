@@ -79,6 +79,7 @@ export async function setPrimaryName(ensName: string): Promise<{ success: boolea
  * Resolve the current primary name for an address on Base (read-only).
  * Full implementation would require resolver lookup (node -> name); currently a stub.
  */
-export async function getPrimaryName(_address: string): Promise<string | null> {
+export async function getPrimaryName(address: string): Promise<string | null> {
+  void address; // stub: would resolve reverse record
   return null;
 }

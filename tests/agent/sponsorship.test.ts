@@ -12,8 +12,6 @@ import {
   observeAgentReserves,
   observeFailedTransactions,
   observeNewWalletActivations,
-  getOnchainTxCount,
-  getProtocolBudget,
   getProtocolBudgets,
 } from '../../src/lib/agent/observe/sponsorship';
 

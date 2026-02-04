@@ -3,10 +3,10 @@
  */
 
 import { NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
+import { getPrisma } from '@/src/lib/db';
 import { z } from 'zod';
 
-const prisma = new PrismaClient();
+const prisma = getPrisma();
 
 const TopupSchema = z.object({
   amountUSD: z.number().positive(),

@@ -5,9 +5,7 @@
  */
 
 import { createPublicClient, http, formatUnits } from 'viem';
-import { logger } from '../../logger';
-import { getDefaultChainName, getSupportedChainNames } from './chains';
-import { getPrice } from './oracles';
+import { getSupportedChainNames } from './chains';
 import { base, baseSepolia, mainnet, sepolia } from 'viem/chains';
 import type { DeFiPosition } from './defi';
 import type { GovernanceState } from './governance';

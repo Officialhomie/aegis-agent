@@ -6,7 +6,7 @@
  */
 
 import { logger } from '../../logger';
-import { validateRules, type PolicyRule } from './rules';
+import { validateRules } from './rules';
 import type { Decision } from '../reason/schemas';
 import type { AgentConfig } from '../index';
 

@@ -8,7 +8,7 @@ import type { ReserveState } from '../../src/lib/agent/state/reserve-state';
 const mockGetReserveState = vi.fn();
 
 vi.mock('../../src/lib/agent/state/reserve-state', async (orig) => {
-  const mod = await orig();
+  const mod = (await orig()) as Record<string, unknown>;
   return {
     ...mod,
     getReserveState: () => mockGetReserveState(),

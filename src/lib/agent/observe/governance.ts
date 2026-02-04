@@ -180,7 +180,7 @@ export async function getGovernanceProposals(
     const proposals: GovernanceProposal[] = [];
     for (let i = 1; i <= Math.min(num, 50); i++) {
       try {
-        const [id, , startBlock, endBlock, forVotes, againstVotes, , canceled, executed] =
+        const [id, , , endBlock, forVotes, againstVotes, , canceled] =
           await client.readContract({
             address: governorAddress,
             abi: GOVERNOR_ABI,

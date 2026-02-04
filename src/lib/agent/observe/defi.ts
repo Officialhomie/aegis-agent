@@ -275,7 +275,7 @@ export async function getUniswapPositions(
           functionName: 'tokenOfOwnerByIndex',
           args: [owner, BigInt(i)],
         });
-        const [, , token0, token1, fee, , , liquidity] = await client.readContract({
+        const [, , token0, token1, , , , liquidity] = await client.readContract({
           address: managerAddress,
           abi: UNISWAP_NFT_MANAGER_ABI,
           functionName: 'positions',

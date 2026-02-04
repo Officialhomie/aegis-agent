@@ -6,7 +6,6 @@ import { getConfigNumber } from '../../config';
 import { getReserveState } from '../state/reserve-state';
 import type { Decision } from '../reason/schemas';
 import type { ReplenishParams } from '../reason/schemas';
-import type { AgentConfig } from '../index';
 import type { PolicyRule, RuleResult } from './rules';
 
 const MAX_REPLENISH_USDC = getConfigNumber('MAX_REPLENISH_USDC', 500, 10, 10000);

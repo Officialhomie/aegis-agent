@@ -4,7 +4,7 @@
  * Tests for the agent's decision-making and policy enforcement.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { DecisionSchema, type Decision } from '@/src/lib/agent/reason/schemas';
 import { validatePolicy } from '@/src/lib/agent/policy';
 import type { AgentConfig } from '@/src/lib/agent';
@@ -37,6 +37,7 @@ describe('Decision Schema Validation', () => {
       parameters: {
         agentWallet: '0x1234567890123456789012345678901234567890',
         protocolId: 'test-protocol',
+        maxGasLimit: 200000,
         estimatedCostUSD: 0.05,
       },
     };
@@ -92,6 +93,7 @@ describe('Policy Validation', () => {
       parameters: {
         agentWallet: '0x1234567890123456789012345678901234567890',
         protocolId: 'test',
+        maxGasLimit: 200000,
         estimatedCostUSD: 0.05,
       },
     };
@@ -114,6 +116,7 @@ describe('Policy Validation', () => {
       parameters: {
         agentWallet: '0x1234567890123456789012345678901234567890',
         protocolId: 'test',
+        maxGasLimit: 200000,
         estimatedCostUSD: 0.05,
       },
     };
@@ -142,11 +145,11 @@ describe('Action Types', () => {
     const decisions: Array<{ action: string; parameters: unknown }> = [
       { action: 'WAIT', parameters: null },
       { action: 'ALERT_HUMAN', parameters: { severity: 'HIGH', message: 'Test alert' } },
-      { action: 'SPONSOR_TRANSACTION', parameters: { agentWallet: '0x1234567890123456789012345678901234567890', protocolId: 'p', estimatedCostUSD: 0.05 } },
+      { action: 'SPONSOR_TRANSACTION', parameters: { agentWallet: '0x1234567890123456789012345678901234567890', protocolId: 'p', maxGasLimit: 200000, estimatedCostUSD: 0.05 } },
       { action: 'SWAP_RESERVES', parameters: { tokenIn: 'USDC', tokenOut: 'ETH', amountIn: '100' } },
       { action: 'ALERT_PROTOCOL', parameters: { protocolId: 'p', budgetRemaining: 10 } },
       { action: 'REPLENISH_RESERVES', parameters: { tokenIn: 'USDC', tokenOut: 'ETH', amountIn: '100', reason: 'below_target' } },
-      { action: 'ALERT_LOW_RUNWAY', parameters: { currentRunwayDays: 3, thresholdDays: 7, ethBalance: 0.1, dailyBurnRate: 0.01 } },
+      { action: 'ALERT_LOW_RUNWAY', parameters: { currentRunwayDays: 3, thresholdDays: 7, ethBalance: 0.1, dailyBurnRate: 0.01, severity: 'HIGH' as const, suggestedAction: 'Top up ETH reserves' } },
     ];
 
     for (const { action, parameters } of decisions) {

@@ -3,10 +3,10 @@
  */
 
 import { NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
+import { getPrisma } from '@/src/lib/db';
 import { z } from 'zod';
 
-const prisma = new PrismaClient();
+const prisma = getPrisma();
 
 const RegisterSchema = z.object({
   protocolId: z.string().min(1).max(64).regex(/^[a-zA-Z0-9_-]+$/),

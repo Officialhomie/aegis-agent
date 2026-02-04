@@ -11,15 +11,13 @@ import { DatabaseUnavailableError } from '../../errors';
 import { logger } from '../../logger';
 import { getBalance } from './blockchain';
 import { getDefaultChainName } from './chains';
-import { getPrice } from './oracles';
 import type { Observation } from './index';
 
 const LOW_GAS_THRESHOLD_ETH = 0.0001;
 const BASE_CHAIN_ID = 8453;
 const BASE_SEPOLIA_CHAIN_ID = 84532;
 
-const chains = { base, baseSepolia };
-type BaseChainName = keyof typeof chains;
+type BaseChainName = 'base' | 'baseSepolia';
 
 function getBasePublicClient() {
   const rpcUrl =
@@ -40,8 +38,9 @@ function getBasePublicClient() {
  */
 export async function getOnchainTxCount(
   address: `0x${string}`,
-  chainName: BaseChainName = getDefaultChainName() as BaseChainName
+  _chainName: BaseChainName = getDefaultChainName() as BaseChainName
 ): Promise<number> {
+  void _chainName; // reserved for multi-chain
   const client = getBasePublicClient();
   const count = await client.getTransactionCount({ address });
   return Number(count);

@@ -33,6 +33,7 @@ describe('Execution Layer', () => {
 
   it('should simulate SPONSOR_TRANSACTION without real tx', async () => {
     vi.stubEnv('RPC_URL_BASE_SEPOLIA', 'https://sepolia.base.org');
+    vi.stubEnv('AGENT_PRIVATE_KEY', '0x0000000000000000000000000000000000000000000000000000000000000001');
     const sponsorDecision: Decision = {
       action: 'SPONSOR_TRANSACTION',
       confidence: 0.9,
@@ -40,6 +41,7 @@ describe('Execution Layer', () => {
       parameters: {
         agentWallet: '0x1234567890123456789012345678901234567890',
         protocolId: 'test',
+        maxGasLimit: 200000,
         estimatedCostUSD: 0.05,
       },
     };
@@ -57,7 +59,7 @@ describe('Execution Layer', () => {
     } as unknown as Decision;
     const result = await execute(decisionNoParams, 'LIVE');
     expect(result.success).toBe(false);
-    expect(result.error).toContain('Parameters');
+    expect(result.error?.toLowerCase()).toContain('parameters');
   });
 });
 

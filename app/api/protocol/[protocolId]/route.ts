@@ -3,10 +3,10 @@
  */
 
 import { NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
+import { getPrisma } from '@/src/lib/db';
 import { z } from 'zod';
 
-const prisma = new PrismaClient();
+const prisma = getPrisma();
 
 const UpdateSchema = z.object({
   name: z.string().min(1).max(128).optional(),

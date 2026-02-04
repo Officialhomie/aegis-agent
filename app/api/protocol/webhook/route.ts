@@ -5,10 +5,8 @@
  */
 
 import { NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
+import { getPrisma } from '@/src/lib/db';
 import { z } from 'zod';
-
-const prisma = new PrismaClient();
 
 const WebhookSchema = z.object({
   protocolId: z.string().min(1),
@@ -17,6 +15,7 @@ const WebhookSchema = z.object({
 });
 
 export async function POST(request: Request) {
+  const prisma = getPrisma();
   try {
     const body = await request.json().catch(() => ({}));
     const parsed = WebhookSchema.safeParse(body);
