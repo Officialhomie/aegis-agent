@@ -1,10 +1,11 @@
 /**
  * Deploy AegisReactiveObserver to Base Sepolia (or Base mainnet via AGENT_NETWORK_ID=base).
- * Supports Foundry keystore (FOUNDRY_ACCOUNT) or private key (DEPLOYER_PRIVATE_KEY / EXECUTE_WALLET_PRIVATE_KEY).
+ * Uses cast/forge. Supports FOUNDRY_ACCOUNT (e.g. deployer-onetruehomie) or DEPLOYER_PRIVATE_KEY.
+ * For keystore: run in a terminal to enter password, or set CAST_PASSWORD.
  * Contract has no constructor args; deployer becomes owner.
  *
- * Usage: npx tsx scripts/deploy-reactive-observer.ts
- * Then set REACTIVE_OBSERVER_ADDRESS=<deployed> in .env and verify on Basescan.
+ * Usage: npm run deploy:reactive-observer
+ * Then set REACTIVE_OBSERVER_ADDRESS=<deployed> in .env.
  */
 
 import 'dotenv/config';
@@ -49,7 +50,8 @@ function main() {
       ? `--verify --etherscan-api-key ${process.env.BASESCAN_API_KEY} --chain-id ${chainId}`
       : '';
 
-    const cmd = `forge create --rpc-url "${rpcUrl}" ${authArgs} ${verifyArgs} "${CONTRACT}"`.trim().replace(/\s+/g, ' ');
+    // Contract must be first argument for forge create; --broadcast sends the tx (default is dry-run)
+    const cmd = `forge create "${CONTRACT}" --rpc-url "${rpcUrl}" ${authArgs} --broadcast ${verifyArgs}`.trim().replace(/\s+/g, ' ');
     const out = execSync(cmd, { encoding: 'utf-8', cwd: root, maxBuffer: 10 * 1024 * 1024 });
 
     const match = out.match(/Deployed to: (0x[a-fA-F0-9]{40})/);
