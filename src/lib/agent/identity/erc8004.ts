@@ -267,7 +267,7 @@ export async function registerAgentIdentity(
 ): Promise<string> {
   const metadata: AgentMetadata = {
     name: agentName,
-    description: 'Aegis - Autonomous Treasury Management Agent',
+    description: 'Aegis - Autonomous Gas Sponsorship Agent',
     capabilities,
     version: '1.0.0',
     created: new Date().toISOString(),
