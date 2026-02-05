@@ -9,6 +9,8 @@ import { execute, getCircuitBreaker, executeWithWalletLock, signDecision, sponso
 import { storeMemory, retrieveRelevantMemories } from './memory';
 import { postSponsorshipProof } from './social/farcaster';
 import { postSponsorshipToBotchan, postReserveSwapToBotchan } from './social/botchan';
+import { runMoltbookHeartbeat } from './social/heartbeat';
+import { maybePostFarcasterUpdate } from './transparency/farcaster-updates';
 import { observeGasPrice } from './observe';
 import { getAdaptiveGasSponsorshipConfig } from './modes/gas-sponsorship';
 import { checkAndUpdateEmergencyMode } from './emergency';
@@ -19,6 +21,8 @@ import type { ExecutionResult } from './execute';
 
 const DEFAULT_RESERVE_INTERVAL_MS = 5 * 60 * 1000;
 const DEFAULT_SPONSORSHIP_INTERVAL_MS = 60 * 1000;
+/** Interval to check whether to run Moltbook heartbeat and Farcaster health post (each has its own internal throttle). */
+const SOCIAL_TRANSPARENCY_INTERVAL_MS = 15 * 60 * 1000; // 15 min
 
 export interface MultiModeAgentOptions {
   modes: AgentMode[];
@@ -68,6 +72,15 @@ export class MultiModeAgent {
       this.timers.set(id, t);
       logger.info('[MultiMode] Started mode', { mode: id, intervalMs });
     }
+
+    // Moltbook engagement + Farcaster health updates (each throttled internally)
+    const socialTimer = setInterval(() => {
+      if (this.draining) return;
+      runMoltbookHeartbeat().catch((err) => logger.warn('[MultiMode] Moltbook heartbeat error', { error: err }));
+      maybePostFarcasterUpdate().catch((err) => logger.warn('[MultiMode] Farcaster update error', { error: err }));
+    }, SOCIAL_TRANSPARENCY_INTERVAL_MS);
+    this.timers.set('social-transparency', socialTimer);
+    logger.info('[MultiMode] Started social/transparency', { intervalMs: SOCIAL_TRANSPARENCY_INTERVAL_MS });
 
     const shutdown = async () => {
       this.draining = true;
