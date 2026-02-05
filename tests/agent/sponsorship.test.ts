@@ -17,6 +17,7 @@ import {
 
 vi.mock('../../src/lib/agent/observe/chains', () => ({
   getDefaultChainName: vi.fn().mockReturnValue('baseSepolia'),
+  getSupportedChainNames: vi.fn().mockReturnValue(['baseSepolia']),
 }));
 
 vi.mock('viem', async () => {
@@ -33,6 +34,11 @@ vi.mock('viem', async () => {
 
 vi.mock('../../src/lib/agent/observe/blockchain', () => ({
   getBalance: vi.fn().mockResolvedValue(BigInt(1e14)),
+  readContract: vi.fn().mockImplementation((_addr: unknown, _abi: unknown, fn: string) => {
+    if (fn === 'balanceOf') return Promise.resolve(0);
+    if (fn === 'decimals') return Promise.resolve(6);
+    return Promise.resolve(0);
+  }),
 }));
 
 const mockProtocolFindMany = vi.fn().mockResolvedValue([]);
