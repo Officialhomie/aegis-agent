@@ -44,10 +44,6 @@ export async function observeBurnRate(): Promise<Observation[]> {
       },
     ];
   } catch (error) {
-    // #region agent log
-    const e = error as { code?: string; message?: string; name?: string };
-    fetch('http://127.0.0.1:7248/ingest/d6915d2c-7cdc-4e4d-9879-2c5523431d83',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'reserve-pipeline.ts:observeBurnRate catch',message:'burn rate DB error',data:{errCode:e?.code,errMessage:e?.message?.slice(0,200),errName:e?.name},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H3'})}).catch(()=>{});
-    // #endregion
     logger.error('[ReservePipeline] Error observing burn rate', { error });
     return [];
   }

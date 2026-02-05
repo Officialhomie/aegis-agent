@@ -7,9 +7,6 @@
  */
 
 import 'dotenv/config';
-// #region agent log
-fetch('http://127.0.0.1:7248/ingest/d6915d2c-7cdc-4e4d-9879-2c5523431d83',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'run-agent.ts:after dotenv',message:'env check',data:{cwd:process.cwd(),hasDatabaseUrl:!!process.env.DATABASE_URL},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H2'})}).catch(()=>{});
-// #endregion
 import { startAutonomousPaymaster } from '../src/lib/agent';
 
 function validateEnv(): { ok: true } | { ok: false; missing: string[] } {
