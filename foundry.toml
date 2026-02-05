@@ -13,7 +13,5 @@ line_length = 100
 base_sepolia = "${RPC_URL_BASE_SEPOLIA}"
 base = "${RPC_URL_BASE}"
 
-# Keystore configuration (optional - can also use --account flag directly)
-[profile.deploy]
-# Account name to use from ~/.foundry/keystores/
-account = "${FOUNDRY_ACCOUNT:-deployer-onetruehmie}"
+# For deploy scripts: use FOUNDRY_ACCOUNT=deployer-onetruehomie (or set DEPLOYER_PRIVATE_KEY).
+# Keystore account name is passed via --account in scripts; no profile needed.
