@@ -171,7 +171,7 @@ export class MemoryStore {
           data: {
             id: this.agentId,
             name: 'Aegis Agent',
-            description: 'AI-powered treasury management agent',
+            description: 'AI-powered gas sponsorship agent',
           },
         });
       }
