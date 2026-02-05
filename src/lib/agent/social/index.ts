@@ -28,6 +28,9 @@ export {
   shouldRunMoltbookHeartbeat,
   runMoltbookHeartbeat,
   runMoltbookHeartbeatNow,
+  getSponsorshipStats,
+  buildActivitySummary,
+  type SponsorshipStats,
 } from './heartbeat';
 
 export {
