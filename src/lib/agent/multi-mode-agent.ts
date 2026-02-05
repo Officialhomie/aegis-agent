@@ -9,11 +9,12 @@ import { execute, getCircuitBreaker, executeWithWalletLock, signDecision, sponso
 import { storeMemory, retrieveRelevantMemories } from './memory';
 import { postSponsorshipProof } from './social/farcaster';
 import { postSponsorshipToBotchan, postReserveSwapToBotchan } from './social/botchan';
-import { runMoltbookHeartbeat } from './social/heartbeat';
+import { runFullHeartbeat } from './social/heartbeat';
 import { maybePostFarcasterUpdate } from './transparency/farcaster-updates';
 import { observeGasPrice } from './observe';
 import { getAdaptiveGasSponsorshipConfig } from './modes/gas-sponsorship';
 import { checkAndUpdateEmergencyMode } from './emergency';
+import { registerDefaultSkills, executeEventSkills } from './skills';
 import type { AgentMode, AgentModeContext } from './types';
 import type { AgentConfig } from './index';
 import type { AgentMemory } from './index';
@@ -52,6 +53,10 @@ export class MultiModeAgent {
   async start(): Promise<void> {
     await checkAndUpdateEmergencyMode();
 
+    // Register default skills
+    registerDefaultSkills();
+    logger.info('[MultiMode] Registered default skills');
+
     const reserveCtx = this.modes.get('reserve-pipeline');
     if (reserveCtx) {
       if (reserveCtx.mode.onStart) await reserveCtx.mode.onStart();
@@ -73,14 +78,14 @@ export class MultiModeAgent {
       logger.info('[MultiMode] Started mode', { mode: id, intervalMs });
     }
 
-    // Moltbook engagement + Farcaster health updates (each throttled internally)
+    // Moltbook engagement + Farcaster health updates + scheduled skills (each throttled internally)
     const socialTimer = setInterval(() => {
       if (this.draining) return;
-      runMoltbookHeartbeat().catch((err) => logger.warn('[MultiMode] Moltbook heartbeat error', { error: err }));
+      runFullHeartbeat().catch((err) => logger.warn('[MultiMode] Full heartbeat error', { error: err }));
       maybePostFarcasterUpdate().catch((err) => logger.warn('[MultiMode] Farcaster update error', { error: err }));
     }, SOCIAL_TRANSPARENCY_INTERVAL_MS);
     this.timers.set('social-transparency', socialTimer);
-    logger.info('[MultiMode] Started social/transparency', { intervalMs: SOCIAL_TRANSPARENCY_INTERVAL_MS });
+    logger.info('[MultiMode] Started social/transparency with skills', { intervalMs: SOCIAL_TRANSPARENCY_INTERVAL_MS });
 
     const shutdown = async () => {
       this.draining = true;
@@ -159,6 +164,14 @@ export class MultiModeAgent {
             executionResult as ExecutionResult & { gasUsed?: bigint },
             configWithGas.currentGasPriceGwei
           );
+
+          // Trigger event-driven skills (e.g., reputation attestor)
+          const params = decision.parameters as { agentWallet?: string; protocolId?: string } | null;
+          executeEventSkills('sponsorship:success', {
+            userAddress: params?.agentWallet,
+            protocolId: params?.protocolId,
+            txHash: (executionResult as ExecutionResult & { sponsorshipHash?: string }).sponsorshipHash,
+          }).catch((err) => logger.warn('[MultiMode] Event skills error', { error: err }));
         }
       } else {
         executionResult = await executeWithWalletLock(() => execute(decision, configWithGas.executionMode === 'LIVE' ? 'LIVE' : 'SIMULATION'));
