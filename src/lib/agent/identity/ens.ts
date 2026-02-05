@@ -7,8 +7,8 @@
  */
 
 import { createPublicClient, createWalletClient, http } from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
 import { base } from 'viem/chains';
+import { getKeystoreAccount } from '../../keystore';
 import { logger } from '../../logger';
 
 const REVERSE_REGISTRAR_BASE = '0x0000000000D8e504002cC26E3Ec46D81971C1664' as const;
@@ -40,13 +40,14 @@ function getRpcUrl(): string {
  * @returns Transaction hash or error
  */
 export async function setPrimaryName(ensName: string): Promise<{ success: boolean; txHash?: string; error?: string }> {
-  const privateKey = process.env.EXECUTE_WALLET_PRIVATE_KEY ?? process.env.AGENT_PRIVATE_KEY;
-  if (!privateKey?.trim()) {
-    return { success: false, error: 'EXECUTE_WALLET_PRIVATE_KEY or AGENT_PRIVATE_KEY required' };
+  let account;
+  try {
+    account = await getKeystoreAccount();
+  } catch {
+    return { success: false, error: 'Agent wallet not configured (KEYSTORE_ACCOUNT+KEYSTORE_PASSWORD or EXECUTE_WALLET_PRIVATE_KEY)' };
   }
 
   const rpcUrl = getRpcUrl();
-  const account = privateKeyToAccount(privateKey as `0x${string}`);
 
   const walletClient = createWalletClient({
     account,
