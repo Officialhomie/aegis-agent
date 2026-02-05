@@ -5,10 +5,7 @@
  * Rules are checked in order and can be configured per-agent.
  */
 
-import { OraclePriceUnavailableError } from '../../errors';
 import { logger } from '../../logger';
-import { getPrice } from '../observe/oracles';
-import { getDefaultChainName } from '../observe/chains';
 import { getStateStore } from '../state-store';
 import { sponsorshipPolicyRules } from './sponsorship-rules';
 import { reservePolicyRules } from './reserve-rules';
