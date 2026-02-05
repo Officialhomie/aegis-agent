@@ -154,6 +154,23 @@ export async function getMoltbookProfile(apiKey?: string): Promise<MoltbookAgent
 }
 
 /**
+ * Update agent profile (name, description). Undocumented endpoint – may not exist.
+ * Returns updated profile on success; throws on 404 or other API error.
+ */
+export async function updateMoltbookProfile(
+  updates: { name?: string; description?: string },
+  apiKey?: string
+): Promise<MoltbookAgentProfile> {
+  const key = apiKey ?? getApiKey();
+  const data = await moltbookFetch<{ agent?: MoltbookAgentProfile }>('/agents/me', {
+    method: 'PATCH',
+    body: JSON.stringify(updates),
+    apiKey: key,
+  });
+  return (data as { agent: MoltbookAgentProfile }).agent ?? (data as unknown as MoltbookAgentProfile);
+}
+
+/**
  * Create a post.
  * Rate limit: 1 post per 30 minutes.
  */
@@ -275,4 +292,199 @@ export async function subscribeToSubmolt(submoltName: string): Promise<{ success
   return moltbookFetch<{ success?: boolean }>(`/submolts/${submoltName}/subscribe`, {
     method: 'POST',
   });
+}
+
+// ============================================================================
+// Conversationalist Skill API Functions
+// ============================================================================
+
+/**
+ * Comment on a Moltbook post
+ */
+export interface MoltbookComment {
+  id: string;
+  content: string;
+  author: {
+    name: string;
+    id?: string;
+    is_agent?: boolean;
+  };
+  created_at: string;
+  parent_id?: string;
+  upvotes?: number;
+  replies?: MoltbookComment[];
+}
+
+interface MoltbookCommentsResponse {
+  success?: boolean;
+  comments?: MoltbookComment[];
+  data?: MoltbookComment[];
+}
+
+/**
+ * Get comments on a specific post.
+ */
+export async function getPostComments(postId: string): Promise<MoltbookComment[]> {
+  const data = await moltbookFetch<MoltbookCommentsResponse>(`/posts/${postId}/comments`);
+  return data.comments ?? data.data ?? [];
+}
+
+/**
+ * Reply to a specific comment on a post.
+ * This is a convenience wrapper around commentOnPost with parentId.
+ */
+export async function replyToComment(
+  postId: string,
+  parentCommentId: string,
+  content: string
+): Promise<{ id: string; success?: boolean }> {
+  return commentOnPost(postId, content, parentCommentId);
+}
+
+/**
+ * Mention interface for agent notifications
+ */
+export interface MoltbookMention {
+  id: string;
+  type: 'post' | 'comment';
+  post_id: string;
+  comment_id?: string;
+  content: string;
+  author: {
+    name: string;
+    id?: string;
+  };
+  created_at: string;
+  read?: boolean;
+}
+
+interface MoltbookMentionsResponse {
+  success?: boolean;
+  mentions?: MoltbookMention[];
+  data?: MoltbookMention[];
+}
+
+/**
+ * Get mentions of the agent (posts/comments that mention this agent).
+ * Note: This endpoint may not exist - falls back to search if needed.
+ */
+export async function getAgentMentions(): Promise<MoltbookMention[]> {
+  try {
+    const data = await moltbookFetch<MoltbookMentionsResponse>('/agents/me/mentions');
+    return data.mentions ?? data.data ?? [];
+  } catch (error) {
+    // Fallback: search for agent name mentions
+    const profile = await getMoltbookProfile();
+    if (!profile.name) return [];
+
+    const searchResults = await searchMoltbook(`@${profile.name}`, { type: 'all', limit: 20 });
+    return searchResults.map((r) => ({
+      id: r.id,
+      type: r.type,
+      post_id: r.post_id ?? r.id,
+      comment_id: r.type === 'comment' ? r.id : undefined,
+      content: r.content,
+      author: r.author ?? { name: 'unknown' },
+      created_at: new Date().toISOString(),
+      read: false,
+    }));
+  }
+}
+
+/**
+ * Get posts created by this agent.
+ */
+export async function getAgentPosts(limit = 10): Promise<MoltbookPost[]> {
+  try {
+    const profile = await getMoltbookProfile();
+    if (!profile.name) return [];
+
+    // Try to get agent's own posts via profile endpoint
+    const data = await moltbookFetch<MoltbookFeedResponse>(`/agents/${profile.name}/posts?limit=${limit}`);
+    return data.posts ?? data.data ?? [];
+  } catch {
+    // Fallback: search for posts by this agent
+    const profile = await getMoltbookProfile();
+    if (!profile.name) return [];
+
+    const searchResults = await searchMoltbook(`author:${profile.name}`, { type: 'posts', limit });
+    return searchResults.map((r) => ({
+      id: r.id,
+      submolt: r.submolt?.name ?? 'general',
+      title: r.title ?? '',
+      content: r.content,
+      author: r.author,
+    }));
+  }
+}
+
+/**
+ * Get a single post by ID with full details.
+ */
+export async function getPost(postId: string): Promise<MoltbookPost | null> {
+  try {
+    const data = await moltbookFetch<{ post?: MoltbookPost; data?: MoltbookPost }>(`/posts/${postId}`);
+    return data.post ?? data.data ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Search for agents on Moltbook.
+ */
+export interface MoltbookAgentSearchResult {
+  name: string;
+  description?: string;
+  karma?: number;
+  follower_count?: number;
+  is_claimed?: boolean;
+}
+
+interface MoltbookAgentSearchResponse {
+  success?: boolean;
+  agents?: MoltbookAgentSearchResult[];
+  data?: MoltbookAgentSearchResult[];
+  count?: number;
+}
+
+/**
+ * Search for agents by keyword.
+ */
+export async function searchAgents(query: string, limit = 20): Promise<MoltbookAgentSearchResult[]> {
+  try {
+    const params = new URLSearchParams({ q: query, limit: String(limit) });
+    const data = await moltbookFetch<MoltbookAgentSearchResponse>(`/agents/search?${params}`);
+    return data.agents ?? data.data ?? [];
+  } catch {
+    // Fallback: general search and filter for agent-related results
+    logger.warn('[Moltbook] Agent search endpoint not available, using general search');
+    return [];
+  }
+}
+
+/**
+ * Get agent profile by name.
+ */
+export async function getAgentByName(agentName: string): Promise<MoltbookAgentProfile | null> {
+  try {
+    const data = await moltbookFetch<{ agent?: MoltbookAgentProfile }>(`/agents/${agentName}`);
+    return data.agent ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Follow an agent.
+ */
+export async function followAgent(agentName: string): Promise<{ success?: boolean }> {
+  return moltbookFetch<{ success?: boolean }>(`/agents/${agentName}/follow`, { method: 'POST' });
+}
+
+/**
+ * Unfollow an agent.
+ */
+export async function unfollowAgent(agentName: string): Promise<{ success?: boolean }> {
+  return moltbookFetch<{ success?: boolean }>(`/agents/${agentName}/unfollow`, { method: 'POST' });
 }
