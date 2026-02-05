@@ -42,7 +42,7 @@ export async function POST(request: Request) {
     }
     const metadata: AgentMetadata = {
       name: agent.name,
-      description: agent.description ?? 'Aegis - Autonomous Treasury Management Agent',
+      description: agent.description ?? 'Aegis - Autonomous Gas Sponsorship Agent',
       capabilities: ['observe', 'reason', 'execute', 'sponsorship'],
       version: '1.0.0',
       created: agent.createdAt.toISOString(),

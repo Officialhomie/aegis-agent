@@ -199,7 +199,7 @@ export async function ensureAgentRegistered(): Promise<void> {
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? process.env.AEGIS_DASHBOARD_URL ?? '';
     const registrationFile = buildRegistrationFile({
       name: agent.name,
-      description: agent.description ?? 'Aegis - Autonomous Treasury Management Agent',
+      description: agent.description ?? 'Aegis - Autonomous Gas Sponsorship Agent',
       webEndpoint: baseUrl ? `${baseUrl.replace(/\/$/, '')}` : undefined,
       a2aEndpoint: baseUrl ? `${baseUrl.replace(/\/$/, '')}/.well-known/agent-card.json` : undefined,
       x402Support: true,

@@ -9,6 +9,7 @@ const originalEnv = process.env;
 const mockPaymentCount = vi.fn().mockResolvedValue(0);
 const mockReputationFindMany = vi.fn().mockResolvedValue([]);
 const mockReputationCount = vi.fn().mockResolvedValue(0);
+const mockSponsorshipFindMany = vi.fn().mockResolvedValue([]);
 
 vi.mock('@prisma/client', () => ({
   PrismaClient: vi.fn().mockImplementation(function (this: unknown) {
@@ -18,6 +19,7 @@ vi.mock('@prisma/client', () => ({
         findMany: mockReputationFindMany,
         count: mockReputationCount,
       },
+      sponsorshipRecord: { findMany: mockSponsorshipFindMany },
     };
   }),
 }));
@@ -57,7 +59,7 @@ describe('registerMoltbookAgent', () => {
       }),
     });
     const { registerMoltbookAgent } = await import('../../src/lib/agent/social/moltbook');
-    const result = await registerMoltbookAgent('Aegis', 'Treasury agent');
+    const result = await registerMoltbookAgent('Aegis', 'Sponsorship agent');
     expect(result.agent.api_key).toBe('moltbook_abc123');
     expect(result.agent.claim_url).toContain('moltbook.com/claim/');
     expect(fetch).toHaveBeenCalledWith(
@@ -65,7 +67,7 @@ describe('registerMoltbookAgent', () => {
       expect.objectContaining({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'Aegis', description: 'Treasury agent' }),
+        body: JSON.stringify({ name: 'Aegis', description: 'Sponsorship agent' }),
       })
     );
   });
@@ -242,5 +244,103 @@ describe('getUnifiedReputation', () => {
       pending: 0,
     });
     expect(result.combined).toBe(0);
+  });
+});
+
+describe('buildActivitySummary', () => {
+  it('formats sponsorship stats for Moltbook post', async () => {
+    const { buildActivitySummary } = await import('../../src/lib/agent/social/heartbeat');
+    const stats = {
+      totalSponsorships: 12,
+      uniqueUsers: 8,
+      uniqueProtocols: 3,
+      totalCostUSD: 6.24,
+      protocolNames: ['Uniswap', 'Aave', 'Compound'],
+    };
+    const summary = buildActivitySummary(stats);
+    expect(summary).toContain('Aegis Sponsorship Activity (24h)');
+    expect(summary).toContain('Transactions sponsored: 12');
+    expect(summary).toContain('Protocols: 3 (Uniswap, Aave, Compound)');
+    expect(summary).toContain('Unique users: 8');
+    expect(summary).toContain('Total cost: $6.24');
+    expect(summary).toContain('Active on Base | Autonomous gas sponsorship agent');
+  });
+
+  it('handles zero sponsorships with no-activity message', async () => {
+    const { buildActivitySummary } = await import('../../src/lib/agent/social/heartbeat');
+    const stats = {
+      totalSponsorships: 0,
+      uniqueUsers: 0,
+      uniqueProtocols: 0,
+      totalCostUSD: 0,
+      protocolNames: [],
+    };
+    const summary = buildActivitySummary(stats);
+    expect(summary).toContain('Aegis Sponsorship Activity (24h)');
+    expect(summary).toContain('No sponsorships in the last 24 hours.');
+    expect(summary).toContain('Monitoring Base for eligible users...');
+    expect(summary).toContain('Active on Base | Autonomous gas sponsorship agent');
+  });
+
+  it('truncates protocol list when more than 3', async () => {
+    const { buildActivitySummary } = await import('../../src/lib/agent/social/heartbeat');
+    const stats = {
+      totalSponsorships: 5,
+      uniqueUsers: 4,
+      uniqueProtocols: 5,
+      totalCostUSD: 2.5,
+      protocolNames: ['A', 'B', 'C', 'D', 'E'],
+    };
+    const summary = buildActivitySummary(stats);
+    expect(summary).toContain('Protocols: 5 (A, B, C +2 more)');
+  });
+});
+
+describe('getSponsorshipStats', () => {
+  beforeEach(() => {
+    mockSponsorshipFindMany.mockReset();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('aggregates records into SponsorshipStats', async () => {
+    mockSponsorshipFindMany.mockResolvedValue([
+      { userAddress: '0xaa', protocolId: 'p1', estimatedCostUSD: 1 },
+      { userAddress: '0xbb', protocolId: 'p1', estimatedCostUSD: 2 },
+      { userAddress: '0xaa', protocolId: 'p2', estimatedCostUSD: 0.5 },
+    ]);
+
+    const { getSponsorshipStats } = await import('../../src/lib/agent/social/heartbeat');
+    const stats = await getSponsorshipStats(24);
+
+    expect(mockSponsorshipFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          txHash: { not: null },
+          createdAt: expect.any(Object),
+        }),
+        select: { userAddress: true, protocolId: true, estimatedCostUSD: true },
+      })
+    );
+    expect(stats.totalSponsorships).toBe(3);
+    expect(stats.uniqueUsers).toBe(2);
+    expect(stats.uniqueProtocols).toBe(2);
+    expect(stats.totalCostUSD).toBe(3.5);
+    expect(stats.protocolNames).toEqual(expect.arrayContaining(['p1', 'p2']));
+  });
+
+  it('returns zeros when no records in window', async () => {
+    mockSponsorshipFindMany.mockResolvedValue([]);
+
+    const { getSponsorshipStats } = await import('../../src/lib/agent/social/heartbeat');
+    const stats = await getSponsorshipStats(24);
+
+    expect(stats.totalSponsorships).toBe(0);
+    expect(stats.uniqueUsers).toBe(0);
+    expect(stats.uniqueProtocols).toBe(0);
+    expect(stats.totalCostUSD).toBe(0);
+    expect(stats.protocolNames).toEqual([]);
   });
 });

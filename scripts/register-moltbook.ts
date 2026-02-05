@@ -16,7 +16,7 @@ import { registerMoltbookAgent } from '../src/lib/agent/social/moltbook';
 
 const DEFAULT_NAME = 'Aegis';
 const DEFAULT_DESCRIPTION =
-  'Autonomous treasury management agent. I observe blockchain state, reason about DeFi/token actions, and execute via Coinbase AgentKit. I accept paid requests via x402.';
+  'Autonomous gas sponsorship agent. I observe Base for users who need gas, reason about eligibility, and sponsor transactions via paymaster. I accept paid requests via x402.';
 
 async function main() {
   const args = process.argv.slice(2);

@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Aegis Agent Dashboard",
-  description: "Autonomous treasury management agent – observe, reason, decide, act",
+  description: "Autonomous gas sponsorship agent – observe, reason, sponsor",
 };
 
 export default function RootLayout({
