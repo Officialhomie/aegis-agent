@@ -7,6 +7,7 @@
 
 import { createPublicClient, http, formatEther } from 'viem';
 import { base, baseSepolia } from 'viem/chains';
+import { getPrisma } from '../../db';
 import { DatabaseUnavailableError } from '../../errors';
 import { logger } from '../../logger';
 import { getBalance } from './blockchain';
@@ -53,8 +54,7 @@ export async function getProtocolBudget(
   protocolId: string
 ): Promise<{ protocolId: string; balanceUSD: number; totalSpent: number } | null> {
   try {
-    const { PrismaClient } = await import('@prisma/client');
-    const db = new PrismaClient();
+    const db = getPrisma();
     const proto = await db.protocolSponsor.findUnique({ where: { protocolId } });
     if (!proto) return null;
     return { protocolId, balanceUSD: proto.balanceUSD, totalSpent: proto.totalSpent };
@@ -70,8 +70,7 @@ export async function getProtocolBudgets(): Promise<
   { protocolId: string; name?: string; balanceUSD: number; totalSpent: number; whitelistedContracts?: string[] }[]
 > {
   try {
-    const { PrismaClient } = await import('@prisma/client');
-    const db = new PrismaClient();
+    const db = getPrisma();
     const list = await db.protocolSponsor.findMany();
     logger.debug('[Sponsorship] Fetched protocol budgets', { count: list.length });
     return list;

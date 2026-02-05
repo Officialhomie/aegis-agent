@@ -5,7 +5,7 @@
  */
 
 import { LRUCache } from 'lru-cache';
-import { createPublicClient, http } from 'viem';
+import { createPublicClient, getAddress, http } from 'viem';
 import { base, baseSepolia, mainnet, sepolia } from 'viem/chains';
 import { getConfigNumber } from '../../config';
 import { logger } from '../../logger';
@@ -118,11 +118,12 @@ export async function getChainlinkPrice(
   const cached = getCached(key);
   if (cached) return cached;
 
-  const address = getFeedAddress(pair, chainName);
-  if (!address) {
+  const rawAddress = getFeedAddress(pair, chainName);
+  if (!rawAddress) {
     logger.debug('[Oracle] Chainlink feed address not found', { pair, chainName });
     return { success: false, error: 'Price feed not available for this pair', reason: 'not_available' };
   }
+  const address = getAddress(rawAddress) as `0x${string}`;
 
   try {
     const client = getPublicClient(chainName);
