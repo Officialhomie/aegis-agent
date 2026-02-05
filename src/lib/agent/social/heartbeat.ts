@@ -240,3 +240,60 @@ export async function runMoltbookHeartbeatNow(): Promise<void> {
   await store.set(MOLTBOOK_CHECK_KEY, '0'); // Reset so shouldRun returns true
   return runMoltbookHeartbeat();
 }
+
+/**
+ * Run scheduled skills during heartbeat.
+ * Skills with 'schedule' trigger type are executed if their interval has elapsed.
+ */
+export async function runScheduledSkills(): Promise<void> {
+  try {
+    const { executeScheduledSkills, getSkillStatus } = await import('../skills');
+
+    const status = getSkillStatus();
+    if (status.enabled === 0) {
+      logger.debug('[Skills] No enabled skills to run');
+      return;
+    }
+
+    logger.info('[Skills] Running scheduled skills', {
+      totalSkills: status.total,
+      enabledSkills: status.enabled,
+    });
+
+    const results = await executeScheduledSkills({ event: 'heartbeat:start' });
+
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const [name, result] of results) {
+      if (result.success) {
+        successCount++;
+        logger.info(`[Skills] ${name} completed`, { summary: result.summary });
+      } else {
+        failCount++;
+        logger.warn(`[Skills] ${name} failed`, { error: result.error });
+      }
+    }
+
+    logger.info('[Skills] Scheduled skills complete', {
+      executed: results.size,
+      success: successCount,
+      failed: failCount,
+    });
+  } catch (error) {
+    logger.error('[Skills] Error running scheduled skills', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/**
+ * Run full heartbeat including Moltbook engagement and scheduled skills.
+ */
+export async function runFullHeartbeat(): Promise<void> {
+  // Run Moltbook heartbeat first
+  await runMoltbookHeartbeat();
+
+  // Then run scheduled skills
+  await runScheduledSkills();
+}
