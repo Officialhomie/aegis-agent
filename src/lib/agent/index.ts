@@ -5,7 +5,7 @@
  * It connects all the agent components and manages the decision cycle.
  */
 
-import { PrismaClient } from '@prisma/client';
+import { getPrisma } from '../db';
 import { logger } from '../logger';
 import { observeBaseSponsorshipOpportunities, observeGasPrice } from './observe';
 import { reasonAboutSponsorship } from './reason';
@@ -192,7 +192,7 @@ export async function runSponsorshipCycle(
 export async function ensureAgentRegistered(): Promise<void> {
   const registryAddress = getIdentityRegistryAddress();
   if (!registryAddress) return;
-  const prisma = new PrismaClient();
+  const prisma = getPrisma();
   try {
     const agent = await prisma.agent.findFirst({ where: { isActive: true } });
     if (!agent || agent.onChainId) return;
@@ -212,7 +212,17 @@ export async function ensureAgentRegistered(): Promise<void> {
     });
     logger.info('[ERC-8004] Agent registered', { agentId: agentId.toString(), txHash });
   } catch (error) {
-    logger.warn('[ERC-8004] ensureAgentRegistered failed', { error: error instanceof Error ? error.message : String(error) });
+    const msg = error instanceof Error ? error.message : String(error);
+    const hint =
+      msg.includes('allowance') || msg.includes('gas required')
+        ? 'Agent wallet may need Base Sepolia ETH for gas. Set ERC8004_NETWORK=base-sepolia and fund AGENT_WALLET_ADDRESS.'
+        : undefined;
+    logger.warn('[ERC-8004] ensureAgentRegistered failed', {
+      error: msg,
+      hint,
+      network: process.env.ERC8004_NETWORK,
+      registry: getIdentityRegistryAddress(),
+    });
   } finally {
     await prisma.$disconnect();
   }
