@@ -1,14 +1,22 @@
 /**
  * Deploy AegisActivityLogger to Base Sepolia (or Base mainnet via AGENT_NETWORK_ID=base).
- * Supports Foundry keystore (FOUNDRY_ACCOUNT) or private key (DEPLOYER_PRIVATE_KEY / EXECUTE_WALLET_PRIVATE_KEY).
- * Requires: AGENT_WALLET_ADDRESS, RPC URL, and either FOUNDRY_ACCOUNT or DEPLOYER_PRIVATE_KEY.
+ * Uses cast/forge under the hood. Supports Foundry keystore (FOUNDRY_ACCOUNT) or private key.
  *
- * Usage: npx tsx scripts/deploy-activity-logger.ts
- * Then set ACTIVITY_LOGGER_ADDRESS=<deployed> in .env and verify on Basescan.
+ * With keystore account (e.g. deployer-onetruehomie):
+ *   Set FOUNDRY_ACCOUNT=deployer-onetruehomie in .env.
+ *   Run in a terminal so you can enter the keystore password when prompted,
+ *   or set CAST_PASSWORD for non-interactive deploy.
+ *
+ * With private key: set DEPLOYER_PRIVATE_KEY or EXECUTE_WALLET_PRIVATE_KEY.
+ *
+ * Requires: AGENT_WALLET_ADDRESS, RPC URL, and FOUNDRY_ACCOUNT or DEPLOYER_PRIVATE_KEY.
+ *
+ * Usage: npm run deploy:activity-logger
+ * Then set ACTIVITY_LOGGER_ADDRESS=<deployed> in .env.
  */
 
 import 'dotenv/config';
-import { execSync } from 'child_process';
+import { spawnSync } from 'child_process';
 import { resolve } from 'path';
 
 const CONTRACT = 'contracts/AegisActivityLogger.sol:AegisActivityLogger';
@@ -48,24 +56,34 @@ function main() {
   });
 
   try {
-    const encoded = execSync(
-      `cast abi-encode "constructor(address)" "${agentWallet}"`,
-      { encoding: 'utf-8', cwd: root }
-    ).trim();
-
     const chainId = isBase ? 8453 : 84532;
-    const verifyArgs = process.env.BASESCAN_API_KEY
-      ? `--verify --etherscan-api-key ${process.env.BASESCAN_API_KEY} --chain-id ${chainId}`
-      : '';
-
-    const cmd = `forge create --rpc-url "${rpcUrl}" ${authArgs} --constructor-args ${encoded} ${verifyArgs} "${CONTRACT}"`.trim().replace(/\s+/g, ' ');
-    const out = execSync(cmd, { encoding: 'utf-8', cwd: root, maxBuffer: 10 * 1024 * 1024 });
-
-    const match = out.match(/Deployed to: (0x[a-fA-F0-9]{40})/);
+    // Build argv with --broadcast as first option so Forge definitely sees it (it was ignoring it when later in the list)
+    const argv: string[] = [
+      'forge', 'create', CONTRACT,
+      '--broadcast',
+      '--rpc-url', rpcUrl,
+      ...(keystoreAccount ? ['--account', keystoreAccount] : ['--private-key', privateKey!]),
+      '--constructor-args', agentWallet!,
+    ];
+    if (process.env.BASESCAN_API_KEY) {
+      argv.push('--verify', '--etherscan-api-key', process.env.BASESCAN_API_KEY, '--chain-id', String(chainId));
+    }
+    let out: string;
+    let stderrOut: string;
+    try {
+      const result = spawnSync('forge', argv.slice(1), { encoding: 'utf-8', cwd: root, maxBuffer: 10 * 1024 * 1024, stdio: ['inherit', 'pipe', 'pipe'] });
+      out = (result.stdout ?? '').trim();
+      stderrOut = (result.stderr ?? '').trim();
+      if (result.status !== 0 && result.status != null) throw new Error((result.stderr || result.stdout || `forge exit ${result.status}`).slice(0, 500));
+    } catch (execErr) {
+      throw execErr;
+    }
+    const combined = out + '\n' + stderrOut;
+    const match = combined.match(/Deployed to: (0x[a-fA-F0-9]{40})/);
     const address = match?.[1];
     if (!address) {
       console.error('[Deploy] Could not parse deployed address from forge output');
-      console.error(out);
+      console.error(combined);
       process.exit(1);
     }
 

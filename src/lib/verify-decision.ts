@@ -104,8 +104,8 @@ export async function verifyDecisionChain(decisionHash: string): Promise<VerifyR
   }
 
   try {
-    const { PrismaClient } = await import('@prisma/client');
-    const db = new PrismaClient();
+    const { getPrisma } = await import('./db');
+    const db = getPrisma();
     const record = await db.sponsorshipRecord.findUnique({ where: { decisionHash } });
     if (record) {
       result.record = {

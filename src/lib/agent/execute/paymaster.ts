@@ -12,6 +12,7 @@ import { recoverMessageAddress } from 'viem';
 import { base, baseSepolia } from 'viem/chains';
 import { createPaymasterClient, getPaymasterStubData, entryPoint07Address } from 'viem/account-abstraction';
 import { getStateStore } from '../state-store';
+import { getPrisma } from '../../db';
 import { uploadDecisionToIPFS } from '../../ipfs';
 import { logger } from '../../logger';
 import type { Decision } from '../reason/schemas';
@@ -181,8 +182,7 @@ export async function deductProtocolBudget(
   amountUSD: number
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const { PrismaClient } = await import('@prisma/client');
-    const db = new PrismaClient();
+    const db = getPrisma();
     await db.protocolSponsor.update({
       where: { protocolId },
       data: {
@@ -363,8 +363,7 @@ export async function sponsorTransaction(
   }
 
   try {
-    const { PrismaClient } = await import('@prisma/client');
-    const db = new PrismaClient();
+    const db = getPrisma();
     await db.sponsorshipRecord.create({
       data: {
         userAddress: params.agentWallet, // DB column still 'userAddress' for now

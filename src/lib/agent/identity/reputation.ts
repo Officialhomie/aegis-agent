@@ -8,20 +8,11 @@
 import { createPublicClient, createWalletClient, http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { baseSepolia, mainnet, sepolia } from 'viem/chains';
-import { PrismaClient } from '@prisma/client';
+import { getPrisma } from '../../db';
 import type { ExecutionResult } from '../execute';
 import { REPUTATION_REGISTRY_ABI } from './abis/reputation-registry';
 import { ERC8004_ADDRESSES, type ERC8004Network } from './constants';
 import { logger } from '../../logger';
-
-let prisma: PrismaClient | null = null;
-
-function getPrisma(): PrismaClient {
-  if (!prisma) {
-    prisma = new PrismaClient();
-  }
-  return prisma;
-}
 
 function getERC8004Chain() {
   const network = (process.env.ERC8004_NETWORK ?? 'sepolia') as ERC8004Network;

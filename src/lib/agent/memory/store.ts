@@ -4,18 +4,9 @@
  * PostgreSQL-backed storage for agent memories using Prisma.
  */
 
-import { PrismaClient } from '@prisma/client';
+import { getPrisma } from '../../db';
 import { DatabaseUnavailableError } from '../../errors';
 import { logger } from '../../logger';
-
-let prisma: PrismaClient | null = null;
-
-function getPrisma(): PrismaClient {
-  if (!prisma) {
-    prisma = new PrismaClient();
-  }
-  return prisma;
-}
 
 export interface CreateMemoryInput {
   type: string;
@@ -39,6 +30,9 @@ export class MemoryStore {
     const db = getPrisma();
 
     try {
+      // #region agent log
+      fetch('http://127.0.0.1:7248/ingest/d6915d2c-7cdc-4e4d-9879-2c5523431d83',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'store.ts:create',message:'before ensureAgent',data:{agentId:this.agentId},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H3'})}).catch(()=>{});
+      // #endregion
       // Ensure agent exists
       await this.ensureAgent();
 
@@ -55,6 +49,10 @@ export class MemoryStore {
 
       return memory.id;
     } catch (error) {
+      // #region agent log
+      const e = error as { code?: string; message?: string; name?: string };
+      fetch('http://127.0.0.1:7248/ingest/d6915d2c-7cdc-4e4d-9879-2c5523431d83',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'store.ts:create catch',message:'DB error',data:{errCode:e?.code,errMessage:e?.message?.slice(0,200),errName:e?.name},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H3'})}).catch(()=>{});
+      // #endregion
       logger.error('[MemoryStore] Database unavailable', { error });
       throw new DatabaseUnavailableError('Cannot store memory without database connection');
     }

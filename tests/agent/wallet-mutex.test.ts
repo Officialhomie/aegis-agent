@@ -40,7 +40,6 @@ describe('Wallet Mutex', () => {
   });
 
   it('serializes concurrent lock attempts', async () => {
-    const acquireOrder: number[] = [];
     let nextAcquire = 0;
     mockSetNX.mockImplementation(() => {
       nextAcquire++;

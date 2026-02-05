@@ -78,11 +78,21 @@ Reasoning: ${truncate(reasoning, 100)}
       embeds: embeds.length > 0 ? embeds : undefined,
     });
     const castHash = publish?.cast?.hash;
-    logger.info('[Farcaster] Sponsorship proof published', { castHash, decisionHash: typeof decisionHash === 'string' ? truncate(decisionHash) : '' });
+    const verifyUrl = castHash ? `https://warpcast.com/~/conversations/${castHash}` : undefined;
+    logger.info('[Farcaster] Sponsorship proof published – verify link', {
+      castHash,
+      verifyUrl,
+      txUrl: txHash ? `${BASESCAN_TX_URL}/${txHash}` : undefined,
+      decisionHash: typeof decisionHash === 'string' ? truncate(decisionHash) : '',
+    });
     return { success: true, castHash };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    logger.warn('[Farcaster] Failed to publish cast', { error: message });
+    logger.warn('[Farcaster] Failed to publish cast', {
+      code: 'FARCASTER_POST_FAILED',
+      error: message,
+      hint: 'Check NEYNAR_API_KEY and FARCASTER_SIGNER_UUID.',
+    });
     return { success: false, error: message };
   }
 }
@@ -135,10 +145,21 @@ export async function postToFarcaster(text: string): Promise<{ success: boolean;
     const config = new Configuration({ apiKey });
     const client = new NeynarAPIClient(config);
     const publish = await client.publishCast({ signerUuid, text });
-    return { success: true, castHash: publish?.cast?.hash };
+    const castHash = publish?.cast?.hash;
+    if (castHash) {
+      logger.info('[Farcaster] Cast published – verify', {
+        castHash,
+        verifyUrl: `https://warpcast.com/~/conversations/${castHash}`,
+      });
+    }
+    return { success: true, castHash };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    logger.warn('[Farcaster] Failed to publish cast', { error: message });
+    logger.warn('[Farcaster] Failed to publish cast', {
+      code: 'FARCASTER_POST_FAILED',
+      error: message,
+      hint: 'Check NEYNAR_API_KEY and FARCASTER_SIGNER_UUID.',
+    });
     return { success: false, error: message };
   }
 }

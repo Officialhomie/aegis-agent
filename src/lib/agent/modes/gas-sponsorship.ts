@@ -4,6 +4,7 @@
  * uses adaptive confidence threshold when health score &lt; 50.
  */
 
+import { getConfigNumber } from '../../config';
 import { logger } from '../../logger';
 import { observeBaseSponsorshipOpportunities } from '../observe/sponsorship';
 import { reasonAboutSponsorship } from '../reason';
@@ -12,7 +13,7 @@ import type { AgentMode } from '../types';
 
 const BASE_CONFIDENCE = 0.8;
 const DEGRADED_CONFIDENCE = 0.9;
-const HEALTH_SKIP_THRESHOLD = 10;
+const HEALTH_SKIP_THRESHOLD = getConfigNumber('GAS_SPONSORSHIP_HEALTH_SKIP_THRESHOLD', 10, 0, 100);
 const HEALTH_DEGRADED_THRESHOLD = 50;
 
 export const gasSponsorshipMode: AgentMode = {

@@ -5,18 +5,9 @@
  * Tracks payment lifecycle: PENDING → CONFIRMED → EXECUTED.
  */
 
-import { PrismaClient } from '@prisma/client';
+import { getPrisma } from '../../db';
 import { runAgentCycle } from '../index';
 import { recordExecution } from '../identity/reputation';
-
-let prisma: PrismaClient | null = null;
-
-function getPrisma(): PrismaClient {
-  if (!prisma) {
-    prisma = new PrismaClient();
-  }
-  return prisma;
-}
 
 export interface X402PaymentProof {
   paymentHash: string;

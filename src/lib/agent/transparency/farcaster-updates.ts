@@ -2,11 +2,18 @@
  * Periodic Farcaster health summaries for transparency.
  */
 
+import { logger } from '../../logger';
 import { getReserveState, updateReserveState } from '../state/reserve-state';
 import { postToFarcaster } from '../social/farcaster';
 import type { ReserveState } from '../state/reserve-state';
 
-const FARCASTER_UPDATE_INTERVAL_MS = 4 * 60 * 60 * 1000; // Every 4 hours
+const DEFAULT_FARCASTER_UPDATE_INTERVAL_MS = 15 * 60 * 1000; // 15 min (configurable for proof-of-work)
+const FARCASTER_UPDATE_INTERVAL_MS =
+  Number(process.env.FARCASTER_UPDATE_INTERVAL_MS) || DEFAULT_FARCASTER_UPDATE_INTERVAL_MS;
+
+const DASHBOARD_URL =
+  process.env.NEXT_PUBLIC_APP_URL ?? process.env.AEGIS_DASHBOARD_URL ?? 'https://aegis.example.com';
+const WARPCAST_CAST_URL = 'https://warpcast.com/~/conversations';
 
 /**
  * Post a health summary to Farcaster if enough time has passed since last post.
@@ -19,8 +26,16 @@ export async function maybePostFarcasterUpdate(): Promise<void> {
   if (Date.now() - lastPost < FARCASTER_UPDATE_INTERVAL_MS) return;
 
   const message = buildHealthSummary(state);
-  await postToFarcaster(message);
+  const result = await postToFarcaster(message);
   await updateReserveState({ lastFarcasterPost: new Date().toISOString() });
+
+  if (result.success && result.castHash) {
+    const verifyUrl = `${WARPCAST_CAST_URL}/${result.castHash}`;
+    logger.info('[Farcaster] Health update published – verify link', {
+      castHash: result.castHash,
+      verifyUrl,
+    });
+  }
 }
 
 function buildHealthSummary(state: ReserveState): string {
@@ -33,5 +48,8 @@ Runway: ${state.runwayDays.toFixed(1)} days
 Sponsorships (24h): ${state.sponsorshipsLast24h}
 Burn Rate: ${state.dailyBurnRateETH.toFixed(6)} ETH/day
 
-Serving ${state.protocolBudgets.length} protocols on Base.`;
+Serving ${state.protocolBudgets.length} protocols on Base.
+
+🔗 Dashboard: ${DASHBOARD_URL}
+#BasePaymaster #AutonomousAgent #BuildOnBase`;
 }

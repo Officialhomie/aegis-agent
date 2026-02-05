@@ -16,9 +16,15 @@ export class EmbeddingService {
 
   constructor() {
     this.openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
+      apiKey: process.env.OPENAI_API_KEY ?? '',
     });
     this.indexName = process.env.PINECONE_INDEX_NAME || 'aegis-memory';
+  }
+
+  /** True if embeddings are available (OpenAI key set and valid); avoids noisy errors when key is missing. */
+  private isEmbeddingAvailable(): boolean {
+    const key = process.env.OPENAI_API_KEY;
+    return typeof key === 'string' && key.length > 0 && key.startsWith('sk-');
   }
 
   /**
@@ -46,6 +52,10 @@ export class EmbeddingService {
     content: string,
     metadata: Record<string, unknown>
   ): Promise<string> {
+    if (!this.isEmbeddingAvailable()) {
+      logger.debug('[Embeddings] OPENAI_API_KEY missing or invalid, skipping embedding');
+      return `temp-${Date.now()}`;
+    }
     try {
       // Generate embedding using OpenAI
       const embeddingResponse = await this.openai.embeddings.create({
@@ -77,9 +87,14 @@ export class EmbeddingService {
       }
 
       return embeddingId;
-    } catch (error) {
-      logger.error('[Embeddings] Error creating embedding', { error });
-      // Return a placeholder ID if embedding fails
+    } catch (error: unknown) {
+      const err = error as { status?: number; code?: string };
+      const isInvalidKey = err?.status === 401 || err?.code === 'invalid_api_key';
+      if (isInvalidKey) {
+        logger.debug('[Embeddings] OpenAI API key rejected, skipping embedding');
+      } else {
+        logger.error('[Embeddings] Error creating embedding', { error });
+      }
       return `temp-${Date.now()}`;
     }
   }
@@ -88,6 +103,10 @@ export class EmbeddingService {
    * Search for similar memories using vector similarity
    */
   async searchSimilar(queryText: string, limit: number = 5): Promise<string[]> {
+    if (!this.isEmbeddingAvailable()) {
+      logger.debug('[Embeddings] OPENAI_API_KEY missing or invalid, skipping similar search');
+      return [];
+    }
     try {
       // Generate query embedding
       const embeddingResponse = await this.openai.embeddings.create({
@@ -108,8 +127,14 @@ export class EmbeddingService {
       });
 
       return results.matches?.map(match => match.id) || [];
-    } catch (error) {
-      logger.error('[Embeddings] Error searching similar', { error });
+    } catch (error: unknown) {
+      const err = error as { status?: number; code?: string };
+      const isInvalidKey = err?.status === 401 || err?.code === 'invalid_api_key';
+      if (isInvalidKey) {
+        logger.debug('[Embeddings] OpenAI API key rejected, returning no similar memories');
+      } else {
+        logger.error('[Embeddings] Error searching similar', { error });
+      }
       return [];
     }
   }

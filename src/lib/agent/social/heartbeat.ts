@@ -16,10 +16,14 @@ import {
 import { logger } from '../../logger';
 
 const MOLTBOOK_CHECK_KEY = 'lastMoltbookCheck';
-const HEARTBEAT_INTERVAL_MS = Number(process.env.MOLTBOOK_HEARTBEAT_INTERVAL) || 4 * 60 * 60 * 1000; // 4 hours
+const MOLTBOOK_POST_KEY = 'lastMoltbookPost';
+/** Moltbook API allows 1 post per 30 minutes – do not post more often. */
+const MOLTBOOK_POST_MIN_INTERVAL_MS = 30 * 60 * 1000;
+// How often to run heartbeat (feed check, upvotes, and post if 30 min elapsed)
+const HEARTBEAT_INTERVAL_MS = Number(process.env.MOLTBOOK_HEARTBEAT_INTERVAL) || 30 * 60 * 1000; // 30 min default
 
 /**
- * Check if we should run Moltbook heartbeat (4+ hours since last check).
+ * Check if we should run Moltbook heartbeat (interval since last run).
  */
 export async function shouldRunMoltbookHeartbeat(): Promise<boolean> {
   const store = await getStateStore();
@@ -28,6 +32,23 @@ export async function shouldRunMoltbookHeartbeat(): Promise<boolean> {
   const lastTs = Number.parseInt(lastCheck, 10);
   if (Number.isNaN(lastTs)) return true;
   return Date.now() - lastTs >= HEARTBEAT_INTERVAL_MS;
+}
+
+/**
+ * Check if we are allowed to post (Moltbook limit: 1 post per 30 minutes).
+ */
+async function canPostToMoltbook(): Promise<boolean> {
+  const store = await getStateStore();
+  const lastPost = await store.get(MOLTBOOK_POST_KEY);
+  if (!lastPost) return true;
+  const lastTs = Number.parseInt(lastPost, 10);
+  if (Number.isNaN(lastTs)) return true;
+  return Date.now() - lastTs >= MOLTBOOK_POST_MIN_INTERVAL_MS;
+}
+
+async function setLastMoltbookPost(): Promise<void> {
+  const store = await getStateStore();
+  await store.set(MOLTBOOK_POST_KEY, String(Date.now()));
 }
 
 /**
@@ -115,18 +136,30 @@ export async function runMoltbookHeartbeat(): Promise<void> {
       logger.warn('[Moltbook] Failed to get feed', { error: err instanceof Error ? err.message : String(err) });
     }
 
-    // 2. Optionally post treasury insights (1-2x/day, based on interval)
-    const postInsights = HEARTBEAT_INTERVAL_MS >= 4 * 60 * 60 * 1000; // at least 4h interval
-    if (postInsights) {
+    // 2. Post treasury insights only when 30 min have passed (Moltbook rate limit: 1 post per 30 min)
+    const allowedToPost = await canPostToMoltbook();
+    if (allowedToPost) {
       try {
         const observations = await observe();
         const insight = buildTreasuryInsight(observations);
         const submolt = process.env.MOLTBOOK_SUBMOLT ?? 'general';
-        await postToMoltbook(submolt, 'Aegis Treasury Update', { content: insight });
-        logger.info('[Moltbook] Posted treasury insight');
+        const result = await postToMoltbook(submolt, 'Aegis Treasury Update', { content: insight });
+        await setLastMoltbookPost();
+        const verifyUrl = result?.id ? `https://www.moltbook.com/posts/${result.id}` : undefined;
+        logger.info('[Moltbook] Posted treasury insight – verify link', {
+          postId: result?.id,
+          verifyUrl,
+          submolt,
+        });
       } catch (err) {
-        logger.warn('[Moltbook] Failed to post insight', { error: err instanceof Error ? err.message : String(err) });
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn('[Moltbook] Failed to post insight (rate limit or API error)', {
+          error: msg,
+          hint: msg.includes('30') ? 'Moltbook allows 1 post per 30 minutes.' : undefined,
+        });
       }
+    } else {
+      logger.debug('[Moltbook] Post skipped – 30 min minimum interval not elapsed');
     }
 
     // 3. Engage with relevant DeFi/crypto posts (upvote, optionally comment)
