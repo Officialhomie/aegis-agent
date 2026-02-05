@@ -6,9 +6,9 @@
  */
 
 import { createPublicClient, createWalletClient, http, decodeEventLog } from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
 import { baseSepolia, mainnet, sepolia } from 'viem/chains';
 import { getPrisma } from '../../db';
+import { getKeystoreAccount } from '../../keystore';
 
 import { IDENTITY_REGISTRY_ABI } from './abis/identity-registry';
 import { ERC8004_ADDRESSES, type ERC8004Network } from './constants';
@@ -138,8 +138,7 @@ export async function uploadToIPFS(metadata: AgentMetadata | AgentRegistrationFi
  */
 export async function registerWithRegistry(agentURI: string): Promise<{ agentId: bigint; txHash: string }> {
   const registryAddress = getIdentityRegistryAddress();
-  const privateKey = process.env.EXECUTE_WALLET_PRIVATE_KEY ?? process.env.AGENT_PRIVATE_KEY;
-  if (!registryAddress || !privateKey) {
+  if (!registryAddress) {
     const ts = Date.now();
     return {
       agentId: BigInt(ts),
@@ -149,7 +148,7 @@ export async function registerWithRegistry(agentURI: string): Promise<{ agentId:
   const rpcUrl = getRpcUrl();
   if (!rpcUrl) throw new Error('RPC URL not configured for ERC-8004');
   const chain = getERC8004Chain();
-  const account = privateKeyToAccount(privateKey as `0x${string}`);
+  const account = await getKeystoreAccount();
   const walletClient = createWalletClient({
     account,
     chain,
@@ -195,12 +194,11 @@ export async function registerWithRegistry(agentURI: string): Promise<{ agentId:
  */
 export async function setAgentURI(agentId: bigint, newURI: string): Promise<string> {
   const registryAddress = getIdentityRegistryAddress();
-  const privateKey = process.env.EXECUTE_WALLET_PRIVATE_KEY ?? process.env.AGENT_PRIVATE_KEY;
-  if (!registryAddress || !privateKey) throw new Error('ERC-8004 registry or private key not configured');
+  if (!registryAddress) throw new Error('ERC-8004 registry not configured');
   const rpcUrl = getRpcUrl();
   if (!rpcUrl) throw new Error('RPC URL not configured for ERC-8004');
   const chain = getERC8004Chain();
-  const account = privateKeyToAccount(privateKey as `0x${string}`);
+  const account = await getKeystoreAccount();
   const walletClient = createWalletClient({
     account,
     chain,
