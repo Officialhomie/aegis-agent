@@ -7,8 +7,8 @@
  */
 
 import { createPublicClient, createWalletClient, http, keccak256, toHex } from 'viem';
-import { privateKeyToAccount, type PrivateKeyAccount } from 'viem/accounts';
 import { recoverMessageAddress } from 'viem';
+import { getKeystoreAccount } from '../../keystore';
 import { base, baseSepolia } from 'viem/chains';
 import { createPaymasterClient, getPaymasterStubData, entryPoint07Address } from 'viem/account-abstraction';
 import { getStateStore } from '../state-store';
@@ -82,12 +82,8 @@ function getRpcUrl(): string {
   );
 }
 
-function getAgentAccount(): PrivateKeyAccount {
-  const privateKey = process.env.EXECUTE_WALLET_PRIVATE_KEY ?? process.env.AGENT_PRIVATE_KEY;
-  if (!privateKey) {
-    throw new Error('EXECUTE_WALLET_PRIVATE_KEY or AGENT_PRIVATE_KEY required for paymaster');
-  }
-  return privateKeyToAccount(privateKey as `0x${string}`);
+async function getAgentAccount() {
+  return getKeystoreAccount();
 }
 
 /**
@@ -101,7 +97,7 @@ export async function signDecision(decision: Decision): Promise<SignedDecision> 
     preconditions: decision.preconditions,
   });
   const hash = keccak256(toHex(decisionJSON));
-  const account = getAgentAccount();
+  const account = await getAgentAccount();
   const signature = await account.signMessage({ message: { raw: hash } });
   return {
     decision,
@@ -138,7 +134,7 @@ export async function logSponsorshipOnchain(params: {
     return { success: true };
   }
 
-  const account = getAgentAccount();
+  const account = await getAgentAccount();
   const chain = getChain();
   const rpcUrl = getRpcUrl();
   const walletClient = createWalletClient({

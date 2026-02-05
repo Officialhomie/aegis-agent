@@ -36,10 +36,15 @@ export async function postToFeed(
   feed: string,
   text: string
 ): Promise<{ success: boolean; error?: string }> {
-  const privateKey = process.env.BOTCHAN_PRIVATE_KEY ?? process.env.EXECUTE_WALLET_PRIVATE_KEY ?? process.env.AGENT_PRIVATE_KEY;
-  if (!privateKey?.trim()) {
-    logger.debug('[Botchan] No private key configured - skipping post');
-    return { success: true };
+  let privateKey = process.env.BOTCHAN_PRIVATE_KEY?.trim();
+  if (!privateKey) {
+    try {
+      const { getPrivateKeyHex } = await import('../../keystore');
+      privateKey = await getPrivateKeyHex();
+    } catch {
+      logger.debug('[Botchan] No private key configured - skipping post');
+      return { success: true };
+    }
   }
   const trimmed = text.slice(0, MAX_POST_LENGTH);
   const escaped = trimmed.replace(/"/g, '\\"');

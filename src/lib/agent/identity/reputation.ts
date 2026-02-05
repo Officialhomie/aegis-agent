@@ -6,9 +6,9 @@
  */
 
 import { createPublicClient, createWalletClient, http } from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
 import { baseSepolia, mainnet, sepolia } from 'viem/chains';
 import { getPrisma } from '../../db';
+import { getKeystoreAccount } from '../../keystore';
 import type { ExecutionResult } from '../execute';
 import { REPUTATION_REGISTRY_ABI } from './abis/reputation-registry';
 import { ERC8004_ADDRESSES, type ERC8004Network } from './constants';
@@ -83,14 +83,13 @@ export async function giveFeedback(params: {
   feedbackHash?: `0x${string}`;
 }): Promise<{ txHash: string; feedbackIndex: bigint }> {
   const registryAddress = getReputationRegistryAddress();
-  const privateKey = process.env.EXECUTE_WALLET_PRIVATE_KEY ?? process.env.AGENT_PRIVATE_KEY;
-  if (!registryAddress || !privateKey) {
-    throw new Error('ERC-8004 Reputation Registry and wallet not configured');
+  if (!registryAddress) {
+    throw new Error('ERC-8004 Reputation Registry not configured');
   }
   const rpcUrl = getRpcUrl();
   if (!rpcUrl) throw new Error('RPC URL not configured for ERC-8004');
   const chain = getERC8004Chain();
-  const account = privateKeyToAccount(privateKey as `0x${string}`);
+  const account = await getKeystoreAccount();
   const walletClient = createWalletClient({
     account,
     chain,

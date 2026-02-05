@@ -10,13 +10,25 @@ import { base, baseSepolia } from 'viem/chains';
 import { getPrisma } from '../../db';
 import { DatabaseUnavailableError } from '../../errors';
 import { logger } from '../../logger';
-import { getBalance } from './blockchain';
-import { getDefaultChainName } from './chains';
+import { getBalance, readContract } from './blockchain';
+import { getDefaultChainName, getSupportedChainNames, type ChainName } from './chains';
 import type { Observation } from './index';
 
 const LOW_GAS_THRESHOLD_ETH = 0.0001;
 const BASE_CHAIN_ID = 8453;
 const BASE_SEPOLIA_CHAIN_ID = 84532;
+
+/** USDC contract address per chain (Base Sepolia, Base Mainnet). */
+function getUsdcAddressForChain(chainName: string): `0x${string}` | undefined {
+  const addr =
+    chainName === 'baseSepolia'
+      ? (process.env.USDC_ADDRESS ?? '0x036CbD53842c5426634e7929541eC2318f3dCF7e')
+      : chainName === 'base'
+        ? (process.env.USDC_ADDRESS_BASE_MAINNET ?? '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913')
+        : process.env.USDC_ADDRESS;
+  if (!addr || addr === '0x0000000000000000000000000000000000000000') return undefined;
+  return addr as `0x${string}`;
+}
 
 type BaseChainName = 'base' | 'baseSepolia';
 
@@ -84,50 +96,89 @@ export async function getProtocolBudgets(): Promise<
   }
 }
 
+const ERC20_BALANCE_ABI = [
+  { inputs: [{ name: 'account', type: 'address' }], name: 'balanceOf', outputs: [{ name: '', type: 'uint256' }], stateMutability: 'view', type: 'function' },
+  { inputs: [], name: 'decimals', outputs: [{ name: '', type: 'uint8' }], stateMutability: 'view', type: 'function' },
+] as const;
+
+export interface MultiChainBalance {
+  chainId: number;
+  chainName: string;
+  ETH: number;
+  USDC: number;
+}
+
 /**
- * Get agent wallet ETH and USDC balances. Uses AGENT_WALLET_ADDRESS.
+ * Get agent wallet ETH and USDC balances for all supported chains (e.g. Base Sepolia and Base Mainnet).
+ * Uses AGENT_WALLET_ADDRESS and per-chain USDC addresses (USDC_ADDRESS, USDC_ADDRESS_BASE_MAINNET).
+ */
+export async function getAgentWalletBalances(): Promise<MultiChainBalance[]> {
+  const address = process.env.AGENT_WALLET_ADDRESS as `0x${string}` | undefined;
+  const chainIdByName: Record<string, number> = { base: BASE_CHAIN_ID, baseSepolia: BASE_SEPOLIA_CHAIN_ID };
+  if (!address || address === '0x0000000000000000000000000000000000000000') {
+    return getSupportedChainNames().map((name) => ({
+      chainId: chainIdByName[name] ?? BASE_SEPOLIA_CHAIN_ID,
+      chainName: name,
+      ETH: 0,
+      USDC: 0,
+    }));
+  }
+
+  const chainNames = getSupportedChainNames();
+  const results: MultiChainBalance[] = [];
+
+  for (const chainName of chainNames) {
+    const chainId = chainIdByName[chainName] ?? BASE_SEPOLIA_CHAIN_ID;
+    let ethFormatted = 0;
+    let usdcBalance = 0;
+    try {
+      const ethBalance = await getBalance(address, chainName as ChainName);
+      ethFormatted = Number(formatEther(ethBalance));
+    } catch {
+      // Skip chain on error
+    }
+    const usdcAddress = getUsdcAddressForChain(chainName);
+    if (usdcAddress) {
+      try {
+        const balance = await readContract(
+          usdcAddress,
+          ERC20_BALANCE_ABI as unknown as import('viem').Abi,
+          'balanceOf',
+          [address],
+          chainName as ChainName
+        );
+        const decimals = await readContract(
+          usdcAddress,
+          ERC20_BALANCE_ABI as unknown as import('viem').Abi,
+          'decimals',
+          [],
+          chainName as ChainName
+        );
+        usdcBalance = Number(balance) / 10 ** Number(decimals);
+      } catch {
+        // USDC read optional
+      }
+    }
+    results.push({ chainId, chainName, ETH: ethFormatted, USDC: usdcBalance });
+  }
+
+  return results;
+}
+
+/**
+ * Get agent wallet ETH and USDC balance for the default chain only (backward compatible).
  */
 export async function getAgentWalletBalance(): Promise<{
   ETH: number;
   USDC: number;
   chainId: number;
 }> {
-  const address = process.env.AGENT_WALLET_ADDRESS as `0x${string}` | undefined;
-  const chainName = getDefaultChainName();
-  const chainId = chainName === 'base' ? BASE_CHAIN_ID : BASE_SEPOLIA_CHAIN_ID;
-
-  if (!address || address === '0x0000000000000000000000000000000000000000') {
-    return { ETH: 0, USDC: 0, chainId };
+  const balances = await getAgentWalletBalances();
+  const first = balances[0];
+  if (!first) {
+    return { ETH: 0, USDC: 0, chainId: getDefaultChainName() === 'base' ? BASE_CHAIN_ID : BASE_SEPOLIA_CHAIN_ID };
   }
-
-  const ethBalance = await getBalance(address, chainName);
-  const ethFormatted = Number(formatEther(ethBalance));
-
-  const usdcAddress = process.env.USDC_ADDRESS as `0x${string}` | undefined;
-  let usdcBalance = 0;
-  if (usdcAddress && usdcAddress !== '0x0000000000000000000000000000000000000000') {
-    try {
-      const client = getBasePublicClient();
-      const balance = await client.readContract({
-        address: usdcAddress,
-        abi: [
-          { inputs: [{ name: 'account', type: 'address' }], name: 'balanceOf', outputs: [{ name: '', type: 'uint256' }], stateMutability: 'view', type: 'function' },
-          { inputs: [], name: 'decimals', outputs: [{ name: '', type: 'uint8' }], stateMutability: 'view', type: 'function' },
-        ] as const,
-        functionName: 'balanceOf',
-        args: [address],
-      });
-      const decimals = await client.readContract({
-        address: usdcAddress,
-        abi: [{ inputs: [], name: 'decimals', outputs: [{ name: '', type: 'uint8' }], stateMutability: 'view', type: 'function' }] as const,
-        functionName: 'decimals',
-      });
-      usdcBalance = Number(balance) / 10 ** Number(decimals);
-    } catch {
-      // USDC read optional
-    }
-  }
-  return { ETH: ethFormatted, USDC: usdcBalance, chainId };
+  return { ETH: first.ETH, USDC: first.USDC, chainId: first.chainId };
 }
 
 /**

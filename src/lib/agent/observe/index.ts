@@ -82,6 +82,8 @@ export {
   getProtocolBudget,
   getProtocolBudgets,
   getAgentWalletBalance,
+  getAgentWalletBalances,
+  type MultiChainBalance,
 } from './sponsorship';
 export {
   observeReservePipeline,

@@ -1,5 +1,5 @@
 /**
- * Dashboard stats: sponsorships today, active protocols, reserve health.
+ * Dashboard stats: sponsorships today, active protocols, reserve health (multi-chain).
  */
 
 import { NextResponse } from 'next/server';
@@ -34,17 +34,38 @@ export async function GET() {
   }
 }
 
-async function getReserveHealth(): Promise<{ ETH: number; USDC: number; healthy: boolean }> {
+interface ChainBalance {
+  chainId: number;
+  chainName: string;
+  ETH: number;
+  USDC: number;
+}
+
+async function getReserveHealth(): Promise<{
+  ETH: number;
+  USDC: number;
+  healthy: boolean;
+  balances: ChainBalance[];
+}> {
   try {
-    const { getAgentWalletBalance } = await import('../../../../src/lib/agent/observe/sponsorship');
-    const balances = await getAgentWalletBalance();
+    const { getAgentWalletBalances } = await import('../../../../src/lib/agent/observe/sponsorship');
+    const balances = await getAgentWalletBalances();
     const thresholdEth = Number(process.env.RESERVE_THRESHOLD_ETH ?? 0.1);
+    const first = balances[0];
+    const eth = first?.ETH ?? 0;
+    const usdc = first?.USDC ?? 0;
     return {
-      ETH: balances.ETH,
-      USDC: balances.USDC,
-      healthy: balances.ETH >= thresholdEth,
+      ETH: eth,
+      USDC: usdc,
+      healthy: eth >= thresholdEth,
+      balances: balances.map((b) => ({
+        chainId: b.chainId,
+        chainName: b.chainName,
+        ETH: b.ETH,
+        USDC: b.USDC,
+      })),
     };
   } catch {
-    return { ETH: 0, USDC: 0, healthy: false };
+    return { ETH: 0, USDC: 0, healthy: false, balances: [] };
   }
 }

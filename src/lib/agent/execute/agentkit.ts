@@ -11,9 +11,9 @@ import {
   TradeAction,
 } from '@coinbase/cdp-agentkit-core';
 import { createPublicClient, createWalletClient, http, parseAbiItem } from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
 import { baseSepolia } from 'viem/chains';
 
+import { getKeystoreAccount } from '../../keystore';
 import { logger } from '../../logger';
 import type { ExecutableDecision } from '../reason/schemas';
 import type { TransferParams, SwapParams, ExecuteParams } from '../reason/schemas';
@@ -429,7 +429,7 @@ function getExecuteAllowlist(): string[] {
 /**
  * Execute a contract call using viem writeContract.
  * Validates contract address against ALLOWED_CONTRACT_ADDRESSES.
- * Supports transfer(address,uint256) and approve(address,uint256) when EXECUTE_WALLET_PRIVATE_KEY is set.
+ * Supports agent wallet from Foundry keystore or EXECUTE_WALLET_PRIVATE_KEY.
  */
 async function executeContractCall(
   _agentkit: AgentKitInstance,
@@ -440,12 +440,14 @@ async function executeContractCall(
     return { success: false, error: 'Contract call requires parameters' };
   }
 
-  const privateKey = process.env.EXECUTE_WALLET_PRIVATE_KEY ?? process.env.AGENT_PRIVATE_KEY;
-  if (!privateKey) {
+  let account;
+  try {
+    account = await getKeystoreAccount();
+  } catch {
     return {
       success: false,
       error:
-        'EXECUTE requires EXECUTE_WALLET_PRIVATE_KEY or AGENT_PRIVATE_KEY. Use TRANSFER or SWAP for AgentKit-backed execution.',
+        'EXECUTE requires KEYSTORE_ACCOUNT+KEYSTORE_PASSWORD or EXECUTE_WALLET_PRIVATE_KEY. Use TRANSFER or SWAP for AgentKit-backed execution.',
     };
   }
 
@@ -462,8 +464,6 @@ async function executeContractCall(
   if (!rpcUrl) {
     return { success: false, error: 'RPC URL not configured for EXECUTE' };
   }
-
-  const account = privateKeyToAccount(privateKey as `0x${string}`);
   const client = createWalletClient({
     account,
     chain: baseSepolia,
