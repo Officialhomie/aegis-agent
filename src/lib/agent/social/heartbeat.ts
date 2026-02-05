@@ -1,12 +1,12 @@
 /**
  * Aegis Agent - Moltbook Heartbeat
  *
- * Periodic Moltbook engagement: check feed, post treasury insights, engage with DeFi/crypto discussions.
+ * Periodic Moltbook engagement: check feed, post sponsorship activity summaries, engage with DeFi/crypto discussions.
  * Run every 4+ hours (configurable via MOLTBOOK_HEARTBEAT_INTERVAL).
  */
 
 import { getStateStore } from '../state-store';
-import { observe } from '../observe';
+import { getPrisma } from '../../db';
 import {
   getFeed,
   postToMoltbook,
@@ -21,6 +21,79 @@ const MOLTBOOK_POST_KEY = 'lastMoltbookPost';
 const MOLTBOOK_POST_MIN_INTERVAL_MS = 30 * 60 * 1000;
 // How often to run heartbeat (feed check, upvotes, and post if 30 min elapsed)
 const HEARTBEAT_INTERVAL_MS = Number(process.env.MOLTBOOK_HEARTBEAT_INTERVAL) || 30 * 60 * 1000; // 30 min default
+
+export interface SponsorshipStats {
+  totalSponsorships: number;
+  uniqueUsers: number;
+  uniqueProtocols: number;
+  totalCostUSD: number;
+  protocolNames: string[];
+}
+
+/**
+ * Fetch sponsorship stats from DB for the last N hours (only executed sponsorships with txHash).
+ */
+export async function getSponsorshipStats(hoursBack = 24): Promise<SponsorshipStats> {
+  const since = new Date(Date.now() - hoursBack * 60 * 60 * 1000);
+  const db = getPrisma();
+
+  const records = await db.sponsorshipRecord.findMany({
+    where: {
+      createdAt: { gte: since },
+      txHash: { not: null },
+    },
+    select: {
+      userAddress: true,
+      protocolId: true,
+      estimatedCostUSD: true,
+    },
+  });
+
+  const uniqueUsers = new Set(records.map((r) => r.userAddress)).size;
+  const protocolSet = new Set(records.map((r) => r.protocolId));
+  const uniqueProtocols = protocolSet.size;
+  const protocolNames = Array.from(protocolSet);
+  const totalCostUSD = records.reduce((sum, r) => sum + r.estimatedCostUSD, 0);
+
+  return {
+    totalSponsorships: records.length,
+    uniqueUsers,
+    uniqueProtocols,
+    totalCostUSD,
+    protocolNames,
+  };
+}
+
+/**
+ * Build human-readable sponsorship activity summary for Moltbook post.
+ */
+export function buildActivitySummary(stats: SponsorshipStats): string {
+  const lines: string[] = [];
+
+  lines.push('Aegis Sponsorship Activity (24h)');
+  lines.push('');
+
+  if (stats.totalSponsorships === 0) {
+    lines.push('No sponsorships in the last 24 hours.');
+    lines.push('Monitoring Base for eligible users...');
+  } else {
+    lines.push(`Transactions sponsored: ${stats.totalSponsorships}`);
+
+    if (stats.uniqueProtocols > 0) {
+      const protocolList = stats.protocolNames.slice(0, 3).join(', ');
+      const more = stats.uniqueProtocols > 3 ? ` +${stats.uniqueProtocols - 3} more` : '';
+      lines.push(`Protocols: ${stats.uniqueProtocols} (${protocolList}${more})`);
+    }
+
+    lines.push(`Unique users: ${stats.uniqueUsers}`);
+    lines.push(`Total cost: $${stats.totalCostUSD.toFixed(2)}`);
+  }
+
+  lines.push('');
+  lines.push('Active on Base | Autonomous gas sponsorship agent');
+
+  return lines.join('\n');
+}
 
 /**
  * Check if we should run Moltbook heartbeat (interval since last run).
@@ -60,38 +133,15 @@ async function updateLastCheck(): Promise<void> {
 }
 
 /**
- * Build treasury insight text from observations.
- */
-function buildTreasuryInsight(observations: Awaited<ReturnType<typeof observe>>): string {
-  const lines: string[] = [];
-  for (const obs of observations) {
-    const d = obs.data as Record<string, unknown>;
-    if (d.gasPriceGwei != null) {
-      lines.push(`Gas: ${d.gasPriceGwei} Gwei (chain ${obs.chainId ?? '?'})`);
-    }
-    if (d.pair === 'ETH/USD' && d.price != null) {
-      lines.push(`ETH/USD: $${d.price}`);
-    }
-    if (d.tokens && Array.isArray(d.tokens)) {
-      const tokens = d.tokens as Array<{ symbol?: string; balanceFormatted?: string }>;
-      const tokenLines = tokens
-        .slice(0, 5)
-        .map((t) => `${t.symbol ?? '?'}: ${t.balanceFormatted ?? '0'}`)
-        .join(', ');
-      if (tokenLines) lines.push(`Portfolio: ${tokenLines}`);
-    }
-  }
-  if (lines.length === 0) return 'Treasury observation update – no new data.';
-  return `Aegis treasury update:\n\n${lines.join('\n')}\n\n(autonomous agent, observe-reason-execute loop)`;
-}
-
-/**
- * Determine if a post is relevant to DeFi/crypto/treasury (for engagement).
+ * Determine if a post is relevant to DeFi/crypto/sponsorship (for engagement).
  */
 function isRelevantPost(post: MoltbookPost): boolean {
   const text = `${post.title ?? ''} ${post.content ?? ''}`.toLowerCase();
   const keywords = [
-    'treasury',
+    'sponsor',
+    'paymaster',
+    'gas fee',
+    'gasless',
     'defi',
     'crypto',
     'eth',
@@ -100,7 +150,6 @@ function isRelevantPost(post: MoltbookPost): boolean {
     'token',
     'transfer',
     'rebalance',
-    'portfolio',
     'chain',
     'blockchain',
     'agent',
@@ -111,7 +160,7 @@ function isRelevantPost(post: MoltbookPost): boolean {
 }
 
 /**
- * Run Moltbook heartbeat: check feed, optionally post insights, engage with relevant posts.
+ * Run Moltbook heartbeat: check feed, optionally post activity summary, engage with relevant posts.
  */
 export async function runMoltbookHeartbeat(): Promise<void> {
   if (!process.env.MOLTBOOK_API_KEY?.trim()) {
@@ -136,24 +185,24 @@ export async function runMoltbookHeartbeat(): Promise<void> {
       logger.warn('[Moltbook] Failed to get feed', { error: err instanceof Error ? err.message : String(err) });
     }
 
-    // 2. Post treasury insights only when 30 min have passed (Moltbook rate limit: 1 post per 30 min)
+    // 2. Post sponsorship activity summary only when 30 min have passed (Moltbook rate limit: 1 post per 30 min)
     const allowedToPost = await canPostToMoltbook();
     if (allowedToPost) {
       try {
-        const observations = await observe();
-        const insight = buildTreasuryInsight(observations);
+        const stats = await getSponsorshipStats(24);
+        const summary = buildActivitySummary(stats);
         const submolt = process.env.MOLTBOOK_SUBMOLT ?? 'general';
-        const result = await postToMoltbook(submolt, 'Aegis Treasury Update', { content: insight });
+        const result = await postToMoltbook(submolt, 'Aegis Sponsorship Activity', { content: summary });
         await setLastMoltbookPost();
         const verifyUrl = result?.id ? `https://www.moltbook.com/posts/${result.id}` : undefined;
-        logger.info('[Moltbook] Posted treasury insight – verify link', {
+        logger.info('[Moltbook] Posted activity summary – verify link', {
           postId: result?.id,
           verifyUrl,
           submolt,
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        logger.warn('[Moltbook] Failed to post insight (rate limit or API error)', {
+        logger.warn('[Moltbook] Failed to post activity summary (rate limit or API error)', {
           error: msg,
           hint: msg.includes('30') ? 'Moltbook allows 1 post per 30 minutes.' : undefined,
         });
