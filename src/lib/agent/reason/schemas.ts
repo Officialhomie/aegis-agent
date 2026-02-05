@@ -108,12 +108,12 @@ export const AllocateBudgetParams = z.object({
 });
 export type AllocateBudgetParams = z.infer<typeof AllocateBudgetParams>;
 
-/** Parameters for ALERT_LOW_RUNWAY (Reserve Pipeline) */
+/** Parameters for ALERT_LOW_RUNWAY (Reserve Pipeline) - coerce strings from LLM */
 export const AlertRunwayParams = z.object({
-  currentRunwayDays: z.number().min(0),
-  thresholdDays: z.number().min(0),
-  ethBalance: z.number().min(0),
-  dailyBurnRate: z.number().min(0),
+  currentRunwayDays: z.coerce.number().min(0),
+  thresholdDays: z.coerce.number().min(0),
+  ethBalance: z.coerce.number().min(0),
+  dailyBurnRate: z.coerce.number().min(0),
   severity: z.enum(['MEDIUM', 'HIGH', 'CRITICAL']),
   suggestedAction: z.string(),
 });
@@ -137,10 +137,10 @@ export const DecisionMetadata = z
   })
   .optional();
 
-/** Base fields shared by all decisions */
+/** Base fields shared by all decisions - optional defaults when LLM omits fields */
 const DecisionBase = z.object({
-  confidence: z.number().min(0).max(1),
-  reasoning: z.string().min(10),
+  confidence: z.number().min(0).max(1).optional().default(0),
+  reasoning: z.string().min(10).optional().default('No action required at this time.'),
   preconditions: z.array(z.string()).optional(),
   expectedOutcome: z.string().optional(),
   metadata: DecisionMetadata,
@@ -148,7 +148,7 @@ const DecisionBase = z.object({
 
 /** Discriminated union: action determines required parameters type (LLM output only; EXECUTE/SWAP/TRANSFER/REBALANCE removed) */
 export const DecisionSchema = z.discriminatedUnion('action', [
-  DecisionBase.extend({ action: z.literal('WAIT'), parameters: z.null() }),
+  DecisionBase.extend({ action: z.literal('WAIT'), parameters: z.null().optional().default(null) }),
   DecisionBase.extend({ action: z.literal('ALERT_HUMAN'), parameters: AlertParams }),
   DecisionBase.extend({ action: z.literal('SPONSOR_TRANSACTION'), parameters: SponsorParams }),
   DecisionBase.extend({ action: z.literal('SWAP_RESERVES'), parameters: SwapReservesParams }),
