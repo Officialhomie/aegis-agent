@@ -174,11 +174,18 @@ export class MultiModeAgent {
       await breaker.execute(run);
     } catch (err) {
       logger.error('[MultiMode] Cycle failed', { mode: key, error: err });
-      await storeMemory({
-        type: 'DECISION',
-        decision: { action: 'WAIT', confidence: 0, reasoning: String(err), parameters: null, metadata: {} },
-        outcome: { success: false, error: String(err) },
-      });
+      try {
+        await storeMemory({
+          type: 'DECISION',
+          decision: { action: 'WAIT', confidence: 0, reasoning: String(err), parameters: null, metadata: {} },
+          outcome: { success: false, error: String(err) },
+        });
+      } catch (storageErr) {
+        logger.warn('[MultiMode] Could not store cycle failure in memory (database unavailable)', {
+          mode: key,
+          storageError: storageErr instanceof Error ? storageErr.message : String(storageErr),
+        });
+      }
     }
   }
 }
