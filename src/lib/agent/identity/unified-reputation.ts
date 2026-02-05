@@ -4,17 +4,10 @@
  * Bridges reputation across Moltbook karma, ERC-8004 on-chain attestations, and x402 payment history.
  */
 
-import { PrismaClient } from '@prisma/client';
+import { getPrisma } from '../../db';
 import { getReputationScore } from './reputation';
 import { getMoltbookProfile } from '../social/moltbook';
 import type { MoltbookAgentProfile } from '../social/moltbook';
-
-let prisma: PrismaClient | null = null;
-
-function getPrisma(): PrismaClient {
-  if (!prisma) prisma = new PrismaClient();
-  return prisma;
-}
 
 export interface PaymentSuccessMetrics {
   successRate: number;

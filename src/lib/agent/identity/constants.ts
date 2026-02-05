@@ -13,7 +13,7 @@ export const ERC8004_ADDRESSES = {
     reputationRegistry: '0x8004B663056A597Dffe9eCcC1965A193B7388713',
   },
   'base-sepolia': {
-    identityRegistry: '',
+    identityRegistry: '0xD8d5adc56A0B3666731222A5283b5F672dab1893',
     reputationRegistry: '',
   },
 } as const;
