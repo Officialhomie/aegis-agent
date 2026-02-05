@@ -252,4 +252,27 @@ export function getSkillStatus(): {
 export { moltbookConversationalistSkill } from './moltbook-conversationalist';
 export { botchanListenerSkill } from './botchan-listener';
 export { agentDiscoverySkill } from './agent-discovery';
-export { reputationAttestorSkill } from './reputation-attestor';
+export { reputationAttestorSkill, reputationAttestorBatchSkill } from './reputation-attestor';
+
+/**
+ * Register all default skills
+ */
+export function registerDefaultSkills(): void {
+  // Import and register skills lazily to avoid circular dependencies
+  import('./moltbook-conversationalist').then(({ moltbookConversationalistSkill }) => {
+    registerSkill(moltbookConversationalistSkill);
+  });
+
+  import('./botchan-listener').then(({ botchanListenerSkill }) => {
+    registerSkill(botchanListenerSkill);
+  });
+
+  import('./agent-discovery').then(({ agentDiscoverySkill }) => {
+    registerSkill(agentDiscoverySkill);
+  });
+
+  import('./reputation-attestor').then(({ reputationAttestorSkill, reputationAttestorBatchSkill }) => {
+    registerSkill(reputationAttestorSkill);
+    registerSkill(reputationAttestorBatchSkill);
+  });
+}
