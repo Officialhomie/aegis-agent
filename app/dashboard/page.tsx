@@ -2,10 +2,22 @@
 
 import { useState, useCallback, useEffect } from 'react';
 
+interface ChainBalance {
+  chainId: number;
+  chainName: string;
+  ETH: number;
+  USDC: number;
+}
+
 interface Stats {
   sponsorshipsToday: number;
   activeProtocols: number;
-  reserveHealth: { ETH: number; USDC: number; healthy: boolean };
+  reserveHealth: {
+    ETH: number;
+    USDC: number;
+    healthy: boolean;
+    balances?: ChainBalance[];
+  };
   timestamp: string;
 }
 
@@ -137,9 +149,20 @@ export default function DashboardPage() {
                 <p className="text-2xl font-semibold">
                   {stats.reserveHealth.healthy ? 'OK' : 'Low'}
                 </p>
-                <p className="text-xs text-zinc-500 mt-1">
-                  ETH: {stats.reserveHealth.ETH.toFixed(4)} · USDC: {stats.reserveHealth.USDC}
-                </p>
+                {stats.reserveHealth.balances && stats.reserveHealth.balances.length > 0 ? (
+                  <div className="mt-2 space-y-1">
+                    {stats.reserveHealth.balances.map((b) => (
+                      <p key={b.chainId} className="text-xs text-zinc-500">
+                        <span className="font-medium text-zinc-700 dark:text-zinc-300">{b.chainName}</span>
+                        {' '}ETH: {b.ETH.toFixed(4)} · USDC: {b.USDC.toFixed(2)}
+                      </p>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-zinc-500 mt-1">
+                    ETH: {stats.reserveHealth.ETH.toFixed(4)} · USDC: {stats.reserveHealth.USDC}
+                  </p>
+                )}
               </div>
             </div>
           ) : (
