@@ -97,6 +97,7 @@ describe('registerAgentIdentity', () => {
     process.env = { ...originalEnv, NODE_ENV: 'test' };
     delete process.env.IPFS_GATEWAY_URL;
     delete process.env.ERC8004_IDENTITY_REGISTRY_ADDRESS;
+    process.env.ERC8004_NETWORK = ''; // no built-in registry
     delete process.env.EXECUTE_WALLET_PRIVATE_KEY;
     delete process.env.AGENT_PRIVATE_KEY;
     mockAgentUpdate.mockResolvedValue(undefined);
@@ -125,6 +126,7 @@ describe('registerWithRegistry', () => {
   beforeEach(() => {
     process.env = { ...originalEnv, NODE_ENV: 'test' };
     delete process.env.ERC8004_IDENTITY_REGISTRY_ADDRESS;
+    process.env.ERC8004_NETWORK = ''; // no built-in registry → mock path
     delete process.env.EXECUTE_WALLET_PRIVATE_KEY;
     delete process.env.AGENT_PRIVATE_KEY;
   });
