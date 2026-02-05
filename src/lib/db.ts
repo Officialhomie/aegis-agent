@@ -9,10 +9,6 @@ import { PrismaClient } from '@prisma/client';
 const globalForPrisma = globalThis as unknown as { prisma: PrismaClient | undefined };
 
 export function getPrisma(): PrismaClient {
-  // #region agent log
-  const cached = !!globalForPrisma.prisma;
-  fetch('http://127.0.0.1:7248/ingest/d6915d2c-7cdc-4e4d-9879-2c5523431d83',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'db.ts:getPrisma',message:cached?'returning cached client':'creating new client',data:{cached,hasDatabaseUrl:!!process.env.DATABASE_URL,urlHost:process.env.DATABASE_URL?.replace(/^[^@]+@/,'').split('/')[0]||'none'},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:cached?'H4':'H1'})}).catch(()=>{});
-  // #endregion
   if (globalForPrisma.prisma) return globalForPrisma.prisma;
   const connectionString = process.env.DATABASE_URL ?? 'postgresql://localhost:5432/aegis';
 
