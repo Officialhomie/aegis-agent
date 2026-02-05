@@ -15,7 +15,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { baseSepolia } from 'viem/chains';
 
 import { logger } from '../../logger';
-import type { Decision, ExecutableDecision } from '../reason/schemas';
+import type { ExecutableDecision } from '../reason/schemas';
 import type { TransferParams, SwapParams, ExecuteParams } from '../reason/schemas';
 import type { ExecutionResult } from './index';
 

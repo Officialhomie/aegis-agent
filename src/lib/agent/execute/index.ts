@@ -12,7 +12,7 @@ import { sendAlert } from './alerts';
 import { getDefaultCircuitBreaker } from './circuit-breaker';
 import { sponsorTransaction } from './paymaster';
 import { executeReserveSwap } from './reserve-manager';
-import type { Decision, SwapReservesParams } from '../reason/schemas';
+import type { Decision } from '../reason/schemas';
 import type {
   AlertParams,
   AlertProtocolParams,
