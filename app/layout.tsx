@@ -1,20 +1,64 @@
-import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
-import "./globals.css";
+import type { Metadata, Viewport } from 'next';
+import { Space_Grotesk, Inter, JetBrains_Mono } from 'next/font/google';
+import './globals.css';
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
+const spaceGrotesk = Space_Grotesk({
+  variable: '--font-space-grotesk',
+  subsets: ['latin'],
+  display: 'swap',
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
+const inter = Inter({
+  variable: '--font-inter',
+  subsets: ['latin'],
+  display: 'swap',
+});
+
+const jetbrainsMono = JetBrains_Mono({
+  variable: '--font-jetbrains-mono',
+  subsets: ['latin'],
+  display: 'swap',
 });
 
 export const metadata: Metadata = {
-  title: "Aegis Agent Dashboard",
-  description: "Autonomous gas sponsorship agent – observe, reason, sponsor",
+  title: {
+    default: 'Aegis - Autonomous Gas Sponsorship for AI Agents',
+    template: '%s | Aegis',
+  },
+  description:
+    'Aegis is an autonomous paymaster agent that sponsors gas fees for AI agents on Base. Register your protocol, deposit funds, and let Aegis handle the rest.',
+  keywords: [
+    'gas sponsorship',
+    'paymaster',
+    'ERC-4337',
+    'account abstraction',
+    'AI agents',
+    'Base',
+    'Ethereum L2',
+    'gasless transactions',
+  ],
+  authors: [{ name: 'Aegis Agent' }],
+  openGraph: {
+    title: 'Aegis - Autonomous Gas Sponsorship for AI Agents',
+    description: 'Sponsor gas fees for AI agents on Base with an autonomous paymaster.',
+    type: 'website',
+    locale: 'en_US',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'Aegis - Autonomous Gas Sponsorship',
+    description: 'Sponsor gas fees for AI agents on Base with an autonomous paymaster.',
+  },
+  robots: {
+    index: true,
+    follow: true,
+  },
+};
+
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  themeColor: '#050810',
 };
 
 export default function RootLayout({
@@ -23,9 +67,9 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" className="dark">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        className={`${spaceGrotesk.variable} ${inter.variable} ${jetbrainsMono.variable} antialiased bg-background text-foreground`}
       >
         {children}
       </body>
