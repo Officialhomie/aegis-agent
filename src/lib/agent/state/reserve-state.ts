@@ -129,9 +129,60 @@ export async function updateReserveState(updates: Partial<ReserveState>): Promis
   return merged;
 }
 
+/**
+ * Calculate health score 0-100 with testnet-aware logic.
+ *
+ * The score is a weighted combination of:
+ * - 40% Balance ratio (vs adaptive target)
+ * - 40% Runway health (days of operation remaining)
+ * - 20% Activity bonus (reward for being active)
+ *
+ * On testnet, targets are lower because gas is scarce.
+ */
 function calculateHealthScore(state: ReserveState): number {
   if (state.ethBalance <= 0) return 0;
-  if (state.ethBalance >= state.targetReserveETH) return 100;
-  const ratio = state.ethBalance / state.targetReserveETH;
-  return Math.round(ratio * 100);
+
+  // Adaptive target: lower on testnet (Base Sepolia = 84532)
+  const isTestnet = state.chainId === 84532 || process.env.TESTNET_MODE === 'true';
+  const adaptiveTarget = isTestnet
+    ? Math.max(0.01, state.targetReserveETH * 0.05) // 5% of target on testnet (e.g., 0.025 ETH)
+    : state.targetReserveETH;
+
+  // 1. Balance ratio (40% weight) - capped at 100%
+  const balanceRatio = Math.min(state.ethBalance / adaptiveTarget, 1);
+  const balanceScore = balanceRatio * 40;
+
+  // 2. Runway health (40% weight) - based on days of operation
+  // Great: 30+ days, Good: 7+ days, Fair: 1+ days, Low: <1 day
+  let runwayScore = 0;
+  const effectiveRunway = state.forecastedRunwayDays > 0
+    ? state.forecastedRunwayDays
+    : state.runwayDays;
+
+  if (effectiveRunway >= 30) {
+    runwayScore = 40;
+  } else if (effectiveRunway >= 7) {
+    runwayScore = 25 + (effectiveRunway - 7) / 23 * 15; // 25-40
+  } else if (effectiveRunway >= 1) {
+    runwayScore = 10 + (effectiveRunway - 1) / 6 * 15; // 10-25
+  } else if (effectiveRunway > 0) {
+    runwayScore = effectiveRunway * 10; // 0-10
+  }
+
+  // 3. Activity bonus (20% weight) - reward for being active
+  // More sponsorships = healthier ecosystem
+  let activityScore = 0;
+  if (state.sponsorshipsLast24h >= 50) {
+    activityScore = 20;
+  } else if (state.sponsorshipsLast24h >= 10) {
+    activityScore = 12 + (state.sponsorshipsLast24h - 10) / 40 * 8; // 12-20
+  } else if (state.sponsorshipsLast24h >= 1) {
+    activityScore = 5 + (state.sponsorshipsLast24h - 1) / 9 * 7; // 5-12
+  } else {
+    // No activity but has balance = minimum baseline
+    activityScore = state.ethBalance > 0 ? 3 : 0;
+  }
+
+  const totalScore = Math.round(balanceScore + runwayScore + activityScore);
+  return Math.min(100, Math.max(0, totalScore));
 }
