@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "prisma generate && next build",
     "start": "next start",
     "lint": "eslint",
     "agent:start": "tsx scripts/run-agent.ts",
@@ -35,7 +35,7 @@
     "seed": "tsx prisma/seed.ts"
   },
   "engines": {
-    "node": ">=20.19.0"
+    "node": "20.x"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",
