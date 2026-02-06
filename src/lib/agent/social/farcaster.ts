@@ -9,7 +9,7 @@ import type { SignedDecision } from '../execute/paymaster';
 import type { ExecutionResult } from '../execute/index';
 
 const BASESCAN_TX_URL = 'https://basescan.org/tx';
-const AEGIS_DASHBOARD_URL = process.env.NEXT_PUBLIC_APP_URL ?? process.env.AEGIS_DASHBOARD_URL ?? 'https://aegis.example.com';
+const AEGIS_DASHBOARD_URL = process.env.NEXT_PUBLIC_APP_URL ?? process.env.AEGIS_DASHBOARD_URL ?? 'https://ClawGas.vercel.app';
 
 function truncate(str: string, len: number = 10): string {
   if (str.length <= len) return str;

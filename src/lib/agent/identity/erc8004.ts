@@ -22,6 +22,7 @@ function getERC8004Chain() {
 }
 
 export function getIdentityRegistryAddress(): `0x${string}` | undefined {
+  if (process.env.ERC8004_SKIP_REGISTRY === 'true') return undefined; // test hook: skip registry so registerWithRegistry returns mock
   const override = process.env.ERC8004_IDENTITY_REGISTRY_ADDRESS?.trim();
   if (override) return override as `0x${string}`;
   const network = (process.env.ERC8004_NETWORK ?? 'sepolia') as ERC8004Network;

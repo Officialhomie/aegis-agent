@@ -29,6 +29,7 @@ vi.mock('@prisma/client', () => ({
   }),
 }));
 
+
 describe('ERC-8004 Integration', () => {
   beforeEach(() => {
     process.env = { ...originalEnv, NODE_ENV: 'test' };
@@ -36,6 +37,7 @@ describe('ERC-8004 Integration', () => {
     delete process.env.ERC8004_REPUTATION_REGISTRY_ADDRESS;
     delete process.env.EXECUTE_WALLET_PRIVATE_KEY;
     delete process.env.AGENT_PRIVATE_KEY;
+    process.env.ERC8004_SKIP_REGISTRY = 'true';
     mockCreate.mockResolvedValue({ id: 'attest-1' });
   });
 
