@@ -9,6 +9,7 @@ import { logger } from '../../logger';
 import { observeBaseSponsorshipOpportunities } from '../observe/sponsorship';
 import { reasonAboutSponsorship } from '../reason';
 import { getReserveState } from '../state/reserve-state';
+import { getKeyGuardState } from '../../key-guard';
 import type { AgentMode } from '../types';
 
 const BASE_CONFIDENCE = 0.8;
@@ -51,6 +52,7 @@ export const gasSponsorshipMode: AgentMode = {
 /**
  * Get config with adaptive confidence threshold based on current reserve state.
  * When healthScore < 50, confidence threshold is raised to 0.9.
+ * Also respects KeyGuard state - cannot run LIVE without signing capability.
  * Call this from the orchestrator before validate/execute.
  */
 export async function getAdaptiveGasSponsorshipConfig(): Promise<AgentMode['config']> {
@@ -59,8 +61,18 @@ export async function getAdaptiveGasSponsorshipConfig(): Promise<AgentMode['conf
     state && state.healthScore < HEALTH_DEGRADED_THRESHOLD && !state.emergencyMode
       ? DEGRADED_CONFIDENCE
       : BASE_CONFIDENCE;
+
+  // Check KeyGuard state - cannot run LIVE without signing capability
+  const keyGuardState = getKeyGuardState();
+  const effectiveMode = keyGuardState.mode as 'LIVE' | 'SIMULATION' | 'READONLY';
+
+  if (!keyGuardState.canSign && effectiveMode === 'LIVE') {
+    logger.warn('[GasSponsorship] LIVE mode requested but no signing key, forcing SIMULATION');
+  }
+
   return {
     ...gasSponsorshipMode.config,
     confidenceThreshold,
+    executionMode: effectiveMode,
   };
 }
