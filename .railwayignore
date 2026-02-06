@@ -1,0 +1,12 @@
+contracts/
+cache/
+.github/
+tests/
+*.test.ts
+*.test.tsx
+.cursor/
+.claude/
+foundry.toml
+foundry.lock
+vitest.config.ts
+
