@@ -8,27 +8,10 @@
 
 import 'dotenv/config';
 import { startAutonomousPaymaster } from '../src/lib/agent';
-
-/** True if agent wallet is configured via keystore or env private key (same logic as getKeystoreAccount). */
-function hasWalletConfigured(): { ok: true; source: string } | { ok: false } {
-  const keystoreAccount = process.env.KEYSTORE_ACCOUNT?.trim();
-  const password = process.env.KEYSTORE_PASSWORD ?? process.env.CAST_PASSWORD;
-  if (keystoreAccount && password !== undefined && password !== '') {
-    return { ok: true, source: 'keystore' };
-  }
-  if (process.env.EXECUTE_WALLET_PRIVATE_KEY?.trim()) {
-    return { ok: true, source: 'EXECUTE_WALLET_PRIVATE_KEY' };
-  }
-  if (process.env.AGENT_PRIVATE_KEY?.trim()) {
-    return { ok: true, source: 'AGENT_PRIVATE_KEY' };
-  }
-  return { ok: false };
-}
+import { initializeKeyGuard, getKeyGuardState } from '../src/lib/key-guard';
 
 function validateEnv(): { ok: true } | { ok: false; missing: string[] } {
   const missing: string[] = [];
-  const wallet = hasWalletConfigured();
-  if (!wallet.ok) missing.push('EXECUTE_WALLET_PRIVATE_KEY or KEYSTORE_ACCOUNT+KEYSTORE_PASSWORD or AGENT_PRIVATE_KEY');
   const useClaude = process.env.USE_CLAUDE_REASONING === 'true';
   if (useClaude) {
     if (!process.env.ANTHROPIC_API_KEY?.trim()) missing.push('ANTHROPIC_API_KEY');
@@ -41,14 +24,23 @@ function validateEnv(): { ok: true } | { ok: false; missing: string[] } {
 
 async function main() {
   console.log('[RunAgent] Validating environment...');
-  const wallet = hasWalletConfigured();
   const env = validateEnv();
   if (!env.ok) {
     console.error('[RunAgent] Missing required env:', env.missing.join(', '));
     process.exit(1);
   }
-  if (wallet.ok) {
-    console.log('[RunAgent] Wallet configured via:', wallet.source);
+
+  // Initialize KeyGuard - checks key availability without throwing
+  console.log('[RunAgent] Initializing KeyGuard...');
+  const keyGuardState = await initializeKeyGuard();
+
+  console.log('[RunAgent] Agent configuration:');
+  console.log(`  Mode: ${keyGuardState.mode}`);
+  console.log(`  Signing capability: ${keyGuardState.canSign ? 'YES' : 'NO'}`);
+  if (keyGuardState.canSign) {
+    console.log(`  Wallet: ${keyGuardState.address} (via ${keyGuardState.method})`);
+  } else {
+    console.log('  Running in read-only mode - signing operations will be skipped');
   }
 
   const intervalMs = Number(process.env.SPONSORSHIP_INTERVAL_MS ?? 60000);
