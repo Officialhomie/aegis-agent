@@ -7,6 +7,7 @@
 
 import { getPrisma } from '../db';
 import { logger } from '../logger';
+import { runStartupValidation, getCurrentNetworkName } from '../startup-validation';
 import { observeBaseSponsorshipOpportunities, observeGasPrice } from './observe';
 import { reasonAboutSponsorship } from './reason';
 import { validatePolicy } from './policy';
@@ -231,8 +232,16 @@ export async function ensureAgentRegistered(): Promise<void> {
 /**
  * Start unified agent: Reserve Pipeline + Gas Sponsorship (multi-mode).
  * Use scripts/run-agent.ts for CLI. Reserve runs every 5 min, sponsorship every 1 min.
+ *
+ * IMPORTANT: Runs startup validation first. In production, fails if required config is missing.
  */
 export async function startAutonomousPaymaster(intervalMs: number = 60000): Promise<void> {
+  // Run startup validation before anything else
+  // This will throw in production if required config is missing
+  runStartupValidation();
+
+  logger.info(`[Aegis] Starting autonomous paymaster on ${getCurrentNetworkName()}`);
+
   await ensureAgentRegistered();
   const { MultiModeAgent } = await import('./multi-mode-agent');
   const { reservePipelineMode, gasSponsorshipMode } = await import('./modes');

@@ -8,11 +8,22 @@
 import { createPublicClient, http, formatEther } from 'viem';
 import { base, baseSepolia } from 'viem/chains';
 import { getPrisma } from '../../db';
-import { DatabaseUnavailableError } from '../../errors';
+import {
+  DatabaseUnavailableError,
+  GasPriceObservationError,
+  BalanceObservationError,
+  ObservationFailedError,
+} from '../../errors';
 import { logger } from '../../logger';
 import { getBalance, readContract } from './blockchain';
 import { getDefaultChainName, getSupportedChainNames, type ChainName } from './chains';
 import type { Observation } from './index';
+
+/**
+ * Whether to use strict observation mode (fail on errors).
+ * Set OBSERVATION_STRICT_MODE=false to degrade gracefully (not recommended for production).
+ */
+const STRICT_MODE = process.env.OBSERVATION_STRICT_MODE !== 'false';
 
 const LOW_GAS_THRESHOLD_ETH = 0.0001;
 const BASE_CHAIN_ID = 8453;
@@ -61,6 +72,7 @@ export async function getOnchainTxCount(
 
 /**
  * Get protocol budget (USD) from ProtocolSponsor.
+ * IMPORTANT: Throws DatabaseUnavailableError on DB failure (fail-closed).
  */
 export async function getProtocolBudget(
   protocolId: string
@@ -70,8 +82,16 @@ export async function getProtocolBudget(
     const proto = await db.protocolSponsor.findUnique({ where: { protocolId } });
     if (!proto) return null;
     return { protocolId, balanceUSD: proto.balanceUSD, totalSpent: proto.totalSpent };
-  } catch {
-    return null;
+  } catch (error) {
+    logger.error('[Sponsorship] getProtocolBudget failed - database unavailable', {
+      error,
+      protocolId,
+      severity: 'CRITICAL',
+      impact: 'Cannot verify protocol budget - sponsorship blocked',
+    });
+    throw new DatabaseUnavailableError(
+      `Cannot fetch protocol budget for ${protocolId}: ${error instanceof Error ? error.message : String(error)}`
+    );
   }
 }
 
@@ -111,11 +131,15 @@ export interface MultiChainBalance {
 /**
  * Get agent wallet ETH and USDC balances for all supported chains (e.g. Base Sepolia and Base Mainnet).
  * Uses AGENT_WALLET_ADDRESS and per-chain USDC addresses (USDC_ADDRESS, USDC_ADDRESS_BASE_MAINNET).
+ *
+ * IMPORTANT: In STRICT_MODE, throws BalanceObservationError if ETH balance cannot be fetched.
+ * USDC balance failures are logged but don't block (USDC is optional).
  */
 export async function getAgentWalletBalances(): Promise<MultiChainBalance[]> {
   const address = process.env.AGENT_WALLET_ADDRESS as `0x${string}` | undefined;
   const chainIdByName: Record<string, number> = { base: BASE_CHAIN_ID, baseSepolia: BASE_SEPOLIA_CHAIN_ID };
   if (!address || address === '0x0000000000000000000000000000000000000000') {
+    logger.warn('[Sponsorship] AGENT_WALLET_ADDRESS not set - returning zero balances');
     return getSupportedChainNames().map((name) => ({
       chainId: chainIdByName[name] ?? BASE_SEPOLIA_CHAIN_ID,
       chainName: name,
@@ -126,17 +150,32 @@ export async function getAgentWalletBalances(): Promise<MultiChainBalance[]> {
 
   const chainNames = getSupportedChainNames();
   const results: MultiChainBalance[] = [];
+  let ethFetchFailed = false;
+  let ethFetchError: Error | undefined;
 
   for (const chainName of chainNames) {
     const chainId = chainIdByName[chainName] ?? BASE_SEPOLIA_CHAIN_ID;
     let ethFormatted = 0;
     let usdcBalance = 0;
+
+    // ETH balance is critical - track failures
     try {
       const ethBalance = await getBalance(address, chainName as ChainName);
       ethFormatted = Number(formatEther(ethBalance));
-    } catch {
-      // Skip chain on error
+    } catch (error) {
+      ethFetchFailed = true;
+      ethFetchError = error instanceof Error ? error : new Error(String(error));
+      logger.error('[Sponsorship] Failed to fetch ETH balance', {
+        address,
+        chainName,
+        chainId,
+        error: ethFetchError.message,
+        severity: 'CRITICAL',
+        impact: 'Cannot determine agent reserves for sponsorship',
+      });
     }
+
+    // USDC balance is optional - log but don't block
     const usdcAddress = getUsdcAddressForChain(chainName);
     if (usdcAddress) {
       try {
@@ -155,11 +194,24 @@ export async function getAgentWalletBalances(): Promise<MultiChainBalance[]> {
           chainName as ChainName
         );
         usdcBalance = Number(balance) / 10 ** Number(decimals);
-      } catch {
-        // USDC read optional
+      } catch (error) {
+        logger.warn('[Sponsorship] Failed to fetch USDC balance (non-critical)', {
+          address,
+          chainName,
+          usdcAddress,
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
     }
     results.push({ chainId, chainName, ETH: ethFormatted, USDC: usdcBalance });
+  }
+
+  // In strict mode, fail if we couldn't fetch ETH balance
+  if (STRICT_MODE && ethFetchFailed) {
+    throw new BalanceObservationError(
+      `Failed to fetch ETH balance for agent wallet: ${ethFetchError?.message ?? 'unknown error'}`,
+      { address }
+    );
   }
 
   return results;
@@ -183,6 +235,8 @@ export async function getAgentWalletBalance(): Promise<{
 
 /**
  * Observe current Base gas price.
+ * IMPORTANT: In STRICT_MODE, throws GasPriceObservationError on failure.
+ * Gas price is critical for sponsorship timing decisions.
  */
 export async function observeGasPrice(): Promise<Observation[]> {
   const client = getBasePublicClient();
@@ -205,7 +259,21 @@ export async function observeGasPrice(): Promise<Observation[]> {
       },
     ];
   } catch (error) {
-    logger.error('[Sponsorship] Error observing gas price', { error });
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error('[Sponsorship] Failed to observe gas price', {
+      error: message,
+      chainId: chain.id,
+      severity: 'HIGH',
+      impact: 'Cannot determine optimal sponsorship timing',
+    });
+
+    if (STRICT_MODE) {
+      throw new GasPriceObservationError(
+        `Failed to observe gas price on chain ${chain.id}: ${message}`
+      );
+    }
+
+    // Degraded mode: return empty (not recommended for production)
     return [];
   }
 }
@@ -426,17 +494,172 @@ export async function observeNewWalletActivations(): Promise<Observation[]> {
   return observations;
 }
 
+export interface ObservationHealthSummary {
+  healthy: boolean;
+  criticalFailures: string[];
+  warnings: string[];
+  observationCounts: {
+    lowGas: number;
+    failedTxs: number;
+    newWallets: number;
+    protocolBudgets: number;
+    reserves: number;
+    gasPrice: number;
+  };
+}
+
 /**
  * Main entry: observe all Base sponsorship opportunities.
+ * In STRICT_MODE, throws on critical observation failures (protocol budgets, reserves, gas price).
+ * Non-critical observations (low gas discovery, failed txs) degrade gracefully.
  */
 export async function observeBaseSponsorshipOpportunities(): Promise<Observation[]> {
-  const [lowGas, failedTxs, newWallets, protocolBudgets, reserves, gasPrice] = await Promise.all([
-    observeLowGasWallets(),
-    observeFailedTransactions(),
-    observeNewWalletActivations(),
-    observeProtocolBudgets(),
-    observeAgentReserves(),
-    observeGasPrice(),
-  ]);
-  return [...lowGas, ...failedTxs, ...newWallets, ...protocolBudgets, ...reserves, ...gasPrice];
+  const results: {
+    lowGas: Observation[];
+    failedTxs: Observation[];
+    newWallets: Observation[];
+    protocolBudgets: Observation[];
+    reserves: Observation[];
+    gasPrice: Observation[];
+  } = {
+    lowGas: [],
+    failedTxs: [],
+    newWallets: [],
+    protocolBudgets: [],
+    reserves: [],
+    gasPrice: [],
+  };
+
+  const errors: { type: string; error: Error; critical: boolean }[] = [];
+
+  // Non-critical observations - degrade gracefully
+  try {
+    results.lowGas = await observeLowGasWallets();
+  } catch (error) {
+    errors.push({ type: 'lowGas', error: error as Error, critical: false });
+    logger.warn('[Sponsorship] Low gas wallet observation failed (degraded)', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  try {
+    results.failedTxs = await observeFailedTransactions();
+  } catch (error) {
+    errors.push({ type: 'failedTxs', error: error as Error, critical: false });
+    logger.warn('[Sponsorship] Failed transactions observation failed (degraded)', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  try {
+    results.newWallets = await observeNewWalletActivations();
+  } catch (error) {
+    errors.push({ type: 'newWallets', error: error as Error, critical: false });
+    logger.warn('[Sponsorship] New wallet observation failed (degraded)', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  // Critical observations - throw in STRICT_MODE
+  try {
+    results.protocolBudgets = await observeProtocolBudgets();
+  } catch (error) {
+    errors.push({ type: 'protocolBudgets', error: error as Error, critical: true });
+    if (STRICT_MODE) throw error;
+    logger.error('[Sponsorship] Protocol budgets observation failed (CRITICAL)', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  try {
+    results.reserves = await observeAgentReserves();
+  } catch (error) {
+    errors.push({ type: 'reserves', error: error as Error, critical: true });
+    if (STRICT_MODE) throw error;
+    logger.error('[Sponsorship] Agent reserves observation failed (CRITICAL)', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  try {
+    results.gasPrice = await observeGasPrice();
+  } catch (error) {
+    errors.push({ type: 'gasPrice', error: error as Error, critical: true });
+    if (STRICT_MODE) throw error;
+    logger.error('[Sponsorship] Gas price observation failed (CRITICAL)', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  // Log observation summary
+  logger.info('[Sponsorship] Observation cycle complete', {
+    counts: {
+      lowGas: results.lowGas.length,
+      failedTxs: results.failedTxs.length,
+      newWallets: results.newWallets.length,
+      protocolBudgets: results.protocolBudgets.length,
+      reserves: results.reserves.length,
+      gasPrice: results.gasPrice.length,
+    },
+    errors: errors.length,
+    criticalErrors: errors.filter((e) => e.critical).length,
+  });
+
+  return [
+    ...results.lowGas,
+    ...results.failedTxs,
+    ...results.newWallets,
+    ...results.protocolBudgets,
+    ...results.reserves,
+    ...results.gasPrice,
+  ];
+}
+
+/**
+ * Get observation health summary without running observations.
+ * Useful for health checks and dashboard status.
+ */
+export async function getObservationHealthStatus(): Promise<ObservationHealthSummary> {
+  const criticalFailures: string[] = [];
+  const warnings: string[] = [];
+  const counts = {
+    lowGas: 0,
+    failedTxs: 0,
+    newWallets: 0,
+    protocolBudgets: 0,
+    reserves: 0,
+    gasPrice: 0,
+  };
+
+  // Test critical observations
+  try {
+    const budgets = await getProtocolBudgets();
+    counts.protocolBudgets = budgets.length;
+  } catch (error) {
+    criticalFailures.push(`protocolBudgets: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  try {
+    const balance = await getAgentWalletBalance();
+    counts.reserves = 1;
+    if (balance.ETH === 0) {
+      warnings.push('Agent ETH balance is 0');
+    }
+  } catch (error) {
+    criticalFailures.push(`reserves: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  try {
+    const gasObs = await observeGasPrice();
+    counts.gasPrice = gasObs.length;
+  } catch (error) {
+    criticalFailures.push(`gasPrice: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  return {
+    healthy: criticalFailures.length === 0,
+    criticalFailures,
+    warnings,
+    observationCounts: counts,
+  };
 }

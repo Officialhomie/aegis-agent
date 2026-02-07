@@ -8,8 +8,10 @@
 import { logger } from '../../logger';
 import { getStateStore } from '../state-store';
 import { getAgentWalletBalance } from '../observe/sponsorship';
+import { checkBundlerHealth } from './bundler-client';
 
 const RESERVE_CRITICAL_ETH = Number(process.env.RESERVE_CRITICAL_ETH) || 0.05;
+const BUNDLER_HEALTH_CHECK_ENABLED = process.env.BUNDLER_HEALTH_CHECK_ENABLED !== 'false';
 
 const CIRCUIT_BREAKER_KEY_PREFIX = 'aegis:circuit_breaker';
 
@@ -138,16 +140,85 @@ export class CircuitBreaker {
     }
   }
 
-  /** Optional: check health before execution (reserves, etc.). Returns { healthy: true } or { healthy: false, reason }. */
-  async checkHealthBeforeExecution(): Promise<{ healthy: boolean; reason?: string }> {
+  /**
+   * Check health before execution (reserves, bundler, circuit state).
+   * Returns { healthy: true } or { healthy: false, reason }.
+   */
+  async checkHealthBeforeExecution(): Promise<{
+    healthy: boolean;
+    reason?: string;
+    details?: {
+      reserveHealth: boolean;
+      bundlerHealth: boolean;
+      circuitState: State;
+    };
+  }> {
+    const details = {
+      reserveHealth: true,
+      bundlerHealth: true,
+      circuitState: this.getState(),
+    };
+
+    // Check circuit breaker state first
+    if (details.circuitState === 'OPEN') {
+      return {
+        healthy: false,
+        reason: 'Circuit breaker OPEN',
+        details,
+      };
+    }
+
+    // Check reserve balance
     const reserves = await getAgentWalletBalance();
     if (reserves.ETH < RESERVE_CRITICAL_ETH) {
-      return { healthy: false, reason: 'Reserve below critical threshold' };
+      details.reserveHealth = false;
+      return {
+        healthy: false,
+        reason: `Reserve below critical threshold (${reserves.ETH} ETH < ${RESERVE_CRITICAL_ETH} ETH)`,
+        details,
+      };
     }
-    if (this.getState() === 'OPEN') {
-      return { healthy: false, reason: 'Circuit breaker OPEN' };
+
+    // Check bundler health if enabled
+    if (BUNDLER_HEALTH_CHECK_ENABLED) {
+      const bundlerStatus = await checkBundlerHealth();
+      if (!bundlerStatus.available) {
+        details.bundlerHealth = false;
+        logger.warn('[CircuitBreaker] Bundler health check failed', {
+          error: bundlerStatus.error,
+          latencyMs: bundlerStatus.latencyMs,
+        });
+        return {
+          healthy: false,
+          reason: `Bundler unavailable: ${bundlerStatus.error}`,
+          details,
+        };
+      }
+
+      // Log if bundler latency is high
+      if (bundlerStatus.latencyMs && bundlerStatus.latencyMs > 5000) {
+        logger.warn('[CircuitBreaker] Bundler latency is high', {
+          latencyMs: bundlerStatus.latencyMs,
+        });
+      }
     }
-    return { healthy: true };
+
+    return { healthy: true, details };
+  }
+
+  /**
+   * Check bundler health specifically.
+   * Use when you need to verify bundler availability without full health check.
+   */
+  async checkBundlerAvailability(): Promise<{
+    available: boolean;
+    error?: string;
+    latencyMs?: number;
+  }> {
+    if (!BUNDLER_HEALTH_CHECK_ENABLED) {
+      return { available: true };
+    }
+    return checkBundlerHealth();
   }
 
   /** Execute fn only if circuit allows; records success/failure based on result. Persists state when REDIS_URL is set. */
