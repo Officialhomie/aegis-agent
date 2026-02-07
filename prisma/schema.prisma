@@ -244,18 +244,84 @@ model ReputationAttestation {
 // ============================================
 
 model ProtocolSponsor {
-  id                String   @id @default(cuid())
-  protocolId        String   @unique
-  name              String
-  balanceUSD        Float    @default(0)
-  totalSpent        Float    @default(0)
-  sponsorshipCount  Int      @default(0)
+  id                   String   @id @default(cuid())
+  protocolId           String   @unique
+  name                 String
+  balanceUSD           Float    @default(0)
+  totalSpent           Float    @default(0)
+  sponsorshipCount     Int      @default(0)
   whitelistedContracts String[] // Contract addresses allowed for this protocol
-  tier              String   @default("bronze") // bronze, silver, gold
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  tier                 String   @default("bronze") // bronze, silver, gold
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  // Relations
+  deposits       DepositTransaction[]
+  approvedAgents ApprovedAgent[]
 
   @@index([protocolId])
+}
+
+// ============================================
+// DEPOSIT TRANSACTIONS (On-chain USDC verification)
+// ============================================
+
+model DepositTransaction {
+  id          String   @id @default(cuid())
+  protocolId  String
+  protocol    ProtocolSponsor @relation(fields: [protocolId], references: [protocolId])
+
+  // Transaction details
+  txHash      String   @unique
+  amount      Float    // USD value of deposit
+  tokenAmount BigInt   // Raw token amount (e.g., USDC with 6 decimals)
+  tokenSymbol String   @default("USDC")
+  chainId     Int
+
+  // Verification status
+  confirmed   Boolean  @default(false)
+  blockNumber BigInt?
+  confirmedAt DateTime?
+
+  // Sender info
+  senderAddress String
+
+  createdAt   DateTime @default(now())
+
+  @@index([protocolId])
+  @@index([txHash])
+  @@index([senderAddress])
+  @@index([confirmed])
+}
+
+// ============================================
+// APPROVED AGENTS (Agent-specific eligibility)
+// ============================================
+
+model ApprovedAgent {
+  id             String    @id @default(cuid())
+  protocolId     String
+  protocol       ProtocolSponsor @relation(fields: [protocolId], references: [protocolId])
+
+  // Agent identification
+  agentAddress   String
+  agentName      String?
+
+  // Approval details
+  approvedBy     String    // Admin address who approved
+  approvedAt     DateTime  @default(now())
+  revokedAt      DateTime?
+
+  // Limits
+  maxDailyBudget Float     @default(10) // USD limit per day
+
+  // Status
+  isActive       Boolean   @default(true)
+
+  @@unique([protocolId, agentAddress])
+  @@index([protocolId])
+  @@index([agentAddress])
+  @@index([isActive])
 }
 
 model SponsorshipRecord {
