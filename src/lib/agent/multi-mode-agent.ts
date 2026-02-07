@@ -88,6 +88,14 @@ export class MultiModeAgent {
     this.timers.set('social-transparency', socialTimer);
     logger.info('[MultiMode] Started social/transparency with skills', { intervalMs: SOCIAL_TRANSPARENCY_INTERVAL_MS });
 
+    const { processQueue } = await import('./queue/queue-consumer');
+    const queueTimer = setInterval(() => {
+      if (this.draining) return;
+      processQueue().catch((err) => logger.warn('[MultiMode] Queue consumer error', { error: err }));
+    }, 30_000);
+    this.timers.set('queue-consumer', queueTimer);
+    logger.info('[MultiMode] Started queue consumer', { intervalMs: 30_000 });
+
     const shutdown = async () => {
       this.draining = true;
       for (const [, t] of this.timers) clearInterval(t);

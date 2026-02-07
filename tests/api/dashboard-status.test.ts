@@ -22,7 +22,7 @@ describe('GET /api/dashboard/status', () => {
       method: 'env_execute',
     });
     const { GET } = await import('../../src/app/api/dashboard/status/route');
-    const res = await GET(new Request('http://localhost/api/dashboard/status', { method: 'GET' }));
+    const res = await GET();
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.mode).toBe('LIVE');
@@ -38,7 +38,7 @@ describe('GET /api/dashboard/status', () => {
       method: 'keystore',
     });
     const { GET } = await import('../../src/app/api/dashboard/status/route');
-    const res = await GET(new Request('http://localhost/api/dashboard/status', { method: 'GET' }));
+    const res = await GET();
     const json = await res.json();
     expect(json.canSign).toBe(true);
     expect(json.hasWallet).toBe(true);
@@ -52,7 +52,7 @@ describe('GET /api/dashboard/status', () => {
       method: 'none',
     });
     const { GET } = await import('../../src/app/api/dashboard/status/route');
-    const res = await GET(new Request('http://localhost/api/dashboard/status', { method: 'GET' }));
+    const res = await GET();
     const json = await res.json();
     expect(json.canSign).toBe(false);
     expect(json.hasWallet).toBe(false);
@@ -64,7 +64,7 @@ describe('GET /api/dashboard/status', () => {
       throw new Error('KeyGuard not initialized. Call initializeKeyGuard() first.');
     });
     const { GET } = await import('../../src/app/api/dashboard/status/route');
-    const res = await GET(new Request('http://localhost/api/dashboard/status', { method: 'GET' }));
+    const res = await GET();
     expect(res.status).toBe(500);
     const json = await res.json();
     expect(json.error).toBe('KeyGuard not initialized');
@@ -81,7 +81,7 @@ describe('GET /api/dashboard/status', () => {
       address: '0x1234567890123456789012345678901234567890',
     });
     const { GET } = await import('../../src/app/api/dashboard/status/route');
-    const res = await GET(new Request('http://localhost/api/dashboard/status', { method: 'GET' }));
+    const res = await GET();
     const json = await res.json();
     expect(json.address).toBeUndefined();
   });

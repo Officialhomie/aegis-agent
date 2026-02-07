@@ -275,4 +275,18 @@ export function registerDefaultSkills(): void {
     registerSkill(reputationAttestorSkill);
     registerSkill(reputationAttestorBatchSkill);
   });
+
+  import('../queue/queue-consumer').then(({ processQueue }) => {
+    registerSkill({
+      name: 'queue-consumer',
+      description: 'Drains sponsorship request queue: dequeue, verify signature, validate policy, sponsor, update status',
+      trigger: 'schedule',
+      interval: 30_000,
+      enabled: true,
+      execute: async () => {
+        await processQueue();
+        return { success: true, summary: 'Queue consumer run completed' };
+      },
+    });
+  });
 }
