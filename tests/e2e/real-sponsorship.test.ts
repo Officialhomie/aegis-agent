@@ -22,9 +22,11 @@ import {
   preparePaymasterSponsorship,
   getBundlerHealthStatus,
   signDecision,
+  sponsorTransaction,
 } from '../../src/lib/agent/execute/paymaster';
 import { validateStartupConfig, isTestnet } from '../../src/lib/startup-validation';
 import { getAgentWalletBalance } from '../../src/lib/agent/observe/sponsorship';
+import { getPrisma } from '../../src/lib/db';
 import type { Decision } from '../../src/lib/agent/reason/schemas';
 
 const E2E_ENABLED = process.env.E2E_TEST_ENABLED === 'true';
@@ -231,6 +233,69 @@ describe.skipIf(!E2E_ENABLED)('E2E Sponsorship Flow', () => {
       // The test passes if we get a response (success or configured error)
       expect(result).toBeDefined();
       expect(typeof result.paymasterReady).toBe('boolean');
+    });
+  });
+
+  describe('Post-Sponsorship Verification', () => {
+    it.skipIf(!isTestnet())('should verify budget deducted, on-chain log, and SponsorshipRecord after full sponsorship', async () => {
+      if (!process.env.BUNDLER_RPC_URL || !process.env.AGENT_WALLET_ADDRESS) {
+        console.warn('BUNDLER_RPC_URL or AGENT_WALLET_ADDRESS not set, skipping post-sponsorship verification');
+        return;
+      }
+
+      const balance = await getAgentWalletBalance();
+      if (balance.ETH < 0.001) {
+        console.warn('Insufficient ETH for sponsorship test:', balance.ETH);
+        return;
+      }
+
+      const prisma = getPrisma();
+      const protocolId = 'test-protocol';
+
+      const protocolBefore = await prisma.protocolSponsor.findUnique({
+        where: { protocolId },
+      });
+      if (!protocolBefore || protocolBefore.balanceUSD < 0.01) {
+        console.warn('Protocol test-protocol not found or insufficient balance for post-sponsorship verification');
+        return;
+      }
+
+      const decision: Decision = {
+        action: 'SPONSOR_TRANSACTION',
+        confidence: 0.9,
+        reasoning: 'E2E post-sponsorship verification test',
+        parameters: {
+          agentWallet: process.env.AGENT_WALLET_ADDRESS,
+          protocolId,
+          estimatedCostUSD: 0.01,
+          maxGasLimit: 100000,
+        },
+      };
+
+      const result = await sponsorTransaction(decision, 'LIVE');
+
+      expect(result).toBeDefined();
+      expect(result.success).toBe(true);
+
+      const txHash = result.transactionHash ?? (result as { sponsorshipHash?: string }).sponsorshipHash;
+      expect(txHash).toBeDefined();
+      expect(txHash).toMatch(/^0x[a-fA-F0-9]+$/);
+
+      const record = await prisma.sponsorshipRecord.findFirst({
+        where: { protocolId },
+        orderBy: { createdAt: 'desc' },
+      });
+      expect(record).not.toBeNull();
+      expect(record!.decisionHash).toBeDefined();
+      expect(record!.txHash).toBeDefined();
+      expect(record!.estimatedCostUSD).toBe(0.01);
+
+      const protocolAfter = await prisma.protocolSponsor.findUnique({
+        where: { protocolId },
+      });
+      expect(protocolAfter).not.toBeNull();
+      expect(protocolAfter!.balanceUSD).toBeLessThan(protocolBefore!.balanceUSD);
+      expect(protocolAfter!.sponsorshipCount).toBe(protocolBefore!.sponsorshipCount + 1);
     });
   });
 });
