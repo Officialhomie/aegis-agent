@@ -13,6 +13,7 @@ import { runFullHeartbeat } from './social/heartbeat';
 import { maybePostFarcasterUpdate } from './transparency/farcaster-updates';
 import { observeGasPrice } from './observe';
 import { getAdaptiveGasSponsorshipConfig } from './modes/gas-sponsorship';
+import { getReservePipelineConfig } from './modes/reserve-pipeline';
 import { checkAndUpdateEmergencyMode } from './emergency';
 import { registerDefaultSkills, executeEventSkills } from './skills';
 import type { AgentMode, AgentModeContext } from './types';
@@ -118,6 +119,8 @@ export class MultiModeAgent {
     let config = baseConfig;
     if (key === 'gas-sponsorship') {
       config = await getAdaptiveGasSponsorshipConfig();
+    } else if (key === 'reserve-pipeline') {
+      config = getReservePipelineConfig();
     }
 
     const run = async () => {

@@ -4,6 +4,8 @@
 
 import { observeReservePipeline } from '../observe/reserve-pipeline';
 import { reasonAboutReserves } from '../reason/reserve-reasoning';
+import { getKeyGuardState } from '../../key-guard';
+import { logger } from '../../logger';
 import type { AgentMode } from '../types';
 
 export const reservePipelineMode: AgentMode = {
@@ -31,3 +33,20 @@ export const reservePipelineMode: AgentMode = {
     });
   },
 };
+
+/**
+ * Get config respecting KeyGuard state - cannot run LIVE without signing capability.
+ */
+export function getReservePipelineConfig(): AgentMode['config'] {
+  const keyGuardState = getKeyGuardState();
+  const effectiveMode = keyGuardState.mode as 'LIVE' | 'SIMULATION' | 'READONLY';
+
+  if (!keyGuardState.canSign && effectiveMode === 'LIVE') {
+    logger.warn('[ReservePipeline] LIVE mode requested but no signing key, forcing SIMULATION');
+  }
+
+  return {
+    ...reservePipelineMode.config,
+    executionMode: effectiveMode,
+  };
+}

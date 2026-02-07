@@ -2,7 +2,12 @@
  * Reserve Pipeline mode: definition, onStart, observe/reason hooks.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+const mockGetKeyGuardState = vi.hoisted(() => vi.fn());
+vi.mock('../../../src/lib/key-guard', () => ({
+  getKeyGuardState: () => mockGetKeyGuardState(),
+}));
 
 vi.mock('../../../src/lib/agent/observe/reserve-pipeline', () => ({
   observeReservePipeline: vi.fn().mockResolvedValue([{ id: 'obs-1', timestamp: new Date(), source: 'api', data: {} }]),
@@ -27,9 +32,17 @@ vi.mock('../../../src/lib/agent/observe/sponsorship', () => ({
   getAgentWalletBalance: vi.fn().mockResolvedValue({ ETH: 0.5, USDC: 200, chainId: 8453 }),
 }));
 
-import { reservePipelineMode } from '../../../src/lib/agent/modes/reserve-pipeline';
+import { reservePipelineMode, getReservePipelineConfig } from '../../../src/lib/agent/modes/reserve-pipeline';
 
 describe('Reserve Pipeline Mode', () => {
+  beforeEach(() => {
+    mockGetKeyGuardState.mockReturnValue({
+      canSign: true,
+      method: 'env_execute',
+      mode: 'LIVE',
+    });
+  });
+
   it('has correct id and name', () => {
     expect(reservePipelineMode.id).toBe('reserve-pipeline');
     expect(reservePipelineMode.name).toBe('Reserve Pipeline');
@@ -45,5 +58,21 @@ describe('Reserve Pipeline Mode', () => {
     mockSet.mockResolvedValue(undefined);
     await reservePipelineMode.onStart!();
     expect(mockSet).toHaveBeenCalled();
+  });
+
+  it('getReservePipelineConfig returns LIVE executionMode when KeyGuard canSign is true', () => {
+    const config = getReservePipelineConfig();
+    expect(config.executionMode).toBe('LIVE');
+    expect(config.mode).toBe('reserve-pipeline');
+  });
+
+  it('getReservePipelineConfig returns SIMULATION when KeyGuard canSign is false', () => {
+    mockGetKeyGuardState.mockReturnValue({
+      canSign: false,
+      method: 'none',
+      mode: 'SIMULATION',
+    });
+    const config = getReservePipelineConfig();
+    expect(config.executionMode).toBe('SIMULATION');
   });
 });
