@@ -22,6 +22,7 @@ const MAX_SPONSORSHIPS_PER_PROTOCOL_MINUTE = getConfigNumber('MAX_SPONSORSHIPS_P
 const MAX_SPONSORSHIP_COST_USD = getConfigNumber('MAX_SPONSORSHIP_COST_USD', 0.5, 0.01, 100);
 const GAS_PRICE_MAX_GWEI = getConfigNumber('GAS_PRICE_MAX_GWEI', 2, 0.1, 1000);
 const MIN_HISTORICAL_TXS = 5;
+const REQUIRE_AGENT_APPROVAL = process.env.REQUIRE_AGENT_APPROVAL === 'true';
 
 function isSponsorshipDecision(decision: Decision): decision is Decision & { action: 'SPONSOR_TRANSACTION'; parameters: SponsorParams } {
   return decision.action === 'SPONSOR_TRANSACTION' && decision.parameters != null;
@@ -61,6 +62,99 @@ export const sponsorshipPolicyRules: PolicyRule[] = [
           : `Agent has ${txCount} historical txs (min ${MIN_HISTORICAL_TXS} required)`,
         severity: 'ERROR',
       };
+    },
+  },
+  {
+    name: 'approved-agent-check',
+    description: 'Agent must be approved by protocol for sponsorship',
+    severity: 'ERROR',
+    validate: async (decision): Promise<RuleResult> => {
+      if (!isSponsorshipDecision(decision)) {
+        return { ruleName: 'approved-agent-check', passed: true, message: 'N/A', severity: 'ERROR' };
+      }
+
+      // Skip check if agent approval not required
+      if (!REQUIRE_AGENT_APPROVAL) {
+        return {
+          ruleName: 'approved-agent-check',
+          passed: true,
+          message: 'Agent approval not required (REQUIRE_AGENT_APPROVAL=false)',
+          severity: 'ERROR',
+        };
+      }
+
+      const agentAddress = decision.parameters.agentWallet.toLowerCase();
+      const protocolId = decision.parameters.protocolId;
+
+      try {
+        const { getPrisma } = await import('../../db');
+        const db = getPrisma();
+
+        // Check if agent is approved for this protocol
+        const approval = await db.approvedAgent.findUnique({
+          where: {
+            protocolId_agentAddress: {
+              protocolId,
+              agentAddress,
+            },
+          },
+        });
+
+        if (!approval) {
+          return {
+            ruleName: 'approved-agent-check',
+            passed: false,
+            message: `Agent ${agentAddress.slice(0, 10)}... not approved for protocol ${protocolId}`,
+            severity: 'ERROR',
+          };
+        }
+
+        if (!approval.isActive) {
+          return {
+            ruleName: 'approved-agent-check',
+            passed: false,
+            message: `Agent ${agentAddress.slice(0, 10)}... approval revoked for protocol ${protocolId}`,
+            severity: 'ERROR',
+          };
+        }
+
+        // Check daily budget limit for this agent
+        const estimatedCost = decision.parameters.estimatedCostUSD ?? 0;
+        const store = await getStateStore();
+        const dailyKey = `aegis:agent:${agentAddress}:${protocolId}:daily_spend`;
+        const rawSpend = await store.get(dailyKey);
+        const currentSpend = rawSpend ? parseFloat(rawSpend) : 0;
+
+        if (currentSpend + estimatedCost > approval.maxDailyBudget) {
+          return {
+            ruleName: 'approved-agent-check',
+            passed: false,
+            message: `Agent daily budget exceeded ($${(currentSpend + estimatedCost).toFixed(2)} > $${approval.maxDailyBudget} limit)`,
+            severity: 'ERROR',
+          };
+        }
+
+        return {
+          ruleName: 'approved-agent-check',
+          passed: true,
+          message: `Agent ${agentAddress.slice(0, 10)}... approved (budget: $${(approval.maxDailyBudget - currentSpend).toFixed(2)} remaining)`,
+          severity: 'ERROR',
+        };
+      } catch (error) {
+        logger.error('[Policy] Cannot verify agent approval - database unavailable', {
+          error,
+          protocolId,
+          agentAddress,
+          severity: 'CRITICAL',
+          securityImpact: 'FAIL CLOSED - rejecting transaction',
+        });
+        return {
+          ruleName: 'approved-agent-check',
+          passed: false,
+          message: 'Cannot verify agent approval - database unavailable (failing CLOSED for security)',
+          severity: 'ERROR',
+        };
+      }
     },
   },
   {
