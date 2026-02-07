@@ -19,7 +19,9 @@ import { postSponsorshipProof } from './social/farcaster';
 import { postSponsorshipToBotchan, postReserveSwapToBotchan } from './social/botchan';
 import {
   getIdentityRegistryAddress,
+  getAgentRegistryString,
   registerWithRegistry,
+  setAgentURI,
   uploadToIPFS,
   buildRegistrationFile,
 } from './identity';
@@ -188,6 +190,7 @@ export async function runSponsorshipCycle(
 
 /**
  * Ensure agent is registered on ERC-8004 Identity Registry when configured.
+ * Two-step flow: register(uri), then setAgentURI(agentId, uriWithBackReference) so the agent is discoverable.
  * Skips when no active agent, agent already has onChainId, or registry not configured.
  */
 export async function ensureAgentRegistered(): Promise<void> {
@@ -198,15 +201,33 @@ export async function ensureAgentRegistered(): Promise<void> {
     const agent = await prisma.agent.findFirst({ where: { isActive: true } });
     if (!agent || agent.onChainId) return;
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? process.env.AEGIS_DASHBOARD_URL ?? '';
+    const image =
+      process.env.AEGIS_AGENT_IMAGE_URL?.trim() ||
+      'https://imgproxy.divecdn.com/-OwYxUXWv0C9nSm3eW6E5k5GJyU0wZ8F1_zYkfTrS5k/g:ce/rs:fill:1200:675:1/Z3M6Ly9kaXZlc2l0ZS1zdG9yYWdlL2RpdmVpbWFnZS9HZXR0eUltYWdlcy0yMjE2MTkwODA5LmpwZw==.webp';
     const registrationFile = buildRegistrationFile({
       name: agent.name,
       description: agent.description ?? 'Aegis - Autonomous Gas Sponsorship Agent',
+      image,
       webEndpoint: baseUrl ? `${baseUrl.replace(/\/$/, '')}` : undefined,
       a2aEndpoint: baseUrl ? `${baseUrl.replace(/\/$/, '')}/.well-known/agent-card.json` : undefined,
       x402Support: true,
     });
     const uri = await uploadToIPFS(registrationFile);
     const { agentId, txHash } = await registerWithRegistry(uri);
+    const agentRegistry = getAgentRegistryString();
+    if (agentRegistry) {
+      const updatedFile = buildRegistrationFile({
+        name: agent.name,
+        description: agent.description ?? 'Aegis - Autonomous Gas Sponsorship Agent',
+        image,
+        webEndpoint: baseUrl ? `${baseUrl.replace(/\/$/, '')}` : undefined,
+        a2aEndpoint: baseUrl ? `${baseUrl.replace(/\/$/, '')}/.well-known/agent-card.json` : undefined,
+        x402Support: true,
+        existingRegistration: { agentId: Number(agentId), agentRegistry },
+      });
+      const uriWithBackRef = await uploadToIPFS(updatedFile);
+      await setAgentURI(agentId, uriWithBackRef);
+    }
     await prisma.agent.update({
       where: { id: agent.id },
       data: { onChainId: agentId.toString(), walletAddress: process.env.AGENT_WALLET_ADDRESS ?? undefined },
