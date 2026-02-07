@@ -11,7 +11,7 @@ import {
   TradeAction,
 } from '@coinbase/cdp-agentkit-core';
 import { createPublicClient, createWalletClient, http, parseAbiItem } from 'viem';
-import { baseSepolia } from 'viem/chains';
+import { base, baseSepolia } from 'viem/chains';
 
 import { getKeystoreAccount } from '../../keystore';
 import { logger } from '../../logger';
@@ -139,12 +139,20 @@ export async function executeWithAgentKit(
 }
 
 function getSimulationClient() {
-  const rpcUrl = process.env.RPC_URL_BASE_SEPOLIA ?? process.env.RPC_URL_84532;
+  const networkId = process.env.AGENT_NETWORK_ID ?? 'base-sepolia';
+  const isBaseMainnet = networkId === 'base';
+  const rpcUrl = isBaseMainnet
+    ? (process.env.RPC_URL_BASE ?? process.env.RPC_URL_8453)
+    : (process.env.RPC_URL_BASE_SEPOLIA ?? process.env.RPC_URL_84532);
   if (!rpcUrl?.trim()) {
-    throw new Error('RPC_URL_BASE_SEPOLIA or RPC_URL_84532 must be configured for simulation');
+    throw new Error(
+      isBaseMainnet
+        ? 'RPC_URL_BASE or RPC_URL_8453 must be configured for simulation'
+        : 'RPC_URL_BASE_SEPOLIA or RPC_URL_84532 must be configured for simulation'
+    );
   }
   return createPublicClient({
-    chain: baseSepolia,
+    chain: isBaseMainnet ? base : baseSepolia,
     transport: http(rpcUrl),
   });
 }
@@ -460,17 +468,27 @@ async function executeContractCall(
     };
   }
 
-  const rpcUrl = process.env.RPC_URL_BASE_SEPOLIA ?? process.env.RPC_URL_84532;
+  const networkId = process.env.AGENT_NETWORK_ID ?? 'base-sepolia';
+  const isBaseMainnet = networkId === 'base';
+  const chain = isBaseMainnet ? base : baseSepolia;
+  const rpcUrl = isBaseMainnet
+    ? (process.env.RPC_URL_BASE ?? process.env.RPC_URL_8453)
+    : (process.env.RPC_URL_BASE_SEPOLIA ?? process.env.RPC_URL_84532);
   if (!rpcUrl) {
-    return { success: false, error: 'RPC URL not configured for EXECUTE' };
+    return {
+      success: false,
+      error: isBaseMainnet
+        ? 'RPC_URL_BASE or RPC_URL_8453 must be configured for EXECUTE on Base mainnet'
+        : 'RPC_URL_BASE_SEPOLIA or RPC_URL_84532 must be configured for EXECUTE',
+    };
   }
   const client = createWalletClient({
     account,
-    chain: baseSepolia,
+    chain,
     transport: http(rpcUrl),
   });
   const publicClient = createPublicClient({
-    chain: baseSepolia,
+    chain,
     transport: http(rpcUrl),
   });
 
