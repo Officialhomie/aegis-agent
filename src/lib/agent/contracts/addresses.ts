@@ -15,6 +15,11 @@ export const CONTRACTS = {
       positionManager: "0x27F971cb582BF9E50F397e4d29a5C7A34f11faA2",
       permit2: "0x000000000022D473030F116dDEE9F6B43aC78BA3",
     },
+    aegis: {
+      // AegisActivityLogger - deployed on testnet
+      // Set via ACTIVITY_LOGGER_ADDRESS env var or update after deployment
+      activityLogger: process.env.ACTIVITY_LOGGER_ADDRESS_TESTNET ?? null,
+    },
   },
   base: {
     USDC: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
@@ -31,5 +36,35 @@ export const CONTRACTS = {
       pool: "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5",
       wethGateway: "0xa0d9C1E9E48Ca30c8d8C3B5D69FF5dc1f6DFfC24",
     },
+    aegis: {
+      // AegisActivityLogger - deployed on Base mainnet
+      // IMPORTANT: Update after deploying to mainnet or set ACTIVITY_LOGGER_ADDRESS env var
+      // Deployment command: pnpm deploy:activity-logger
+      activityLogger: process.env.ACTIVITY_LOGGER_ADDRESS ?? null,
+    },
   },
 } as const;
+
+/**
+ * Get the activity logger address for the current network.
+ * Falls back to env var ACTIVITY_LOGGER_ADDRESS.
+ */
+export function getActivityLoggerAddress(network: 'base' | 'baseSepolia' = 'base'): string | null {
+  const envAddr = process.env.ACTIVITY_LOGGER_ADDRESS;
+  if (envAddr) return envAddr;
+
+  const contracts = network === 'base' ? CONTRACTS.base : CONTRACTS.baseSepolia;
+  return contracts.aegis?.activityLogger ?? null;
+}
+
+/**
+ * Get the entry point address for the current network.
+ * ERC-4337 EntryPoint v0.7 is the same on all chains.
+ */
+export function getEntryPointAddress(network: 'base' | 'baseSepolia' = 'base'): string {
+  const envAddr = process.env.ENTRY_POINT_ADDRESS;
+  if (envAddr) return envAddr;
+
+  const contracts = network === 'base' ? CONTRACTS.base : CONTRACTS.baseSepolia;
+  return contracts.ENTRY_POINT;
+}
