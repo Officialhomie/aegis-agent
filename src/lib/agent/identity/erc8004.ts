@@ -6,7 +6,7 @@
  */
 
 import { createPublicClient, createWalletClient, http, decodeEventLog } from 'viem';
-import { baseSepolia, mainnet, sepolia } from 'viem/chains';
+import { base, baseSepolia, mainnet, sepolia } from 'viem/chains';
 import { getPrisma } from '../../db';
 import { getKeystoreAccount } from '../../keystore';
 
@@ -17,6 +17,7 @@ import { logger } from '../../logger';
 function getERC8004Chain() {
   const network = (process.env.ERC8004_NETWORK ?? 'sepolia') as ERC8004Network;
   if (network === 'mainnet') return mainnet;
+  if (network === 'base') return base;
   if (network === 'base-sepolia') return baseSepolia;
   return sepolia;
 }
@@ -36,6 +37,7 @@ function getRpcUrl(): string | undefined {
   if (url) return url;
   const network = process.env.ERC8004_NETWORK ?? 'sepolia';
   if (network === 'mainnet') return process.env.RPC_URL_ETHEREUM;
+  if (network === 'base') return process.env.RPC_URL_BASE ?? process.env.RPC_URL_8453;
   if (network === 'base-sepolia') return process.env.RPC_URL_BASE_SEPOLIA ?? process.env.RPC_URL_84532;
   return process.env.RPC_URL_SEPOLIA ?? process.env.RPC_URL_ETHEREUM;
 }
@@ -66,6 +68,7 @@ export interface AgentRegistrationFile {
     agentRegistry: string;
   }>;
   supportedTrust: ('reputation' | 'crypto-economic' | 'tee-attestation')[];
+  updatedAt?: number;
 }
 
 /** Build a spec-compliant registration file for IPFS / 8004.org. */
@@ -77,10 +80,12 @@ export function buildRegistrationFile(opts: {
   a2aEndpoint?: string;
   x402Support?: boolean;
   existingRegistration?: { agentId: number; agentRegistry: string };
+  updatedAt?: number;
 }): AgentRegistrationFile {
   const services: AgentRegistrationFile['services'] = [];
   if (opts.webEndpoint) services.push({ name: 'web', endpoint: opts.webEndpoint });
   if (opts.a2aEndpoint) services.push({ name: 'A2A', endpoint: opts.a2aEndpoint, version: '0.3.0' });
+  const updatedAt = opts.updatedAt ?? Math.floor(Date.now() / 1000);
   return {
     type: 'https://eips.ethereum.org/EIPS/eip-8004#registration-v1',
     name: opts.name,
@@ -91,46 +96,84 @@ export function buildRegistrationFile(opts: {
     active: true,
     registrations: opts.existingRegistration ? [opts.existingRegistration] : [],
     supportedTrust: ['reputation'],
+    updatedAt,
   };
 }
 
+/** Returns the agent registry namespace string (eip155:chainId:identityRegistry) for the current ERC8004_NETWORK. */
+export function getAgentRegistryString(): string | undefined {
+  const registry = getIdentityRegistryAddress();
+  if (!registry) return undefined;
+  const chain = getERC8004Chain();
+  return `eip155:${chain.id}:${registry}`;
+}
+
 /**
- * Upload agent metadata to IPFS using multipart/form-data (IPFS HTTP API /api/v0/add).
- * Validates CID in response. Throws on failure when NODE_ENV=production.
+ * Upload agent metadata to IPFS. Prefers Pinata (PINATA_JWT), then legacy IPFS gateway, then data: URI in dev only.
+ * Throws on failure when NODE_ENV=production and no valid upload path.
  */
 export async function uploadToIPFS(metadata: AgentMetadata | AgentRegistrationFile): Promise<string> {
   const dataUri = `data:application/json,${encodeURIComponent(JSON.stringify(metadata))}`;
-  const gateway = process.env.IPFS_GATEWAY_URL;
-  if (!gateway) {
-    if (process.env.NODE_ENV === 'production') {
-      throw new Error('IPFS_GATEWAY_URL not configured - cannot use data: URI in production');
+  const pinataJwt = process.env.PINATA_JWT?.trim();
+  const gateway = process.env.IPFS_GATEWAY_URL?.trim();
+
+  if (pinataJwt) {
+    try {
+      const blob = new Blob([JSON.stringify(metadata)], { type: 'application/json' });
+      const formData = new FormData();
+      formData.append('file', blob, 'registration.json');
+      const res = await fetch('https://api.pinata.cloud/pinning/pinFileToIPFS', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${pinataJwt}` },
+        body: formData,
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`Pinata pin failed: ${res.status} ${text}`);
+      }
+      const data = (await res.json()) as { IpfsHash?: string };
+      const cid = data.IpfsHash;
+      if (!cid || typeof cid !== 'string' || cid.length < 10) {
+        throw new Error('Pinata response missing valid IpfsHash');
+      }
+      return `ipfs://${cid}`;
+    } catch (err) {
+      if (process.env.NODE_ENV === 'production') throw err;
+      return dataUri;
     }
-    return dataUri;
   }
-  try {
-    const blob = new Blob([JSON.stringify(metadata)], { type: 'application/json' });
-    const formData = new FormData();
-    formData.append('file', blob, 'metadata.json');
-    const res = await fetch(`${gateway}/api/v0/add`, {
-      method: 'POST',
-      body: formData,
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`IPFS add failed: ${res.status} ${text}`);
+
+  if (gateway) {
+    try {
+      const blob = new Blob([JSON.stringify(metadata)], { type: 'application/json' });
+      const formData = new FormData();
+      formData.append('file', blob, 'metadata.json');
+      const res = await fetch(`${gateway}/api/v0/add`, {
+        method: 'POST',
+        body: formData,
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`IPFS add failed: ${res.status} ${text}`);
+      }
+      const data = (await res.json()) as { Hash?: string; Name?: string };
+      const cid = data.Hash ?? data.Name;
+      if (!cid || typeof cid !== 'string' || cid.length < 10) {
+        throw new Error('IPFS response missing valid CID');
+      }
+      return `ipfs://${cid}`;
+    } catch (err) {
+      if (process.env.NODE_ENV === 'production') throw err;
+      return dataUri;
     }
-    const data = (await res.json()) as { Hash?: string; Name?: string };
-    const cid = data.Hash ?? data.Name;
-    if (!cid || typeof cid !== 'string' || cid.length < 10) {
-      throw new Error('IPFS response missing valid CID');
-    }
-    return `ipfs://${cid}`;
-  } catch (err) {
-    if (process.env.NODE_ENV === 'production') {
-      throw err;
-    }
-    return dataUri;
   }
+
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      'IPFS not configured - set PINATA_JWT or IPFS_GATEWAY_URL for production metadata upload'
+    );
+  }
+  return dataUri;
 }
 
 /**

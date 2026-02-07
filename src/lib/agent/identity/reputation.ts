@@ -6,7 +6,7 @@
  */
 
 import { createPublicClient, createWalletClient, http } from 'viem';
-import { baseSepolia, mainnet, sepolia } from 'viem/chains';
+import { base, baseSepolia, mainnet, sepolia } from 'viem/chains';
 import { getPrisma } from '../../db';
 import { getKeystoreAccount } from '../../keystore';
 import type { ExecutionResult } from '../execute';
@@ -17,6 +17,7 @@ import { logger } from '../../logger';
 function getERC8004Chain() {
   const network = (process.env.ERC8004_NETWORK ?? 'sepolia') as ERC8004Network;
   if (network === 'mainnet') return mainnet;
+  if (network === 'base') return base;
   if (network === 'base-sepolia') return baseSepolia;
   return sepolia;
 }
@@ -37,6 +38,7 @@ function getRpcUrl(): string | undefined {
   if (url) return url;
   const network = process.env.ERC8004_NETWORK ?? 'sepolia';
   if (network === 'mainnet') return process.env.RPC_URL_ETHEREUM;
+  if (network === 'base') return process.env.RPC_URL_BASE ?? process.env.RPC_URL_8453;
   if (network === 'base-sepolia') return process.env.RPC_URL_BASE_SEPOLIA ?? process.env.RPC_URL_84532;
   return process.env.RPC_URL_SEPOLIA;
 }
