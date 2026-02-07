@@ -9,6 +9,7 @@ import { logger } from '../../logger';
 import { getStateStore } from '../state-store';
 import { observeBotchanRequests } from '../observe/botchan';
 import { postToFeed } from '../social/botchan';
+import { enqueueRequest, getRequestStatus } from '../queue/sponsorship-queue';
 import type { Skill, SkillContext, SkillResult } from './index';
 
 /** State key for tracking processed requests */
@@ -26,6 +27,9 @@ export interface BotchanSponsorshipRequest {
   targetWallet: string;
   protocol: string;
   reason?: string;
+  /** Optional request signature for queue consumer to verify */
+  signature?: string;
+  signatureTimestamp?: number;
 }
 
 /**
@@ -111,19 +115,17 @@ async function validateRequest(
 }
 
 /**
- * Process a sponsorship request (placeholder - integrate with actual sponsorship flow)
+ * Process a sponsorship request - adds to the sponsorship queue for async processing.
  */
 async function processRequest(
   request: BotchanSponsorshipRequest,
   dryRun: boolean
 ): Promise<RequestProcessingResult> {
-  const requestId = `${request.requesterAgent}-${request.targetWallet}-${Date.now()}`;
-
-  // Validate the request
+  // Validate the request first
   const validation = await validateRequest(request);
   if (!validation.valid) {
     return {
-      requestId,
+      requestId: `invalid-${Date.now()}`,
       approved: false,
       reason: validation.reason,
     };
@@ -131,27 +133,51 @@ async function processRequest(
 
   if (dryRun) {
     return {
-      requestId,
+      requestId: `dryrun-${Date.now()}`,
       approved: true,
-      reason: '[DRY RUN] Would process sponsorship request',
+      reason: '[DRY RUN] Would queue sponsorship request',
     };
   }
 
-  // TODO: Integrate with actual sponsorship execution
-  // For now, we log and acknowledge the request
-  // The actual sponsorship would be handled by the main agent cycle
+  try {
+    // Add to sponsorship queue for async processing (pass signature fields when present for consumer verification)
+    const { requestId, position } = await enqueueRequest({
+      protocolId: request.protocol,
+      agentAddress: request.targetWallet,
+      agentName: request.requesterAgent,
+      source: 'botchan',
+      estimatedCostUSD: 0.10, // Default estimate, will be calculated during processing
+      ...(request.signature != null && { signature: request.signature }),
+      ...(request.signatureTimestamp != null && { signatureTimestamp: request.signatureTimestamp }),
+    });
 
-  logger.info('[BotchanListener] Request queued for processing', {
-    requester: request.requesterAgent,
-    wallet: request.targetWallet,
-    protocol: request.protocol,
-  });
+    logger.info('[BotchanListener] Request added to queue', {
+      requestId,
+      position,
+      requester: request.requesterAgent,
+      wallet: request.targetWallet,
+      protocol: request.protocol,
+    });
 
-  return {
-    requestId,
-    approved: true,
-    reason: 'Request received and queued for next sponsorship cycle',
-  };
+    return {
+      requestId,
+      approved: true,
+      reason: `Request queued (position #${position}). Track status: /api/agent/request-status/${requestId}`,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error('[BotchanListener] Failed to queue request', {
+      error: message,
+      requester: request.requesterAgent,
+      wallet: request.targetWallet,
+    });
+
+    return {
+      requestId: `error-${Date.now()}`,
+      approved: false,
+      reason: `Failed to queue request: ${message}`,
+    };
+  }
 }
 
 /**
@@ -250,6 +276,12 @@ async function execute(context: SkillContext): Promise<SkillResult> {
         await markRequestProcessed(obsId);
         continue;
       }
+
+      // Pass through signature fields from observation data when present (e.g. from API or JSON message)
+      const sig = (data as { signature?: string; signatureTimestamp?: number }).signature;
+      const sigTs = (data as { signatureTimestamp?: number }).signatureTimestamp;
+      if (sig != null) request.signature = sig;
+      if (sigTs != null) request.signatureTimestamp = sigTs;
 
       // Process the request
       const result = await processRequest(request, dryRun);
