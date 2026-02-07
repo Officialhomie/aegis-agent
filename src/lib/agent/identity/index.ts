@@ -8,6 +8,7 @@ export {
   setAgentURI,
   getAgentIdentity,
   getIdentityRegistryAddress,
+  getAgentRegistryString,
   uploadToIPFS,
   buildRegistrationFile,
   type AgentMetadata,
