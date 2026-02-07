@@ -32,6 +32,7 @@ vi.mock('../../src/lib/ipfs', () => ({
   uploadDecisionToIPFS: vi.fn().mockResolvedValue({ success: false, reason: 'not_configured', error: 'No IPFS' }),
 }));
 
+
 vi.mock('viem/account-abstraction', () => ({
   createPaymasterClient: vi.fn().mockReturnValue({}),
   getPaymasterStubData: vi.fn().mockResolvedValue({
@@ -107,6 +108,27 @@ describe('sponsorTransaction', () => {
     expect(result.signature).toBeDefined();
     expect(result.simulationResult).toHaveProperty('action', 'SPONSOR_TRANSACTION');
     expect(result.simulationResult).toHaveProperty('message');
+  });
+
+  it('does not throw when sponsorshipRecord.create fails (fail-closed: error logged, result still returned)', async () => {
+    mockSponsorshipRecordCreate.mockRejectedValueOnce(new Error('Connection refused'));
+    const decision: Decision = {
+      action: 'SPONSOR_TRANSACTION',
+      confidence: 0.9,
+      reasoning: 'Test sponsorship when DB record create fails.',
+      parameters: {
+        agentWallet: '0x1234567890123456789012345678901234567890',
+        protocolId: 'test-protocol',
+        maxGasLimit: 200000,
+        estimatedCostUSD: 0.12,
+      },
+    };
+    const result = await sponsorTransaction(decision, 'LIVE');
+    expect(result).toBeDefined();
+    expect(typeof result.success).toBe('boolean');
+    expect(result.decisionHash).toBeDefined();
+    expect(result.signature).toBeDefined();
+    expect(mockSponsorshipRecordCreate).toHaveBeenCalled();
   });
 });
 
