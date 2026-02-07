@@ -15,6 +15,13 @@ import { getStateStore } from '../state-store';
 import { getPrisma } from '../../db';
 import { uploadDecisionToIPFS } from '../../ipfs';
 import { logger } from '../../logger';
+import {
+  getBundlerClient,
+  checkBundlerHealth,
+  submitAndWaitForUserOp,
+  type UserOpSubmissionResult,
+  type BundlerHealthStatus,
+} from './bundler-client';
 import type { Decision } from '../reason/schemas';
 import type { SponsorParams } from '../reason/schemas';
 import type { ExecutionResult } from './index';
@@ -204,6 +211,56 @@ export async function deductProtocolBudget(
   }
 }
 
+/**
+ * Rollback a protocol budget deduction (for failed bundler submissions).
+ * Use this when a sponsorship is logged on-chain but bundler submission fails.
+ */
+export async function rollbackProtocolBudget(
+  protocolId: string,
+  amountUSD: number,
+  reason: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const db = getPrisma();
+    await db.protocolSponsor.update({
+      where: { protocolId },
+      data: {
+        balanceUSD: { increment: amountUSD },
+        totalSpent: { decrement: amountUSD },
+        sponsorshipCount: { decrement: 1 },
+      },
+    });
+    logger.warn('[Paymaster] Budget rollback executed', {
+      protocolId,
+      amountUSD,
+      reason,
+      severity: 'HIGH',
+      impact: 'Sponsorship failed after on-chain log - budget restored',
+    });
+    return { success: true };
+  } catch (error) {
+    logger.error('[Paymaster] FAILED to rollback protocol budget', {
+      error,
+      protocolId,
+      amountUSD,
+      reason,
+      severity: 'CRITICAL',
+      impact: 'Budget tracking permanently inconsistent - manual reconciliation required',
+    });
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown database error',
+    };
+  }
+}
+
+/**
+ * Check bundler health status. Exported for use by circuit breaker.
+ */
+export async function getBundlerHealthStatus(): Promise<BundlerHealthStatus> {
+  return checkBundlerHealth();
+}
+
 export interface SponsorshipExecutionResult extends ExecutionResult {
   decisionHash?: `0x${string}`;
   signature?: `0x${string}`;
@@ -215,18 +272,32 @@ export interface SponsorshipExecutionResult extends ExecutionResult {
 /** TTL for paymaster approval (1 hour) so user's next UserOp can be sponsored */
 const PAYMASTER_APPROVAL_TTL_MS = 60 * 60 * 1000;
 
+export interface PaymasterExecutionResult {
+  paymasterReady: boolean;
+  userOpHash?: string;
+  transactionHash?: string;
+  actualGasUsed?: string;
+  error?: string;
+}
+
 /**
- * Execute paymaster sponsorship: get paymaster stub data for the agent and store approval
- * so the bundler can sponsor the agent's next UserOperation. Requires BUNDLER_RPC_URL (e.g. Pimlico).
+ * Prepare paymaster sponsorship: get paymaster stub data and store approval.
+ * This is the first step - preparing the sponsorship data.
+ * Actual UserOp submission happens via submitSponsoredUserOp.
  */
-export async function executePaymasterSponsorship(params: {
+export async function preparePaymasterSponsorship(params: {
   agentWallet: string;
   maxGasLimit: number;
-}): Promise<{ paymasterReady: boolean; userOpHash?: string; error?: string }> {
+}): Promise<{
+  ready: boolean;
+  paymasterData?: `0x${string}`;
+  paymaster?: `0x${string}`;
+  error?: string;
+}> {
   const rpcUrl = process.env.BUNDLER_RPC_URL ?? process.env.PAYMASTER_RPC_URL;
   if (!rpcUrl?.trim()) {
-    logger.warn('[Paymaster] BUNDLER_RPC_URL not set - skipping paymaster execution');
-    return { paymasterReady: false, error: 'BUNDLER_RPC_URL not set' };
+    logger.warn('[Paymaster] BUNDLER_RPC_URL not set - skipping paymaster preparation');
+    return { ready: false, error: 'BUNDLER_RPC_URL not set' };
   }
 
   const chain = getChain();
@@ -247,9 +318,10 @@ export async function executePaymasterSponsorship(params: {
     });
 
     if (!stub || (!('paymaster' in stub) && !('paymasterAndData' in stub))) {
-      return { paymasterReady: false, error: 'No paymaster stub data returned' };
+      return { ready: false, error: 'No paymaster stub data returned' };
     }
 
+    // Store approval for reference
     const store = await getStateStore();
     const key = `paymaster:approved:${params.agentWallet.toLowerCase()}`;
     await store.set(
@@ -257,15 +329,120 @@ export async function executePaymasterSponsorship(params: {
       JSON.stringify({
         maxGasLimit: params.maxGasLimit,
         approvedAt: Date.now(),
+        stubData: stub,
       }),
       { px: PAYMASTER_APPROVAL_TTL_MS }
     );
 
-    logger.info('[Paymaster] Paymaster sponsorship ready for agent', {
+    logger.info('[Paymaster] Paymaster sponsorship prepared', {
       agentWallet: params.agentWallet,
       maxGasLimit: params.maxGasLimit,
     });
-    return { paymasterReady: true };
+
+    return {
+      ready: true,
+      paymasterData: 'paymasterAndData' in stub ? stub.paymasterAndData : undefined,
+      paymaster: 'paymaster' in stub ? stub.paymaster : undefined,
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error('[Paymaster] preparePaymasterSponsorship failed', { error: message });
+    return { ready: false, error: message };
+  }
+}
+
+/**
+ * Execute paymaster sponsorship by submitting a UserOperation to the bundler.
+ * This is the actual execution step that submits to the bundler and waits for confirmation.
+ *
+ * IMPORTANT: This function actually submits the UserOp to the bundler.
+ * Budget should only be deducted AFTER this function returns successfully.
+ */
+export async function executePaymasterSponsorship(params: {
+  agentWallet: string;
+  maxGasLimit: number;
+  callData?: `0x${string}`;
+  nonce?: bigint;
+}): Promise<PaymasterExecutionResult> {
+  const bundlerClient = getBundlerClient();
+  if (!bundlerClient) {
+    logger.warn('[Paymaster] BUNDLER_RPC_URL not set - skipping paymaster execution');
+    return { paymasterReady: false, error: 'BUNDLER_RPC_URL not set' };
+  }
+
+  // First check bundler health
+  const health = await checkBundlerHealth();
+  if (!health.available) {
+    logger.warn('[Paymaster] Bundler unavailable', { error: health.error });
+    return { paymasterReady: false, error: health.error ?? 'Bundler unavailable' };
+  }
+
+  // Prepare paymaster data
+  const prepared = await preparePaymasterSponsorship({
+    agentWallet: params.agentWallet,
+    maxGasLimit: params.maxGasLimit,
+  });
+
+  if (!prepared.ready) {
+    return { paymasterReady: false, error: prepared.error };
+  }
+
+  const chain = getChain();
+  const entryPoint = (process.env.ENTRY_POINT_ADDRESS as `0x${string}`) ?? entryPoint07Address;
+
+  try {
+    // Build the UserOperation
+    // Note: In production, the actual UserOp would come from the agent's smart account
+    // This is a simplified version for sponsorship approval
+    const userOp = {
+      sender: params.agentWallet as `0x${string}`,
+      nonce: params.nonce ?? BigInt(0),
+      callData: params.callData ?? ('0x' as `0x${string}`),
+      callGasLimit: BigInt(params.maxGasLimit),
+      verificationGasLimit: BigInt(100000),
+      preVerificationGas: BigInt(21000),
+      maxFeePerGas: BigInt(1000000000), // 1 gwei
+      maxPriorityFeePerGas: BigInt(100000000), // 0.1 gwei
+      signature: '0x' as `0x${string}`,
+      // Paymaster fields from prepared data
+      ...(prepared.paymaster && { paymaster: prepared.paymaster }),
+      ...(prepared.paymasterData && { paymasterData: prepared.paymasterData }),
+    };
+
+    logger.info('[Paymaster] Submitting sponsored UserOperation to bundler', {
+      sender: params.agentWallet,
+      maxGasLimit: params.maxGasLimit,
+      chainId: chain.id,
+    });
+
+    // Submit to bundler and wait for confirmation
+    const result: UserOpSubmissionResult = await submitAndWaitForUserOp(userOp as never);
+
+    if (result.success) {
+      logger.info('[Paymaster] Sponsored UserOperation confirmed', {
+        userOpHash: result.userOpHash,
+        transactionHash: result.transactionHash,
+        actualGasUsed: result.actualGasUsed?.toString(),
+      });
+
+      return {
+        paymasterReady: true,
+        userOpHash: result.userOpHash,
+        transactionHash: result.transactionHash,
+        actualGasUsed: result.actualGasUsed?.toString(),
+      };
+    } else {
+      logger.warn('[Paymaster] UserOperation submission failed', {
+        error: result.error,
+        userOpHash: result.userOpHash,
+      });
+
+      return {
+        paymasterReady: false,
+        userOpHash: result.userOpHash,
+        error: result.error,
+      };
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logger.error('[Paymaster] executePaymasterSponsorship failed', { error: message });
@@ -274,8 +451,11 @@ export async function executePaymasterSponsorship(params: {
 }
 
 /**
- * Execute SPONSOR_TRANSACTION: sign decision, log on-chain, deduct protocol budget,
- * and in LIVE mode execute paymaster sponsorship (sponsors autonomous agent execution).
+ * Execute SPONSOR_TRANSACTION: sign decision, log on-chain, execute paymaster sponsorship,
+ * and ONLY deduct protocol budget after bundler confirmation (sponsors autonomous agent execution).
+ *
+ * IMPORTANT: Budget is now deducted AFTER bundler confirmation, not before.
+ * If bundler fails after on-chain log, budget is NOT deducted.
  */
 export async function sponsorTransaction(
   decision: Decision,
@@ -311,6 +491,7 @@ export async function sponsorTransaction(
     };
   }
 
+  // Step 1: Log sponsorship on-chain (immutable record)
   const logResult = await logSponsorshipOnchain({
     agentWallet: params.agentWallet,
     protocolId: params.protocolId,
@@ -328,18 +509,7 @@ export async function sponsorTransaction(
     };
   }
 
-  const budgetResult = await deductProtocolBudget(params.protocolId, params.estimatedCostUSD);
-  if (!budgetResult.success) {
-    logger.error('[Paymaster] Budget deduction failed after on-chain transaction', {
-      protocolId: params.protocolId,
-      gasCostUsd: params.estimatedCostUSD,
-      txHash: logResult.txHash,
-      severity: 'CRITICAL',
-      actionNeeded: 'Manual reconciliation required - transaction succeeded but budget not updated',
-      error: budgetResult.error,
-    });
-  }
-
+  // Step 2: Upload decision to IPFS (non-blocking, for audit trail)
   let ipfsCid: string | undefined;
   const ipfsResult = await uploadDecisionToIPFS(signed.decisionJSON);
   if ('cid' in ipfsResult) {
@@ -358,14 +528,53 @@ export async function sponsorTransaction(
     }
   }
 
+  // Step 3: Execute paymaster sponsorship via bundler
+  // IMPORTANT: Budget deduction happens AFTER this succeeds
+  const maxGasLimit = params.maxGasLimit ?? 200_000;
+  const paymasterResult = await executePaymasterSponsorship({
+    agentWallet: params.agentWallet,
+    maxGasLimit,
+  });
+
+  // Determine actual cost (use actual gas if available, otherwise estimate)
+  const actualCostUSD = paymasterResult.actualGasUsed
+    ? calculateActualCostUSD(BigInt(paymasterResult.actualGasUsed))
+    : params.estimatedCostUSD;
+
+  // Step 4: ONLY deduct budget if bundler submission succeeded
+  if (paymasterResult.paymasterReady) {
+    const budgetResult = await deductProtocolBudget(params.protocolId, actualCostUSD);
+    if (!budgetResult.success) {
+      logger.error('[Paymaster] Budget deduction failed after successful bundler submission', {
+        protocolId: params.protocolId,
+        gasCostUsd: actualCostUSD,
+        txHash: logResult.txHash,
+        userOpHash: paymasterResult.userOpHash,
+        severity: 'CRITICAL',
+        actionNeeded: 'Manual reconciliation required - sponsorship succeeded but budget not updated',
+        error: budgetResult.error,
+      });
+    }
+  } else {
+    logger.warn('[Paymaster] Bundler submission failed - budget NOT deducted', {
+      protocolId: params.protocolId,
+      estimatedCostUSD: params.estimatedCostUSD,
+      txHash: logResult.txHash,
+      error: paymasterResult.error,
+      note: 'On-chain log exists but sponsorship not executed - protocol budget preserved',
+    });
+  }
+
+  // Step 5: Create sponsorship record for audit trail
   try {
     const db = getPrisma();
     await db.sponsorshipRecord.create({
       data: {
-        userAddress: params.agentWallet, // DB column still 'userAddress' for now
+        userAddress: params.agentWallet,
         protocolId: params.protocolId,
         decisionHash: signed.decisionHash,
         estimatedCostUSD: params.estimatedCostUSD,
+        actualCostUSD: paymasterResult.paymasterReady ? actualCostUSD : null,
         txHash: logResult.txHash ?? null,
         signature: signed.signature,
         ipfsCid: ipfsCid ?? undefined,
@@ -374,6 +583,7 @@ export async function sponsorTransaction(
     logger.info('[Paymaster] Sponsorship record created', {
       decisionHash: signed.decisionHash,
       txHash: logResult.txHash,
+      bundlerSuccess: paymasterResult.paymasterReady,
     });
   } catch (error) {
     logger.error('[Paymaster] FAILED to create sponsorship record - audit trail incomplete', {
@@ -386,16 +596,10 @@ export async function sponsorTransaction(
     });
   }
 
-  const maxGasLimit = params.maxGasLimit ?? 200_000;
-  const paymasterResult = await executePaymasterSponsorship({
-    agentWallet: params.agentWallet,
-    maxGasLimit,
-  });
-
   return {
-    success: true,
-    transactionHash: logResult.txHash,
-    sponsorshipHash: logResult.txHash,
+    success: paymasterResult.paymasterReady,
+    transactionHash: paymasterResult.transactionHash ?? logResult.txHash,
+    sponsorshipHash: paymasterResult.userOpHash ?? logResult.txHash,
     decisionHash: signed.decisionHash,
     signature: signed.signature,
     paymasterReady: paymasterResult.paymasterReady,
@@ -405,8 +609,27 @@ export async function sponsorTransaction(
       agentWallet: params.agentWallet,
       protocolId: params.protocolId,
       onChainTxHash: logResult.txHash,
+      bundlerTxHash: paymasterResult.transactionHash,
+      userOpHash: paymasterResult.userOpHash,
       paymasterReady: paymasterResult.paymasterReady,
+      actualGasUsed: paymasterResult.actualGasUsed,
       ipfsCid: ipfsCid ?? undefined,
     },
   };
+}
+
+/**
+ * Calculate actual cost in USD from gas used.
+ * Uses current ETH price from environment or reasonable default.
+ */
+function calculateActualCostUSD(gasUsed: bigint): number {
+  // Get gas price (default 1 gwei = 10^9 wei)
+  const gasPriceWei = BigInt(process.env.GAS_PRICE_WEI ?? '1000000000');
+  // Calculate total gas cost in wei
+  const gasCosstWei = gasUsed * gasPriceWei;
+  // Convert to ETH (18 decimals)
+  const gasCostETH = Number(gasCosstWei) / 1e18;
+  // Get ETH price from env or use reasonable estimate
+  const ethPriceUSD = Number(process.env.ETH_PRICE_USD ?? '2500');
+  return gasCostETH * ethPriceUSD;
 }
