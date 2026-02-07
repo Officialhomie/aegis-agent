@@ -2,7 +2,12 @@
  * Gas Sponsorship mode: adaptive throttling, reserve state checks, skip on emergency.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+const mockGetKeyGuardState = vi.hoisted(() => vi.fn());
+vi.mock('../../../src/lib/key-guard', () => ({
+  getKeyGuardState: () => mockGetKeyGuardState(),
+}));
 
 const mockGet = vi.hoisted(() => vi.fn());
 vi.mock('../../../src/lib/agent/state-store', () => ({
@@ -29,6 +34,14 @@ vi.mock('../../../src/lib/agent/reason', () => ({
 import { gasSponsorshipMode, getAdaptiveGasSponsorshipConfig } from '../../../src/lib/agent/modes/gas-sponsorship';
 
 describe('Gas Sponsorship Mode', () => {
+  beforeEach(() => {
+    mockGetKeyGuardState.mockReturnValue({
+      canSign: true,
+      method: 'env_execute',
+      mode: 'LIVE',
+    });
+  });
+
   it('getAdaptiveGasSponsorshipConfig returns 0.9 confidence when health < 50', async () => {
     mockGet.mockResolvedValue(
       JSON.stringify({
@@ -72,5 +85,26 @@ describe('Gas Sponsorship Mode', () => {
     );
     const obs = await gasSponsorshipMode.observe!();
     expect(obs).toEqual([]);
+  });
+
+  it('getAdaptiveGasSponsorshipConfig forces SIMULATION when KeyGuard canSign is false', async () => {
+    mockGetKeyGuardState.mockReturnValue({
+      canSign: false,
+      method: 'none',
+      mode: 'SIMULATION',
+    });
+    mockGet.mockResolvedValue(
+      JSON.stringify({
+        healthScore: 80,
+        emergencyMode: false,
+        ethBalance: 0.5,
+        usdcBalance: 200,
+        chainId: 8453,
+        lastUpdated: new Date().toISOString(),
+      })
+    );
+    const config = await getAdaptiveGasSponsorshipConfig();
+    expect(config.executionMode).toBe('SIMULATION');
+    expect(config.confidenceThreshold).toBe(0.8);
   });
 });
