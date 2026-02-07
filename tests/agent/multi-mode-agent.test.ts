@@ -8,6 +8,14 @@ const mockSetNX = vi.hoisted(() => vi.fn());
 const mockSet = vi.hoisted(() => vi.fn());
 const mockGet = vi.hoisted(() => vi.fn());
 
+vi.mock('../../src/lib/key-guard', () => ({
+  getKeyGuardState: vi.fn().mockReturnValue({
+    canSign: true,
+    method: 'env_execute',
+    mode: 'LIVE',
+  }),
+}));
+
 vi.mock('../../src/lib/agent/state-store', () => ({
   getStateStore: vi.fn().mockResolvedValue({
     get: mockGet,
