@@ -13,6 +13,9 @@ RUN npx prisma generate
 
 COPY . .
 
+# Prisma 7 requires DATABASE_URL for `prisma generate` when prisma.config.ts is present.
+# Use a dummy URL at build time; runtime uses the real DATABASE_URL from the environment.
+ENV DATABASE_URL="postgresql://build:build@localhost:5432/build"
 RUN npm run build
 
 EXPOSE 3000
