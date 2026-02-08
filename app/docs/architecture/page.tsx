@@ -79,7 +79,7 @@ export default function ArchitectureDocsPage() {
               <h3 className="font-semibold text-text-primary">Approve (Policy)</h3>
             </div>
             <p className="text-sm text-text-muted">
-              9 safety rules validate every decision. Budget checks, rate limits, whitelist
+              10 safety rules validate every decision. Budget checks, rate limits, whitelist
               verification, and gas price optimization.
             </p>
           </div>

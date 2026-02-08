@@ -57,6 +57,14 @@ export async function observeRunway(): Promise<Observation[]> {
   const { getAgentWalletBalance } = await import('./sponsorship');
   const reserves = await getAgentWalletBalance();
 
+  // Persist fresh balance to reserve state (every 5-min pipeline cycle)
+  const { updateReserveState } = await import('../state/reserve-state');
+  await updateReserveState({
+    ethBalance: reserves.ETH,
+    usdcBalance: reserves.USDC,
+    chainId: reserves.chainId,
+  });
+
   const dailyBurn = reserveState?.dailyBurnRateETH ?? 0;
   const runwayDays = dailyBurn > 0 ? reserves.ETH / dailyBurn : 999;
 

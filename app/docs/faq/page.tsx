@@ -155,9 +155,16 @@ const faqSections: FAQSection[] = [
         question: 'How do I check my eligibility?',
         answer: (
           <>
-            There's no direct eligibility endpoint yet. The best indicators are: (1)
-            your wallet has 5+ transactions on Base, (2) you're interacting with a
-            registered protocol's contract, and (3) your ETH balance is very low.
+            Call the dry-run eligibility endpoint (no auth required):{' '}
+            <code className="text-coral-400">POST /api/v1/sponsorship/check-eligibility</code> with a JSON body
+            containing <code className="text-text-muted">userAddress</code>, <code className="text-text-muted">protocolId</code>, and optionally <code className="text-text-muted">action</code>.
+            You get back <code className="text-text-muted">eligible</code>, <code className="text-text-muted">reason</code>, and <code className="text-text-muted">estimatedCostUSD</code>.
+            Example:
+            <pre className="mt-2 p-3 rounded bg-surface border border-border text-xs overflow-x-auto">
+{`curl -X POST https://clawgas.vercel.app/api/v1/sponsorship/check-eligibility \\
+  -H "Content-Type: application/json" \\
+  -d '{"userAddress":"0x...","protocolId":"my-protocol"}'`}
+            </pre>
           </>
         ),
       },
@@ -202,7 +209,7 @@ const faqSections: FAQSection[] = [
                 selects action
               </li>
               <li>
-                <strong>Approve</strong>: 9 policy rules validate the decision
+                <strong>Approve</strong>: 10 policy rules validate the decision
               </li>
               <li>
                 <strong>Execute</strong>: Sign, log on-chain, trigger paymaster

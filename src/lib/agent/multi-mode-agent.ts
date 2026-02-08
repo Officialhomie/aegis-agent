@@ -118,10 +118,13 @@ export class MultiModeAgent {
     const key = mode.id;
     const breaker = getCircuitBreaker(key);
 
-    const health = await (breaker as { checkHealthBeforeExecution?: () => Promise<{ healthy: boolean; reason?: string }> }).checkHealthBeforeExecution?.();
+    const health = await (breaker as { checkHealthBeforeExecution?: () => Promise<{ healthy: boolean; reason?: string; warnings?: string[] }> }).checkHealthBeforeExecution?.();
     if (health && !health.healthy) {
-      logger.warn('[MultiMode] Health check failed, skipping cycle', { mode: key, reason: health.reason });
+      logger.warn('[MultiMode] Health check failed, skipping cycle', { mode: key, reason: health.reason, warnings: health.warnings });
       return;
+    }
+    if (health?.warnings && health.warnings.length > 0) {
+      logger.info('[MultiMode] Health warnings detected', { mode: key, warnings: health.warnings });
     }
 
     let config = baseConfig;

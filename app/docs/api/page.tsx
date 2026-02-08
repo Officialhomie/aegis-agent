@@ -1,18 +1,19 @@
 'use client';
 
 import { useState } from 'react';
-import { Code, Server, BarChart3, Webhook } from 'lucide-react';
+import { Code, Server, BarChart3, Webhook, Layers } from 'lucide-react';
 import { ApiEndpoint } from '@/components/docs/api-endpoint';
 import { Callout } from '@/components/docs/callout';
 import { cn } from '@/lib/utils';
 
-type TabId = 'protocol' | 'dashboard' | 'agent' | 'webhook';
+type TabId = 'protocol' | 'dashboard' | 'agent' | 'webhook' | 'v1';
 
 const tabs: { id: TabId; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: 'protocol', label: 'Protocol', icon: Server },
   { id: 'dashboard', label: 'Dashboard', icon: BarChart3 },
   { id: 'agent', label: 'Agent', icon: Code },
   { id: 'webhook', label: 'Webhooks', icon: Webhook },
+  { id: 'v1', label: 'v1 SDK', icon: Layers },
 ];
 
 export default function ApiReferencePage() {
@@ -44,9 +45,14 @@ export default function ApiReferencePage() {
         <div className="p-4 rounded-lg bg-surface border border-border font-mono text-cyan-400">
           https://clawgas.vercel.app/api
         </div>
-        <Callout variant="info">
-          All API endpoints are public and do not require authentication. Rate limiting
-          applies to prevent abuse.
+        <Callout variant="info" title="Authentication">
+          Most read endpoints are public. Some require auth:
+          <ul className="list-disc list-inside mt-2 space-y-1 text-sm">
+            <li><strong>Public:</strong> health, protocol list/get, dashboard stats, agent price, request-status, v1 protocol stats, v1 check-eligibility</li>
+            <li><strong>Bearer token</strong> (Authorization: Bearer AEGIS_API_KEY): agent/cycle, agent/register, agent/status, protocol agents CRUD, deposit-verify, v1 sponsorship/request, reactive/event</li>
+            <li><strong>HMAC signature:</strong> protocol/webhook (X-Aegis-Signature), botchan/webhook (X-Botchan-Signature)</li>
+          </ul>
+          Rate limiting applies to prevent abuse.
         </Callout>
       </section>
 
@@ -163,19 +169,103 @@ export default function ApiReferencePage() {
           <ApiEndpoint
             method="POST"
             path="/protocol/{protocolId}/topup"
-            description="Add funds to a protocol's sponsorship budget."
+            description="Credit a protocol's sponsorship budget by verifying an on-chain USDC deposit. Supply the deposit transaction hash and chain ID."
             parameters={[
-              { name: 'amountUSD', type: 'number', required: true, description: 'Amount to add in USD' },
-              { name: 'reference', type: 'string', required: false, description: 'Optional payment reference' },
+              { name: 'protocolId', type: 'string', required: true, description: 'Protocol identifier (path parameter)' },
             ]}
             requestBody={`{
-  "amountUSD": 500,
-  "reference": "invoice-123"
+  "txHash": "0x...",
+  "chainId": 8453
 }`}
             responseBody={`{
   "protocolId": "my-defi-app",
   "balanceUSD": 950.00,
-  "topupAmount": 500
+  "creditedAmount": 500
+}`}
+          />
+
+          <ApiEndpoint
+            method="GET"
+            path="/protocol/{protocolId}/agents"
+            description="List approved agents for a protocol. Requires Bearer token (AEGIS_API_KEY)."
+            parameters={[
+              { name: 'protocolId', type: 'string', required: true, description: 'Protocol identifier (path parameter)' },
+            ]}
+            responseBody={`{
+  "agents": [
+    { "agentId": "agent-1", "approvedAt": "2024-01-15T12:00:00Z", "config": {} }
+  ],
+  "count": 1
+}`}
+          />
+
+          <ApiEndpoint
+            method="POST"
+            path="/protocol/{protocolId}/agents"
+            description="Approve an agent for the protocol. Requires Bearer token (AEGIS_API_KEY)."
+            parameters={[
+              { name: 'protocolId', type: 'string', required: true, description: 'Protocol identifier (path parameter)' },
+            ]}
+            requestBody={`{
+  "agentId": "agent-1",
+  "config": {}
+}`}
+            responseBody={`{
+  "ok": true,
+  "agentId": "agent-1",
+  "protocolId": "my-defi-app"
+}`}
+          />
+
+          <ApiEndpoint
+            method="DELETE"
+            path="/protocol/{protocolId}/agents"
+            description="Revoke an agent's approval for the protocol. Requires Bearer token (AEGIS_API_KEY)."
+            parameters={[
+              { name: 'protocolId', type: 'string', required: true, description: 'Protocol identifier (path parameter)' },
+            ]}
+            requestBody={`{
+  "agentId": "agent-1"
+}`}
+            responseBody={`{
+  "ok": true,
+  "agentId": "agent-1"
+}`}
+          />
+
+          <ApiEndpoint
+            method="PATCH"
+            path="/protocol/{protocolId}/agents"
+            description="Update an approved agent's configuration. Requires Bearer token (AEGIS_API_KEY)."
+            parameters={[
+              { name: 'protocolId', type: 'string', required: true, description: 'Protocol identifier (path parameter)' },
+            ]}
+            requestBody={`{
+  "agentId": "agent-1",
+  "config": { "maxPerDay": 10 }
+}`}
+            responseBody={`{
+  "ok": true,
+  "agentId": "agent-1"
+}`}
+          />
+
+          <ApiEndpoint
+            method="POST"
+            path="/protocol/{protocolId}/deposit-verify"
+            description="Verify an on-chain USDC deposit and credit the protocol budget. Requires Bearer token (AEGIS_API_KEY)."
+            parameters={[
+              { name: 'protocolId', type: 'string', required: true, description: 'Protocol identifier (path parameter)' },
+            ]}
+            requestBody={`{
+  "txHash": "0x...",
+  "chainId": 8453
+}`}
+            responseBody={`{
+  "ok": true,
+  "protocolId": "my-defi-app",
+  "creditedAmount": 100,
+  "balanceUSD": 550.00
 }`}
           />
         </div>
@@ -187,6 +277,17 @@ export default function ApiReferencePage() {
           <h2 className="font-display text-xl font-bold text-text-primary">
             Dashboard Statistics
           </h2>
+
+          <ApiEndpoint
+            method="GET"
+            path="/dashboard/status"
+            description="Get agent signing capability and current mode (e.g. live, simulation, readonly)."
+            responseBody={`{
+  "canSign": true,
+  "mode": "LIVE",
+  "timestamp": "2024-01-15T12:00:00Z"
+}`}
+          />
 
           <ApiEndpoint
             method="GET"
@@ -347,13 +448,13 @@ export default function ApiReferencePage() {
               { name: 'amount', type: 'number', required: false, description: 'Requested amount' },
             ]}
             responseBody={`{
-  "price": 50,
-  "priceWei": "50000000",
+  "price": "0.015",
+  "priceWei": "15000000",
   "currency": "USDC",
   "breakdown": {
-    "baseFee": 50,
-    "gasEstimate": 0,
-    "markup": 0
+    "baseFee": "0.015",
+    "gasEstimate": "0",
+    "markup": "0"
   },
   "validFor": 300
 }`}
@@ -367,6 +468,48 @@ export default function ApiReferencePage() {
   "agentId": "12345",
   "txHash": "0xabcd...",
   "registryAddress": "0x8004..."
+}`}
+          />
+
+          <ApiEndpoint
+            method="GET"
+            path="/agent/request-status/{id}"
+            description="Get sponsorship request status by request ID (e.g. pending, completed, failed)."
+            parameters={[
+              { name: 'id', type: 'string', required: true, description: 'Request ID (path parameter)' },
+            ]}
+            responseBody={`{
+  "id": "req_abc123",
+  "status": "pending",
+  "createdAt": "2024-01-15T12:00:00Z",
+  "updatedAt": "2024-01-15T12:01:00Z"
+}`}
+          />
+
+          <ApiEndpoint
+            method="POST"
+            path="/agent/request-status/{id}"
+            description="Cancel a pending sponsorship request. Requires Bearer token for authenticated requests."
+            parameters={[
+              { name: 'id', type: 'string', required: true, description: 'Request ID (path parameter)' },
+            ]}
+            requestBody={`{}`}
+            responseBody={`{
+  "ok": true,
+  "id": "req_abc123",
+  "status": "cancelled"
+}`}
+          />
+
+          <ApiEndpoint
+            method="GET"
+            path="/.well-known/agent-card.json"
+            description="A2A agent card for discovery (served at app root or under /api depending on deployment)."
+            responseBody={`{
+  "name": "Aegis",
+  "description": "Sponsorship agent",
+  "url": "https://clawgas.vercel.app",
+  "capabilities": []
 }`}
           />
         </div>
@@ -453,17 +596,77 @@ export default function ApiReferencePage() {
         </div>
       )}
 
+      {/* v1 SDK APIs */}
+      {activeTab === 'v1' && (
+        <div className="space-y-6">
+          <h2 className="font-display text-xl font-bold text-text-primary">
+            v1 SDK
+          </h2>
+          <p className="text-text-secondary text-sm">
+            Stable v1 endpoints for protocol stats, eligibility checks, and sponsorship requests.
+          </p>
+
+          <ApiEndpoint
+            method="GET"
+            path="/v1/protocol/{id}/stats"
+            description="Get rich protocol statistics (balance, spend, sponsorship counts, etc.)."
+            parameters={[
+              { name: 'id', type: 'string', required: true, description: 'Protocol identifier (path parameter)' },
+            ]}
+            responseBody={`{
+  "protocolId": "my-defi-app",
+  "balanceUSD": 450.00,
+  "totalSpent": 50.00,
+  "sponsorshipCount": 100,
+  "activeAgents": 3
+}`}
+          />
+
+          <ApiEndpoint
+            method="POST"
+            path="/v1/sponsorship/check-eligibility"
+            description="Dry-run eligibility check for a sponsorship request (no auth required)."
+            requestBody={`{
+  "userAddress": "0x1234...",
+  "protocolId": "my-defi-app",
+  "action": "sponsorship"
+}`}
+            responseBody={`{
+  "eligible": true,
+  "reason": null,
+  "estimatedCostUSD": 0.015
+}`}
+          />
+
+          <ApiEndpoint
+            method="POST"
+            path="/v1/sponsorship/request"
+            description="Queue a sponsorship request. Requires Bearer token (AEGIS_API_KEY)."
+            requestBody={`{
+  "userAddress": "0x1234...",
+  "protocolId": "my-defi-app",
+  "payload": {}
+}`}
+            responseBody={`{
+  "requestId": "req_abc123",
+  "status": "pending",
+  "createdAt": "2024-01-15T12:00:00Z"
+}`}
+          />
+        </div>
+      )}
+
       {/* Health endpoint */}
       <section className="space-y-4 border-t border-border pt-8">
         <h2 className="font-display text-xl font-bold text-text-primary">
           Health Check
         </h2>
 
-        <ApiEndpoint
-          method="GET"
-          path="/health"
-          description="Get system health status including reserve state and emergency mode status."
-          responseBody={`{
+          <ApiEndpoint
+            method="GET"
+            path="/health"
+            description="Get system health status including reserve state and emergency mode status."
+            responseBody={`{
   "status": "healthy",
   "healthScore": 87,
   "ethBalance": 0.5234,
@@ -478,7 +681,28 @@ export default function ApiReferencePage() {
     }
   ]
 }`}
-        />
+          />
+
+          <ApiEndpoint
+            method="GET"
+            path="/health/deep"
+            description="Deep health check for Prometheus or quick-mode checks; includes dependencies."
+            responseBody={`{
+  "status": "healthy",
+  "checks": { "redis": "ok", "signer": "ok" },
+  "timestamp": "2024-01-15T12:00:00Z"
+}`}
+          />
+
+          <ApiEndpoint
+            method="GET"
+            path="/health/redis"
+            description="Redis connectivity check."
+            responseBody={`{
+  "status": "ok",
+  "connected": true
+}`}
+          />
       </section>
     </div>
   );

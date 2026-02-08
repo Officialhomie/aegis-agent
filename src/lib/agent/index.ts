@@ -263,6 +263,18 @@ export async function startAutonomousPaymaster(intervalMs: number = 60000): Prom
 
   logger.info(`[Aegis] Starting autonomous paymaster on ${getCurrentNetworkName()}`);
 
+  // Initialize Redis cache layer (Phase 1: Critical for 1000 txs/day scale)
+  try {
+    const { initializeCache } = await import('../cache');
+    await initializeCache();
+    logger.info('[Aegis] Cache layer initialized successfully');
+  } catch (error) {
+    logger.warn('[Aegis] Cache initialization failed - continuing without cache', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    // Continue without cache - agent will fallback to direct database queries
+  }
+
   await ensureAgentRegistered();
   const { MultiModeAgent } = await import('./multi-mode-agent');
   const { reservePipelineMode, gasSponsorshipMode } = await import('./modes');
