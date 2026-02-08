@@ -10,6 +10,7 @@ import { incrementCounter } from '../../monitoring/metrics';
 import { generateSponsorshipDecision } from './sponsorship-prompt';
 import { DecisionSchema, type Decision } from './schemas';
 import { getTemplateDecision } from './template-responses';
+import { getCachedDecision, cacheDecision } from './response-cache';
 import type { Observation } from '../observe';
 
 export interface ReasoningContext {
@@ -40,8 +41,19 @@ export async function reasonAboutSponsorship(
     return templateDecision;
   }
 
+  // Check response cache (WAIT and reserve decisions)
+  const cachedDecision = await getCachedDecision(observations as Observation[]);
+  if (cachedDecision) {
+    incrementCounter('aegis_response_cache_hits', 1);
+    logger.info('[Reason] Using cached decision (no LLM call)', {
+      action: cachedDecision.action,
+      confidence: cachedDecision.confidence,
+    });
+    return cachedDecision;
+  }
+
   incrementCounter('aegis_llm_calls_total', 1);
-  logger.debug('[Reason] No template match - invoking LLM reasoning');
+  logger.debug('[Reason] No template or cache match - invoking LLM reasoning');
 
   const context: ReasoningContext = {
     observations,
@@ -57,6 +69,10 @@ export async function reasonAboutSponsorship(
   try {
     const decision = await generateSponsorshipDecision(context);
     const validated = DecisionSchema.parse(decision);
+
+    // Cache the decision for future use (only WAIT and reserve decisions)
+    await cacheDecision(observations as Observation[], validated);
+
     logger.info('[Reason] LLM sponsorship decision', { action: validated.action, confidence: validated.confidence });
     return validated;
   } catch (error) {
