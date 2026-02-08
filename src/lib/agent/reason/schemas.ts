@@ -129,7 +129,7 @@ export const RebalanceReservesParams = z.object({
 });
 export type RebalanceReservesParams = z.infer<typeof RebalanceReservesParams>;
 
-/** Optional metadata (e.g. reasoningFailed when LLM/reasoning threw; skippedReasoning when observation filter skipped LLM; template when template response used) */
+/** Optional metadata (e.g. reasoningFailed when LLM/reasoning threw; skippedReasoning when observation filter skipped LLM; template when template response used; template-specific fields for logging) */
 export const DecisionMetadata = z
   .object({
     reasoningFailed: z.boolean().optional(),
@@ -137,6 +137,13 @@ export const DecisionMetadata = z
     skippedReasoning: z.boolean().optional(),
     reason: z.string().optional(),
     template: z.string().optional(),
+    // Template-response context (for logging/debugging)
+    gasPrice: z.number().optional(),
+    threshold: z.number().optional(),
+    lowGasWalletsCount: z.number().optional(),
+    ethBalance: z.number().optional(),
+    usdcBalance: z.number().optional(),
+    swapAmount: z.number().optional(),
   })
   .optional();
 
