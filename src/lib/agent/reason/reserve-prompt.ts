@@ -11,6 +11,8 @@ import Anthropic from '@anthropic-ai/sdk';
 import { DecisionSchema, type Decision } from './schemas';
 import type { ReasoningContext } from './index';
 import { maskSensitiveData } from '../../security/data-masking';
+import { compressObservations } from './observation-compressor';
+import type { Observation } from '../observe';
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -95,11 +97,12 @@ DECISION RULES:
 export async function generateReserveDecision(context: ReasoningContext): Promise<Decision> {
   const { observations, memories, constraints } = context;
   const maskedObservations = maskSensitiveData(observations);
+  const compressedObservations = compressObservations(maskedObservations as Observation[]);
   const maskedMemories = maskSensitiveData(memories);
 
   const userPrompt = `
 Current observations (reserves, burn rate, runway, pending payments, gas price, ETH/USD):
-${JSON.stringify(maskedObservations, null, 2)}
+${JSON.stringify(compressedObservations, null, 2)}
 
 Relevant past experiences:
 ${maskedMemories && Array.isArray(maskedMemories) && maskedMemories.length > 0 ? JSON.stringify(maskedMemories, null, 2) : 'None.'}
