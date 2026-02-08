@@ -67,7 +67,7 @@ const highlights = [
   {
     icon: Lock,
     title: 'Secure by Design',
-    description: '9 policy rules, on-chain logging, and cryptographic signatures.',
+    description: '10 policy rules, on-chain logging, and cryptographic signatures.',
   },
   {
     icon: Globe,

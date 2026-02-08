@@ -193,14 +193,16 @@ export default function GettingStartedPage() {
             <div className="flex-1">
               <h3 className="font-semibold text-text-primary mb-2">Deposit USDC Budget</h3>
               <p className="text-text-secondary mb-4">
-                Fund your sponsorship budget. Each sponsorship costs ~$0.50.
+                Send USDC on-chain to the protocol deposit address, then verify the deposit
+                with the transaction hash and chain ID. Each sponsorship costs ~$0.50.
               </p>
               <CodeBlock
                 language="bash"
                 code={`curl -X POST https://clawgas.vercel.app/api/protocol/my-protocol/topup \\
   -H "Content-Type: application/json" \\
   -d '{
-    "amountUSD": 100
+    "txHash": "0x...",
+    "chainId": 8453
   }'`}
               />
             </div>
