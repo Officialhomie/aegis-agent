@@ -9,6 +9,11 @@ import { getPrisma } from '../db';
 import { logger } from '../logger';
 import { runStartupValidation, getCurrentNetworkName } from '../startup-validation';
 import { observeBaseSponsorshipOpportunities, observeGasPrice } from './observe';
+import {
+  hasSignificantChange,
+  getPreviousObservations,
+  savePreviousObservations,
+} from './observe/observation-filter';
 import { reasonAboutSponsorship } from './reason';
 import { validatePolicy } from './policy';
 import { execute } from './execute';
@@ -25,6 +30,7 @@ import {
   uploadToIPFS,
   buildRegistrationFile,
 } from './identity';
+import { incrementCounter } from '../monitoring/metrics';
 import type { Observation } from './observe';
 import type { Decision } from './reason/schemas';
 import type { ExecutionResult } from './execute';
@@ -93,6 +99,33 @@ const sponsorshipDefaultConfig: AgentConfig = {
 };
 
 /**
+ * Check if we should post this sponsorship to Farcaster.
+ * Posts every 42nd sponsorship to stay within Neynar free tier (740 posts/month / 30,000 sponsorships/month).
+ */
+async function shouldPostSponsorshipProof(): Promise<boolean> {
+  const store = await import('./state-store').then((m) => m.getStateStore());
+  const stateStore = await store;
+  const key = 'sponsorship:farcaster:counter';
+  const data = await stateStore.get(key);
+  let count = 1;
+  if (data) {
+    try {
+      count = parseInt(data, 10) + 1;
+    } catch {
+      count = 1;
+    }
+  }
+  await stateStore.set(key, count.toString());
+  const shouldPost = count % 42 === 0;
+  if (shouldPost) {
+    logger.info('[Aegis] Posting sponsorship proof to Farcaster', { sponsorshipNumber: count, reason: 'Every 42nd sponsorship' });
+  } else {
+    logger.debug('[Aegis] Skipping Farcaster post for this sponsorship', { sponsorshipNumber: count, nextPost: 42 - (count % 42) });
+  }
+  return shouldPost;
+}
+
+/**
  * Sponsorship cycle: observe Base opportunities, reason, validate, execute (sponsor or swap reserves), prove (Farcaster), store memory.
  */
 export async function runSponsorshipCycle(
@@ -124,6 +157,35 @@ export async function runSponsorshipCycle(
     const currentGasPriceGwei = gasData?.gasPriceGwei != null ? parseFloat(String(gasData.gasPriceGwei)) : undefined;
     const configWithGas: AgentConfig = { ...config, currentGasPriceGwei };
 
+    const previousObs = await getPreviousObservations();
+    const hasChanges = await hasSignificantChange(state.observations, previousObs);
+    incrementCounter('aegis_observation_filter_total', 1);
+
+    if (!hasChanges) {
+      incrementCounter('aegis_observation_filter_skips', 1);
+      state.currentDecision = {
+        action: 'WAIT',
+        confidence: 1.0,
+        reasoning: 'No significant changes detected in observations',
+        parameters: null,
+        preconditions: [],
+        expectedOutcome: 'Re-evaluate next cycle',
+        metadata: { skippedReasoning: true, reason: 'observation-filter' },
+      } as Decision;
+      logger.info('[Aegis] Skipping LLM reasoning - observations stable', {
+        action: 'WAIT',
+        reason: 'No significant changes detected',
+      });
+      await savePreviousObservations(state.observations);
+      await storeMemory({
+        type: 'DECISION',
+        observations: state.observations,
+        decision: state.currentDecision,
+        outcome: { success: true, message: 'No changes, skipped reasoning' },
+      });
+      return state;
+    }
+
     logger.info('[Aegis] Reasoning about sponsorship opportunities...');
     const decision = await reasonAboutSponsorship(state.observations, state.memories);
     state.currentDecision = decision;
@@ -148,7 +210,10 @@ export async function runSponsorshipCycle(
         if (decision.action === 'SPONSOR_TRANSACTION') {
           const signed = await signDecision(decision);
           state.executionResult = await sponsorTransaction(decision, config.executionMode === 'LIVE' ? 'LIVE' : 'SIMULATION');
-          await postSponsorshipProof(signed, state.executionResult as ExecutionResult & { sponsorshipHash?: string; decisionHash?: string });
+          const shouldPostToFarcaster = await shouldPostSponsorshipProof();
+          if (shouldPostToFarcaster) {
+            await postSponsorshipProof(signed, state.executionResult as ExecutionResult & { sponsorshipHash?: string; decisionHash?: string });
+          }
           postSponsorshipToBotchan(signed, state.executionResult as ExecutionResult & { sponsorshipHash?: string; decisionHash?: string }).catch(() => {});
           if (state.executionResult?.success) {
             const { updateReservesAfterSponsorship } = await import('./execute/post-sponsorship');
@@ -175,6 +240,7 @@ export async function runSponsorshipCycle(
       outcome: state.executionResult,
     });
 
+    await savePreviousObservations(state.observations);
     return state;
   } catch (error) {
     logger.error('[Aegis] Error in sponsorship cycle', { error: error instanceof Error ? error.message : String(error) });

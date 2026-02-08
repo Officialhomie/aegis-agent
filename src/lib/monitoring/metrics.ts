@@ -274,6 +274,10 @@ initGauge('aegis_active_protocols', 'Number of active protocols');
 initGauge('aegis_total_sponsored_usd', 'Total USD value sponsored');
 initCounter('aegis_policy_violations', 'Policy violation count');
 initCounter('aegis_circuit_breaker_trips', 'Circuit breaker trip count');
+initCounter('aegis_observation_filter_total', 'Total observation filter checks');
+initCounter('aegis_observation_filter_skips', 'Cycles skipped by observation filter');
+initCounter('aegis_template_response_used', 'Decisions made by template (no LLM)');
+initCounter('aegis_llm_calls_total', 'Total LLM reasoning calls');
 
 /**
  * Record a sponsorship attempt with outcome.
@@ -393,4 +397,8 @@ export function resetMetrics(): void {
   initGauge('aegis_total_sponsored_usd', 'Total USD value sponsored');
   initCounter('aegis_policy_violations', 'Policy violation count');
   initCounter('aegis_circuit_breaker_trips', 'Circuit breaker trip count');
+  initCounter('aegis_observation_filter_total', 'Total observation filter checks');
+  initCounter('aegis_observation_filter_skips', 'Cycles skipped by observation filter');
+  initCounter('aegis_template_response_used', 'Decisions made by template (no LLM)');
+  initCounter('aegis_llm_calls_total', 'Total LLM reasoning calls');
 }

@@ -7,6 +7,7 @@
 import { logger } from '../../logger';
 import type { SignedDecision } from '../execute/paymaster';
 import type { ExecutionResult } from '../execute/index';
+import { getNeynarRateLimiter, type PostCategory } from './neynar-rate-limiter';
 
 const BASESCAN_TX_URL = 'https://basescan.org/tx';
 const AEGIS_DASHBOARD_URL = process.env.NEXT_PUBLIC_APP_URL ?? process.env.AEGIS_DASHBOARD_URL ?? 'https://ClawGas.vercel.app';
@@ -30,12 +31,21 @@ export interface DailyStats {
 export async function postSponsorshipProof(
   signedDecision: SignedDecision,
   result: ExecutionResult & { sponsorshipHash?: string; decisionHash?: string; ipfsCid?: string }
-): Promise<{ success: boolean; castHash?: string; error?: string }> {
+): Promise<{ success: boolean; castHash?: string; error?: string; rateLimited?: boolean }> {
   const apiKey = process.env.NEYNAR_API_KEY;
   const signerUuid = process.env.FARCASTER_SIGNER_UUID ?? process.env.NEYNAR_SIGNER_UUID;
   if (!apiKey?.trim() || !signerUuid?.trim()) {
     logger.debug('[Farcaster] NEYNAR_API_KEY or FARCASTER_SIGNER_UUID not set - skipping cast');
     return { success: true };
+  }
+
+  // Check rate limit before posting
+  const rateLimiter = await getNeynarRateLimiter();
+  if (!(await rateLimiter.canPost('proof'))) {
+    logger.debug('[Farcaster] Rate limit reached for sponsorship proofs - skipping cast', {
+      category: 'proof',
+    });
+    return { success: true, rateLimited: true };
   }
 
   const params = signedDecision.decision.parameters as { agentWallet?: string; protocolId?: string; estimatedCostUSD?: number };
@@ -79,6 +89,11 @@ Reasoning: ${truncate(reasoning, 100)}
     });
     const castHash = publish?.cast?.hash;
     const verifyUrl = castHash ? `https://warpcast.com/~/conversations/${castHash}` : undefined;
+
+    // Consume rate limit token after successful post
+    const rateLimiter = await getNeynarRateLimiter();
+    await rateLimiter.consumeToken('proof');
+
     logger.info('[Farcaster] Sponsorship proof published – verify link', {
       castHash,
       verifyUrl,
@@ -100,11 +115,18 @@ Reasoning: ${truncate(reasoning, 100)}
 /**
  * Post daily stats summary to Farcaster.
  */
-export async function postDailyStats(stats: DailyStats): Promise<{ success: boolean; castHash?: string; error?: string }> {
+export async function postDailyStats(stats: DailyStats): Promise<{ success: boolean; castHash?: string; error?: string; rateLimited?: boolean }> {
   const apiKey = process.env.NEYNAR_API_KEY;
   const signerUuid = process.env.FARCASTER_SIGNER_UUID ?? process.env.NEYNAR_SIGNER_UUID;
   if (!apiKey?.trim() || !signerUuid?.trim()) {
     return { success: true };
+  }
+
+  // Check rate limit (priority: stats category)
+  const rateLimiter = await getNeynarRateLimiter();
+  if (!(await rateLimiter.canPost('stats'))) {
+    logger.warn('[Farcaster] Rate limit reached for daily stats - skipping cast');
+    return { success: true, rateLimited: true };
   }
 
   const castText = `📊 Daily Stats:
@@ -121,6 +143,10 @@ export async function postDailyStats(stats: DailyStats): Promise<{ success: bool
     const config = new Configuration({ apiKey });
     const client = new NeynarAPIClient(config);
     const publish = await client.publishCast({ signerUuid, text: castText });
+
+    // Consume rate limit token
+    await rateLimiter.consumeToken('stats');
+
     logger.info('[Farcaster] Daily stats published', { castHash: publish?.cast?.hash });
     return { success: true, castHash: publish?.cast?.hash };
   } catch (err) {
@@ -133,23 +159,39 @@ export async function postDailyStats(stats: DailyStats): Promise<{ success: bool
 /**
  * Post arbitrary text to Farcaster (e.g. emergency alerts, health summaries).
  */
-export async function postToFarcaster(text: string): Promise<{ success: boolean; castHash?: string; error?: string }> {
+export async function postToFarcaster(
+  text: string,
+  category: PostCategory = 'health'
+): Promise<{ success: boolean; castHash?: string; error?: string; rateLimited?: boolean }> {
   const apiKey = process.env.NEYNAR_API_KEY;
   const signerUuid = process.env.FARCASTER_SIGNER_UUID ?? process.env.NEYNAR_SIGNER_UUID;
   if (!apiKey?.trim() || !signerUuid?.trim()) {
     logger.debug('[Farcaster] NEYNAR_API_KEY or FARCASTER_SIGNER_UUID not set - skipping cast');
     return { success: true };
   }
+
+  // Check rate limit (emergency always bypasses)
+  const rateLimiter = await getNeynarRateLimiter();
+  if (!(await rateLimiter.canPost(category))) {
+    logger.warn('[Farcaster] Rate limit reached - skipping cast', { category });
+    return { success: true, rateLimited: true };
+  }
+
   try {
     const { NeynarAPIClient, Configuration } = await import('@neynar/nodejs-sdk');
     const config = new Configuration({ apiKey });
     const client = new NeynarAPIClient(config);
     const publish = await client.publishCast({ signerUuid, text });
     const castHash = publish?.cast?.hash;
+
+    // Consume rate limit token
+    await rateLimiter.consumeToken(category);
+
     if (castHash) {
       logger.info('[Farcaster] Cast published – verify', {
         castHash,
         verifyUrl: `https://warpcast.com/~/conversations/${castHash}`,
+        category,
       });
     }
     return { success: true, castHash };
@@ -175,10 +217,17 @@ export async function postReserveSwapProof(params: {
   txHash?: string;
   decisionHash?: string;
   reasoning?: string;
-}): Promise<{ success: boolean; castHash?: string }> {
+}): Promise<{ success: boolean; castHash?: string; rateLimited?: boolean }> {
   const apiKey = process.env.NEYNAR_API_KEY;
   const signerUuid = process.env.FARCASTER_SIGNER_UUID ?? process.env.NEYNAR_SIGNER_UUID;
   if (!apiKey?.trim() || !signerUuid?.trim()) return { success: true };
+
+  // Check rate limit (category: health)
+  const rateLimiter = await getNeynarRateLimiter();
+  if (!(await rateLimiter.canPost('health'))) {
+    logger.debug('[Farcaster] Rate limit reached for reserve swap - skipping cast');
+    return { success: true, rateLimited: true };
+  }
 
   const castText = `🔄 Swapped reserves: ${params.amountIn} ${params.tokenIn} → ${params.amountOut} ${params.tokenOut}
 
@@ -194,6 +243,10 @@ ${params.reasoning ?? ''}
     const config = new Configuration({ apiKey });
     const client = new NeynarAPIClient(config);
     const publish = await client.publishCast({ signerUuid, text: castText });
+
+    // Consume rate limit token
+    await rateLimiter.consumeToken('health');
+
     return { success: true, castHash: publish?.cast?.hash };
   } catch {
     return { success: false };

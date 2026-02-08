@@ -12,6 +12,9 @@ import {
   Copy,
   Check,
   RefreshCw,
+  TrendingDown,
+  MessageCircle,
+  DollarSign,
 } from 'lucide-react';
 import { Header } from '@/components/layout/header';
 import { Button } from '@/components/ui/button';
@@ -83,9 +86,27 @@ interface VerifyResult {
   error?: string;
 }
 
+interface CostSavings {
+  neynar: {
+    month: string;
+    used: number;
+    quota: number;
+    byCategory: Record<string, { used: number; budget: number }>;
+  } | null;
+  llm: {
+    totalCycles: number;
+    skippedByFilter: number;
+    skippedByTemplate: number;
+    llmCalls: number;
+  };
+  estimatedSavings: { neynarUSD: number; anthropicUSD: number; totalUSD: number };
+  timestamp: string;
+}
+
 export default function DashboardPage() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [activity, setActivity] = useState<ActivityRecord[]>([]);
+  const [costSavings, setCostSavings] = useState<CostSavings | null>(null);
   const [verifyHash, setVerifyHash] = useState('');
   const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
   const [loading, setLoading] = useState(true);
@@ -112,18 +133,28 @@ export default function DashboardPage() {
     }
   }, []);
 
+  const fetchCostSavings = useCallback(async () => {
+    try {
+      const res = await fetch('/api/dashboard/cost-savings');
+      const data = await res.json();
+      if (res.ok) setCostSavings(data);
+    } catch {
+      // Silently fail
+    }
+  }, []);
+
   useEffect(() => {
     const loadData = async () => {
       setLoading(true);
-      await Promise.all([fetchStats(), fetchActivity()]);
+      await Promise.all([fetchStats(), fetchActivity(), fetchCostSavings()]);
       setLoading(false);
     };
     loadData();
-  }, [fetchStats, fetchActivity]);
+  }, [fetchStats, fetchActivity, fetchCostSavings]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
-    await Promise.all([fetchStats(), fetchActivity()]);
+    await Promise.all([fetchStats(), fetchActivity(), fetchCostSavings()]);
     setRefreshing(false);
   };
 
@@ -196,6 +227,88 @@ export default function DashboardPage() {
             color="default"
           />
         </div>
+
+        {/* Cost Optimization (Phase 1) */}
+        <Card className="mb-8">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <TrendingDown className="h-5 w-5 text-cyan-400" />
+              Cost Optimization
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid sm:grid-cols-3 gap-6">
+              <div>
+                <div className="flex items-center gap-2 text-text-muted text-sm mb-2">
+                  <MessageCircle className="h-4 w-4" />
+                  Neynar posts
+                </div>
+                {costSavings?.neynar ? (
+                  <>
+                    <div className="text-2xl font-bold text-text-primary">
+                      {costSavings.neynar.used} <span className="text-base font-normal text-text-muted">/ {costSavings.neynar.quota}</span>
+                    </div>
+                    <div className="mt-2 h-2 rounded-full bg-elevated overflow-hidden">
+                      <div
+                        className="h-full bg-cyan-500 rounded-full transition-all"
+                        style={{ width: `${Math.min(100, (costSavings.neynar.used / costSavings.neynar.quota) * 100)}%` }}
+                      />
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-muted">
+                      {Object.entries(costSavings.neynar.byCategory).map(([cat, v]) => (
+                        <span key={cat}>{cat}: {v.used}/{v.budget}</span>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-text-muted text-sm">Not available</p>
+                )}
+              </div>
+              <div>
+                <div className="flex items-center gap-2 text-text-muted text-sm mb-2">
+                  <Activity className="h-4 w-4" />
+                  LLM calls saved
+                </div>
+                {costSavings?.llm ? (
+                  <>
+                    <div className="text-2xl font-bold text-text-primary">
+                      {costSavings.llm.totalCycles === 0
+                        ? '0%'
+                        : `${Math.round(((costSavings.llm.skippedByFilter + costSavings.llm.skippedByTemplate) / costSavings.llm.totalCycles) * 100)}%`}
+                    </div>
+                    <div className="mt-2 h-2 rounded-full bg-elevated overflow-hidden">
+                      <div
+                        className="h-full bg-coral-500 rounded-full transition-all"
+                        style={{
+                          width: `${costSavings.llm.totalCycles === 0 ? 0 : Math.min(100, ((costSavings.llm.skippedByFilter + costSavings.llm.skippedByTemplate) / costSavings.llm.totalCycles) * 100)}%`,
+                        }}
+                      />
+                    </div>
+                    <p className="mt-2 text-xs text-text-muted">
+                      Filter: {costSavings.llm.skippedByFilter} · Template: {costSavings.llm.skippedByTemplate} · LLM: {costSavings.llm.llmCalls}
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-text-muted text-sm">Not available</p>
+                )}
+              </div>
+              <div>
+                <div className="flex items-center gap-2 text-text-muted text-sm mb-2">
+                  <DollarSign className="h-4 w-4" />
+                  Est. savings
+                </div>
+                {costSavings?.estimatedSavings ? (
+                  <div className="text-2xl font-bold text-success">
+                    ${costSavings.estimatedSavings.totalUSD}
+                    <span className="text-base font-normal text-text-muted">/month</span>
+                  </div>
+                ) : (
+                  <p className="text-text-muted text-sm">Not available</p>
+                )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
 
         {/* Multi-chain balances */}
         {stats?.reserveHealth?.balances && stats.reserveHealth.balances.length > 0 && (

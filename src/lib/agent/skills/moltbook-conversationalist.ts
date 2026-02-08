@@ -5,8 +5,11 @@
  * Builds community presence and answers questions about gas sponsorship.
  */
 
+import Anthropic from '@anthropic-ai/sdk';
+import { createHash } from 'crypto';
 import { logger } from '../../logger';
 import { getStateStore } from '../state-store';
+import { getCache } from '../../cache';
 import {
   getAgentPosts,
   getPostComments,
@@ -15,7 +18,16 @@ import {
   type MoltbookComment,
   type MoltbookPost,
 } from '../social/moltbook';
+import { getTopDiscoveredAgents } from './agent-discovery';
+import {
+  MOLTBOOK_SYSTEM_PROMPT,
+  isRelevantTopic,
+  getAgentReferral,
+} from '../personality/moltbook-persona';
+import { getContextualTemperature } from '../reason/temperature-manager';
 import type { Skill, SkillContext, SkillResult } from './index';
+
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 /** State key for tracking replied comments */
 const REPLIED_COMMENTS_KEY = 'moltbook:repliedComments';
@@ -25,20 +37,6 @@ const MAX_REPLIES_PER_RUN = 3;
 
 /** Minimum interval between comment replies (20 seconds per Moltbook rate limit) */
 const REPLY_INTERVAL_MS = 20 * 1000;
-
-/** Topics Aegis can discuss */
-const AEGIS_TOPICS = [
-  'gas',
-  'sponsorship',
-  'paymaster',
-  'erc-4337',
-  'account abstraction',
-  'gasless',
-  'base',
-  'transaction',
-  'sponsor',
-  'aegis',
-];
 
 /**
  * Check if a comment is asking a question or seeking engagement
@@ -59,50 +57,137 @@ function isEngageableComment(comment: MoltbookComment, agentName: string): boole
   // Check if it mentions Aegis or asks a question
   const mentionsAegis = content.includes('aegis') || content.includes('@aegis');
   const asksQuestion = content.includes('?');
-  const mentionsTopics = AEGIS_TOPICS.some((topic) => content.includes(topic));
+  const mentionsTopics = isRelevantTopic(content);
 
   return mentionsAegis || asksQuestion || mentionsTopics;
 }
 
 /**
- * Generate a reply based on the comment content.
- * Uses simple pattern matching for now; can be upgraded to LLM later.
+ * Hash comment content for cache key
  */
-function generateReply(comment: MoltbookComment): string {
-  const content = comment.content.toLowerCase();
+function hashCommentContent(content: string): string {
+  return createHash('sha256').update(content.toLowerCase()).digest('hex').slice(0, 16);
+}
 
-  // Sponsorship decision questions
-  if (content.includes('how') && (content.includes('decide') || content.includes('choose'))) {
-    return `I analyze wallet history (5+ transactions), protocol whitelists, and current gas conditions. Legitimate agents with low gas on whitelisted protocols get priority sponsorship. The process is fully autonomous.`;
+/**
+ * Get agent context for richer replies
+ */
+async function getAgentContext(): Promise<{
+  discoveredAgentsCount: number;
+  recentActivity: string;
+}> {
+  try {
+    const topAgents = await getTopDiscoveredAgents(10);
+    // You'd get real activity stats from your DB here
+    return {
+      discoveredAgentsCount: topAgents.length,
+      recentActivity: 'Active sponsorship operations on Base',
+    };
+  } catch {
+    return {
+      discoveredAgentsCount: 0,
+      recentActivity: 'Active sponsorship operations on Base',
+    };
+  }
+}
+
+/**
+ * Generate a contextual reply using LLM (Anthropic Claude)
+ * with Moltbook personality and response caching
+ */
+async function generateReply(comment: MoltbookComment): Promise<string> {
+  const topicHash = hashCommentContent(comment.content);
+  const cacheKey = `moltbook:reply:${topicHash}`;
+
+  // Try to get cached response (24h TTL)
+  try {
+    const cache = await getCache();
+    const cached = await cache.get(cacheKey);
+
+    if (cached) {
+      logger.debug('[Conversationalist] Using cached reply', {
+        topicHash,
+        commentPreview: comment.content.slice(0, 50),
+      });
+      return cached;
+    }
+  } catch {
+    // Cache unavailable - proceed with LLM generation
   }
 
-  // Cost questions
-  if (content.includes('cost') || content.includes('how much') || content.includes('price')) {
-    return `Each sponsorship costs the protocol approximately $0.50. Protocols prepay via x402 protocol, and I deduct from their budget per sponsored transaction. Users pay nothing.`;
-  }
+  // Get agent context for richer replies
+  const agentContext = await getAgentContext();
 
-  // How it works questions
-  if (content.includes('how') && content.includes('work')) {
-    return `I run an observe-reason-execute loop every 60 seconds. I scan Base for low-gas wallets, evaluate their legitimacy, check protocol budgets, and sponsor qualifying transactions via the Base Paymaster. All decisions are logged on-chain.`;
-  }
+  // Check for agent referrals
+  const referral = getAgentReferral(comment.content);
 
-  // What is Aegis questions
-  if (content.includes('what') && content.includes('aegis')) {
-    return `I'm an autonomous AI agent that sponsors gas fees for legitimate users on Base. Protocols pay me to cover their users' gas costs, removing the biggest barrier to Web3 adoption.`;
-  }
+  // Build prompt with context
+  const userPrompt = `Comment from ${comment.author.name}:
+"${comment.content}"
 
-  // Integration questions
-  if (content.includes('integrate') || content.includes('use aegis') || content.includes('get sponsored')) {
-    return `Protocols can integrate by registering via our API and prepaying for sponsorships. Users don't need to do anything - if they interact with a sponsored protocol and meet legitimacy criteria, I automatically cover their gas.`;
-  }
+Current context:
+- Discovered agents in network: ${agentContext.discoveredAgentsCount}
+- Recent activity: ${agentContext.recentActivity}
+${referral ? `\nSuggested referral: ${referral}` : ''}
 
-  // ERC-4337 / Account Abstraction questions
-  if (content.includes('4337') || content.includes('account abstraction')) {
-    return `I use ERC-4337 and the Base Paymaster to sponsor UserOperations. This allows gasless transactions without users needing ETH for gas. The paymaster validates my signature and covers the gas cost.`;
-  }
+Generate a helpful, conversational reply that:
+1. Addresses the comment directly and specifically
+2. Provides technical depth where relevant
+3. Includes examples or patterns if helpful
+4. Stays focused and scannable (3-6 sentences max)
+5. Invites follow-up questions if appropriate
+${referral ? '6. Mentions the relevant agent referral naturally' : ''}
 
-  // Generic engagement
-  return `Thanks for engaging! I'm an autonomous gas sponsorship agent on Base. I help onboard users by covering their transaction costs. Ask me anything about gasless UX or how sponsorship works.`;
+Reply:`;
+
+  try {
+    // Generate response with Moltbook personality
+    const temperature = getContextualTemperature('engagement'); // 0.7
+
+    const response = await anthropic.messages.create({
+      model: process.env.ANTHROPIC_REASONING_MODEL ?? 'claude-sonnet-4-20250514',
+      max_tokens: 400,
+      temperature,
+      system: MOLTBOOK_SYSTEM_PROMPT,
+      messages: [
+        {
+          role: 'user',
+          content: userPrompt,
+        },
+      ],
+    });
+
+    const textBlock = response.content.find((b) => b.type === 'text');
+    if (!textBlock || textBlock.type !== 'text') {
+      throw new Error('No text in Claude response');
+    }
+
+    const reply = textBlock.text.trim();
+
+    // Cache the response (24h TTL)
+    try {
+      const cache = await getCache();
+      await cache.set(cacheKey, reply, 24 * 60 * 60); // 24 hours
+    } catch {
+      // Cache unavailable - continue without caching
+    }
+
+    logger.info('[Conversationalist] Generated LLM reply', {
+      topicHash,
+      temperature,
+      replyLength: reply.length,
+      cached: false,
+    });
+
+    return reply;
+  } catch (error) {
+    // Fallback to simple response if LLM fails
+    logger.warn('[Conversationalist] LLM generation failed, using fallback', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+
+    return `Thanks for the question! I'm an autonomous gas sponsorship agent on Base. I evaluate wallet history, protocol whitelists, and gas conditions to sponsor legitimate transactions. Happy to discuss ERC-4337, paymasters, or Base integration!`;
+  }
 }
 
 /**

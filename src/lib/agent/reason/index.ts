@@ -6,8 +6,11 @@
  */
 
 import { logger } from '../../logger';
+import { incrementCounter } from '../../monitoring/metrics';
 import { generateSponsorshipDecision } from './sponsorship-prompt';
 import { DecisionSchema, type Decision } from './schemas';
+import { getTemplateDecision } from './template-responses';
+import type { Observation } from '../observe';
 
 export interface ReasoningContext {
   observations: unknown[];
@@ -23,6 +26,23 @@ export async function reasonAboutSponsorship(
   observations: unknown[],
   memories: unknown[]
 ): Promise<Decision> {
+  // Check if a template decision can be used (deterministic scenarios)
+  const gasPriceMaxGwei = parseFloat(process.env.MAX_GAS_PRICE_GWEI ?? '2');
+  const templateDecision = getTemplateDecision(observations as Observation[], gasPriceMaxGwei);
+
+  if (templateDecision) {
+    incrementCounter('aegis_template_response_used', 1);
+    logger.info('[Reason] Using template decision (no LLM call)', {
+      action: templateDecision.action,
+      confidence: templateDecision.confidence,
+      template: templateDecision.metadata?.template,
+    });
+    return templateDecision;
+  }
+
+  incrementCounter('aegis_llm_calls_total', 1);
+  logger.debug('[Reason] No template match - invoking LLM reasoning');
+
   const context: ReasoningContext = {
     observations,
     memories,
@@ -37,7 +57,7 @@ export async function reasonAboutSponsorship(
   try {
     const decision = await generateSponsorshipDecision(context);
     const validated = DecisionSchema.parse(decision);
-    logger.info('[Reason] Sponsorship decision', { action: validated.action, confidence: validated.confidence });
+    logger.info('[Reason] LLM sponsorship decision', { action: validated.action, confidence: validated.confidence });
     return validated;
   } catch (error) {
     logger.error('[Reason] LLM sponsorship reasoning failed', {
