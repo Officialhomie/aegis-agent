@@ -104,7 +104,7 @@ export async function getCachedDecision(
     const cacheKey = `${CACHE_KEY_PREFIX}:${hash}`;
 
     const cache = await getCache();
-    const cached = await cache.get(cacheKey);
+    const cached = await cache.get<string>(cacheKey);
 
     if (!cached) {
       logger.debug('[ResponseCache] Cache miss', { hash });
