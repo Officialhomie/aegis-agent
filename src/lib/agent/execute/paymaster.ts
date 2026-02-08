@@ -25,6 +25,7 @@ import {
 import type { Decision } from '../reason/schemas';
 import type { SponsorParams } from '../reason/schemas';
 import type { ExecutionResult } from './index';
+import { updateCachedProtocolBudget } from '../../cache';
 
 const ACTIVITY_LOGGER_ABI = [
   {
@@ -186,15 +187,43 @@ export async function deductProtocolBudget(
 ): Promise<{ success: boolean; error?: string }> {
   try {
     const db = getPrisma();
+
+    // Get current budget first (needed for cache update)
+    const current = await db.protocolSponsor.findUnique({
+      where: { protocolId },
+      select: { balanceUSD: true },
+    });
+
+    if (!current) {
+      return { success: false, error: `Protocol ${protocolId} not found` };
+    }
+
+    const newBalanceUSD = current.balanceUSD - amountUSD;
+
+    // Update database
     await db.protocolSponsor.update({
       where: { protocolId },
       data: {
-        balanceUSD: { decrement: amountUSD },
+        balanceUSD: newBalanceUSD,
         totalSpent: { increment: amountUSD },
         sponsorshipCount: { increment: 1 },
       },
     });
-    logger.info('[Paymaster] Budget deducted successfully', { protocolId, amountUSD });
+
+    // Update cache (write-through strategy)
+    // Fire-and-forget - don't block on cache update
+    updateCachedProtocolBudget(protocolId, newBalanceUSD, amountUSD).catch((err) => {
+      logger.warn('[Paymaster] Cache update failed (non-critical)', {
+        protocolId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+
+    logger.info('[Paymaster] Budget deducted successfully', {
+      protocolId,
+      amountUSD,
+      newBalance: newBalanceUSD,
+    });
     return { success: true };
   } catch (error) {
     logger.error('[Paymaster] FAILED to deduct protocol budget', {

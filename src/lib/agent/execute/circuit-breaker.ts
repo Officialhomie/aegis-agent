@@ -9,6 +9,7 @@ import { logger } from '../../logger';
 import { getStateStore } from '../state-store';
 import { getAgentWalletBalance } from '../observe/sponsorship';
 import { checkBundlerHealth } from './bundler-client';
+import { getEconomicBreaker } from './circuit-breaker/economic-breaker';
 
 const RESERVE_CRITICAL_ETH = Number(process.env.RESERVE_CRITICAL_ETH) || 0.05;
 const BUNDLER_HEALTH_CHECK_ENABLED = process.env.BUNDLER_HEALTH_CHECK_ENABLED !== 'false';
@@ -141,7 +142,7 @@ export class CircuitBreaker {
   }
 
   /**
-   * Check health before execution (reserves, bundler, circuit state).
+   * Check health before execution (reserves, bundler, circuit state, economic conditions).
    * Returns { healthy: true } or { healthy: false, reason }.
    */
   async checkHealthBeforeExecution(): Promise<{
@@ -151,13 +152,17 @@ export class CircuitBreaker {
       reserveHealth: boolean;
       bundlerHealth: boolean;
       circuitState: State;
+      economicHealth: boolean;
     };
+    warnings?: string[];
   }> {
     const details = {
       reserveHealth: true,
       bundlerHealth: true,
       circuitState: this.getState(),
+      economicHealth: true,
     };
+    const warnings: string[] = [];
 
     // Check circuit breaker state first
     if (details.circuitState === 'OPEN') {
@@ -203,7 +208,45 @@ export class CircuitBreaker {
       }
     }
 
-    return { healthy: true, details };
+    // Check economic conditions (gas price, runway, protocol budgets)
+    try {
+      const economicBreaker = getEconomicBreaker();
+      const economicCheck = await economicBreaker.check({
+        reservesETH: reserves.ETH,
+        reservesUSDC: reserves.USDC,
+      });
+
+      if (!economicCheck.healthy) {
+        details.economicHealth = false;
+        logger.warn('[CircuitBreaker] Economic health check failed', {
+          reason: economicCheck.reason,
+          warnings: economicCheck.warnings,
+        });
+        return {
+          healthy: false,
+          reason: economicCheck.reason ?? 'Economic conditions unfavorable',
+          details,
+          warnings: economicCheck.warnings,
+        };
+      }
+
+      // Accumulate economic warnings even if healthy
+      if (economicCheck.warnings.length > 0) {
+        warnings.push(...economicCheck.warnings);
+        logger.info('[CircuitBreaker] Economic warnings detected', {
+          warnings: economicCheck.warnings,
+        });
+      }
+    } catch (error) {
+      logger.error('[CircuitBreaker] Economic health check error - degrading gracefully', {
+        error: error instanceof Error ? error.message : String(error),
+        severity: 'HIGH',
+      });
+      // Don't fail execution if economic check fails - degrade gracefully
+      warnings.push('Economic health check unavailable');
+    }
+
+    return { healthy: true, details, warnings: warnings.length > 0 ? warnings : undefined };
   }
 
   /**

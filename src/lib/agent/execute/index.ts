@@ -244,6 +244,7 @@ export async function execute(
 export { executeWithAgentKit } from './agentkit';
 export { sendAlert } from './alerts';
 export { getCircuitBreaker, getDefaultCircuitBreaker, CircuitBreaker } from './circuit-breaker';
+export { EconomicCircuitBreaker, getEconomicBreaker, type RunwayEstimate } from './circuit-breaker/economic-breaker';
 export { executeWithWalletLock } from './wallet-lock';
 export {
   sponsorTransaction,
