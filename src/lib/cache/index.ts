@@ -425,5 +425,5 @@ async function getProtocolWhitelistFromDb(protocolId: string): Promise<string[]>
 }
 
 // Re-export for convenience
-export { RedisCache, isCacheEnabled } from './redis-cache';
+export { getCache, RedisCache, isCacheEnabled } from './redis-cache';
 export { CacheKeys, handleCacheInvalidation, type CacheInvalidationEvent } from './cache-strategies';
