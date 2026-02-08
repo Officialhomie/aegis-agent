@@ -129,11 +129,13 @@ export const RebalanceReservesParams = z.object({
 });
 export type RebalanceReservesParams = z.infer<typeof RebalanceReservesParams>;
 
-/** Optional metadata (e.g. reasoningFailed when LLM/reasoning threw) */
+/** Optional metadata (e.g. reasoningFailed when LLM/reasoning threw; skippedReasoning when observation filter skipped LLM) */
 export const DecisionMetadata = z
   .object({
     reasoningFailed: z.boolean().optional(),
     error: z.string().optional(),
+    skippedReasoning: z.boolean().optional(),
+    reason: z.string().optional(),
   })
   .optional();
 
