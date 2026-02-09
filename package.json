@@ -31,6 +31,8 @@
     "env:merge": "tsx scripts/merge-env.ts",
     "check:redis": "tsx scripts/check-redis.ts",
     "check:db": "tsx scripts/check-db.ts",
+    "vercel:env:sync": "tsx scripts/sync-vercel-env.ts",
+    "vercel:env:dry": "tsx scripts/sync-vercel-env.ts --dry-run",
     "typecheck": "tsc --noEmit"
   },
   "prisma": {

@@ -38,6 +38,7 @@ export async function POST(request: Request) {
       return NextResponse.json({
         agentId: agent.onChainId,
         message: 'Agent already registered',
+        registryAddress: registryAddress ?? undefined,
       });
     }
     const metadata: AgentMetadata = {
