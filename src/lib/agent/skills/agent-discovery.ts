@@ -181,7 +181,7 @@ async function execute(context: SkillContext): Promise<SkillResult> {
 
     for (const keyword of searchKeywords) {
       // Try agent-specific search first
-      let agentResults = await searchAgents(keyword, 10);
+      const agentResults = await searchAgents(keyword, 10);
 
       // Fallback to general search if agent search fails
       if (agentResults.length === 0) {

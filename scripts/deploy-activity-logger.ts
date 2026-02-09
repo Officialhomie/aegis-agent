@@ -16,7 +16,7 @@
  */
 
 import 'dotenv/config';
-import { spawnSync } from 'child_process';
+import { execSync, spawnSync } from 'child_process';
 import { resolve } from 'path';
 
 const CONTRACT = 'contracts/AegisActivityLogger.sol:AegisActivityLogger';
@@ -57,7 +57,7 @@ function main() {
 
   try {
     const chainId = isBase ? 8453 : 84532;
-    // Build argv with --broadcast as first option so Forge definitely sees it (it was ignoring it when later in the list)
+    // Deploy WITHOUT --verify so "Contract already verified" never fails the deploy
     const argv: string[] = [
       'forge', 'create', CONTRACT,
       '--broadcast',
@@ -65,9 +65,6 @@ function main() {
       ...(keystoreAccount ? ['--account', keystoreAccount] : ['--private-key', privateKey!]),
       '--constructor-args', agentWallet!,
     ];
-    if (process.env.BASESCAN_API_KEY) {
-      argv.push('--verify', '--etherscan-api-key', process.env.BASESCAN_API_KEY, '--chain-id', String(chainId));
-    }
     let out: string;
     let stderrOut: string;
     try {
@@ -88,11 +85,38 @@ function main() {
     }
 
     console.log('[Deploy] AegisActivityLogger deployed to:', address);
+
+    // Optional: verify in a separate step (non-fatal; "already verified" is OK)
+    const apiKey = process.env.BASESCAN_API_KEY;
+    if (apiKey) {
+      try {
+        const constructorArgs = execSync(
+          `cast abi-encode "constructor(address)" "${agentWallet}"`,
+          { encoding: 'utf-8', cwd: root }
+        ).trim();
+        execSync(
+          `forge verify-contract --chain-id ${chainId} --etherscan-api-key ${apiKey} --constructor-args ${constructorArgs} ${address} ${CONTRACT}`,
+          { encoding: 'utf-8', cwd: root, stdio: 'pipe' }
+        );
+        console.log('[Deploy] Contract verified on Basescan.');
+      } catch (verifyErr: unknown) {
+        const verifyOut = String((verifyErr as { stderr?: Buffer })?.stderr ?? (verifyErr as Error)?.message ?? '');
+        if (verifyOut.includes('already verified')) {
+          console.log('[Deploy] Contract already verified on Basescan (skipped).');
+        } else {
+          console.warn('[Deploy] Verification failed (deploy succeeded). Run manually if needed:');
+          console.warn(`  forge verify-contract --chain-id ${chainId} --constructor-args $(cast abi-encode "constructor(address)" ${agentWallet}) ${address} ${CONTRACT} --etherscan-api-key <key>`);
+        }
+      }
+    }
+
     console.log('');
     console.log('Next steps:');
     console.log('  1. Add to .env: ACTIVITY_LOGGER_ADDRESS=' + address);
-    console.log('  2. Verify on Basescan (if not auto-verified):');
-    console.log(`     forge verify-contract --chain-id ${chainId} --constructor-args $(cast abi-encode "constructor(address)" ${agentWallet}) ${address} ${CONTRACT}`);
+    if (!apiKey) {
+      console.log('  2. Verify on Basescan (optional):');
+      console.log(`     forge verify-contract --chain-id ${chainId} --constructor-args $(cast abi-encode "constructor(address)" ${agentWallet}) ${address} ${CONTRACT} --etherscan-api-key <key>`);
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error('[Deploy] Failed:', message);

@@ -46,12 +46,8 @@ function main() {
 
   try {
     const chainId = isBase ? 8453 : 84532;
-    const verifyArgs = process.env.BASESCAN_API_KEY
-      ? `--verify --etherscan-api-key ${process.env.BASESCAN_API_KEY} --chain-id ${chainId}`
-      : '';
-
-    // Contract must be first argument for forge create; --broadcast sends the tx (default is dry-run)
-    const cmd = `forge create "${CONTRACT}" --rpc-url "${rpcUrl}" ${authArgs} --broadcast ${verifyArgs}`.trim().replace(/\s+/g, ' ');
+    // Deploy WITHOUT --verify so "Contract already verified" from Basescan never fails the deploy
+    const cmd = `forge create "${CONTRACT}" --rpc-url "${rpcUrl}" ${authArgs} --broadcast`.trim().replace(/\s+/g, ' ');
     const out = execSync(cmd, { encoding: 'utf-8', cwd: root, maxBuffer: 10 * 1024 * 1024 });
 
     const match = out.match(/Deployed to: (0x[a-fA-F0-9]{40})/);
@@ -63,11 +59,34 @@ function main() {
     }
 
     console.log('[Deploy] AegisReactiveObserver deployed to:', address);
+
+    // Optional: verify in a separate step (non-fatal; "already verified" is OK)
+    const apiKey = process.env.BASESCAN_API_KEY;
+    if (apiKey) {
+      try {
+        execSync(
+          `forge verify-contract --chain-id ${chainId} --etherscan-api-key ${apiKey} ${address} ${CONTRACT}`,
+          { encoding: 'utf-8', cwd: root, stdio: 'pipe' }
+        );
+        console.log('[Deploy] Contract verified on Basescan.');
+      } catch (verifyErr: unknown) {
+        const verifyOut = String((verifyErr as { stderr?: Buffer })?.stderr ?? (verifyErr as Error)?.message ?? '');
+        if (verifyOut.includes('already verified')) {
+          console.log('[Deploy] Contract already verified on Basescan (skipped).');
+        } else {
+          console.warn('[Deploy] Verification failed (deploy succeeded). Run manually if needed:');
+          console.warn(`  forge verify-contract --chain-id ${chainId} --etherscan-api-key <key> ${address} ${CONTRACT}`);
+        }
+      }
+    }
+
     console.log('');
     console.log('Next steps:');
     console.log('  1. Add to .env: REACTIVE_OBSERVER_ADDRESS=' + address);
-    console.log('  2. Verify on Basescan (if not auto-verified):');
-    console.log(`     forge verify-contract --chain-id ${chainId} ${address} ${CONTRACT}`);
+    if (!apiKey) {
+      console.log('  2. Verify on Basescan (optional):');
+      console.log(`     forge verify-contract --chain-id ${chainId} ${address} ${CONTRACT} --etherscan-api-key <key>`);
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error('[Deploy] Failed:', message);

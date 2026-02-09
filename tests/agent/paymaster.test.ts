@@ -11,14 +11,18 @@ import {
 } from '../../src/lib/agent/execute/paymaster';
 import type { Decision } from '../../src/lib/agent/reason/schemas';
 
+const mockProtocolSponsorFindUnique = vi.fn();
 const mockProtocolSponsorUpdate = vi.fn();
 const mockSponsorshipRecordCreate = vi.fn().mockResolvedValue(undefined);
 
-vi.mock('@prisma/client', () => ({
-  PrismaClient: class MockPrismaClient {
-    protocolSponsor = { update: mockProtocolSponsorUpdate };
-    sponsorshipRecord = { create: mockSponsorshipRecordCreate };
-  },
+vi.mock('../../src/lib/db', () => ({
+  getPrisma: () => ({
+    protocolSponsor: {
+      findUnique: mockProtocolSponsorFindUnique,
+      update: mockProtocolSponsorUpdate,
+    },
+    sponsorshipRecord: { create: mockSponsorshipRecordCreate },
+  }),
 }));
 
 vi.mock('../../src/lib/agent/state-store', () => ({
@@ -149,10 +153,12 @@ describe('executePaymasterSponsorship', () => {
 
 describe('deductProtocolBudget', () => {
   beforeEach(() => {
+    mockProtocolSponsorFindUnique.mockReset();
     mockProtocolSponsorUpdate.mockReset();
   });
 
   it('returns success: true when database update succeeds', async () => {
+    mockProtocolSponsorFindUnique.mockResolvedValue({ balanceUSD: 100 });
     mockProtocolSponsorUpdate.mockResolvedValue(undefined);
     const result = await deductProtocolBudget('test-protocol', 10);
     expect(result.success).toBe(true);
@@ -160,6 +166,7 @@ describe('deductProtocolBudget', () => {
   });
 
   it('returns success: false when database update fails', async () => {
+    mockProtocolSponsorFindUnique.mockResolvedValue({ balanceUSD: 100 });
     mockProtocolSponsorUpdate.mockRejectedValueOnce(new Error('Connection refused'));
     const result = await deductProtocolBudget('test-protocol', 10);
     expect(result.success).toBe(false);

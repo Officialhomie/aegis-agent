@@ -584,7 +584,7 @@ describe('EconomicCircuitBreaker', () => {
       expect(mockSet).toHaveBeenCalledWith(
         'economic-breaker:state',
         expect.any(String),
-        expect.any(Number)
+        { px: 3600000 }
       );
     });
 
@@ -632,7 +632,7 @@ describe('EconomicCircuitBreaker', () => {
       expect(mockSet).toHaveBeenCalledWith(
         expect.any(String),
         expect.any(String),
-        60 * 60 // 1 hour in seconds
+        { px: 60 * 60 * 1000 } // 1 hour in ms
       );
     });
 

@@ -1,11 +1,16 @@
 /**
  * Seed sample protocol sponsors for Base paymaster.
  * Run: npx prisma db seed
+ * Prisma 7: schema has no url in datasource, so use adapter with env URL.
  */
-
+import 'dotenv/config';
+import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@prisma/client';
 
-const prisma = new PrismaClient();
+const connectionString = process.env.DATABASE_URL ?? process.env.DIRECT_URL ?? '';
+if (!connectionString) throw new Error('DATABASE_URL or DIRECT_URL required for seed');
+const adapter = new PrismaPg({ connectionString });
+const prisma = new PrismaClient({ adapter });
 
 async function main() {
   const protocols = [

@@ -104,7 +104,7 @@ async function generateReply(comment: MoltbookComment): Promise<string> {
     const cache = await getCache();
     const cached = await cache.get(cacheKey);
 
-    if (cached) {
+    if (cached != null && typeof cached === 'string') {
       logger.debug('[Conversationalist] Using cached reply', {
         topicHash,
         commentPreview: comment.content.slice(0, 50),
@@ -167,7 +167,7 @@ Reply:`;
     // Cache the response (24h TTL)
     try {
       const cache = await getCache();
-      await cache.set(cacheKey, reply, 24 * 60 * 60); // 24 hours
+      await cache.set(cacheKey, reply, { ttlMs: 24 * 60 * 60 * 1000 }); // 24 hours
     } catch {
       // Cache unavailable - continue without caching
     }
@@ -276,7 +276,7 @@ async function execute(context: SkillContext): Promise<SkillResult> {
     // Reply to pending comments (up to limit)
     let repliesSent = 0;
     for (const { post, comment } of pendingReplies.slice(0, MAX_REPLIES_PER_RUN)) {
-      const reply = generateReply(comment);
+      const reply = await generateReply(comment);
 
       if (dryRun) {
         logger.info('[Conversationalist] [DRY RUN] Would reply to comment', {
