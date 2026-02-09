@@ -5,6 +5,7 @@
  * Usage: node scripts/set-railway-vars.js | while IFS= read -r line; do railway variables --set "$line"; done
  * Or: railway variables --set "$(node scripts/set-railway-vars.js | head -1)"
  */
+/* eslint-disable @typescript-eslint/no-require-imports */
 const fs = require('fs');
 const path = require('path');
 const envPath = path.join(__dirname, '..', '.env');

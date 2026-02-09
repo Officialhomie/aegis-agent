@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { Bot, CheckCircle, XCircle } from 'lucide-react';
 
 const requirements = [
@@ -81,9 +82,9 @@ export function ForAgents() {
 
             <div className="text-sm text-text-muted">
               Want your protocol supported?{' '}
-              <a href="/protocols/register" className="text-cyan-400 hover:underline">
+              <Link href="/protocols/register" className="text-cyan-400 hover:underline">
                 Register now
-              </a>
+              </Link>
             </div>
           </div>
         </div>
