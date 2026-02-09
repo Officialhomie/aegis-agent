@@ -18,6 +18,11 @@ export interface X402PaymentProof {
   requester?: string;
   /** Optional facilitator verification token */
   verificationToken?: string;
+  /**
+   * When using Coinbase CDP as facilitator, client sends full x402 payment payload here.
+   * Must have x402Version, scheme, network, payload (signature + authorization).
+   */
+  cdpPaymentPayload?: unknown;
 }
 
 export interface VerifiedPayment {
@@ -31,6 +36,8 @@ export interface VerifiedPayment {
 
 /**
  * Verify x402 payment proof via facilitator API.
+ * When X402_FACILITATOR_URL points to Coinbase CDP, uses JWT auth and CDP verify API (proof must include cdpPaymentPayload).
+ * Otherwise uses generic facilitator with X402_API_KEY.
  * CRITICAL: Never accept unverified payments; throws when X402_FACILITATOR_URL not set.
  */
 export async function verifyX402Payment(proof: X402PaymentProof): Promise<VerifiedPayment> {
@@ -44,6 +51,19 @@ export async function verifyX402Payment(proof: X402PaymentProof): Promise<Verifi
     throw new Error(
       'Payment verification unavailable: X402_FACILITATOR_URL not configured. ' +
         'Cannot accept unverified payments.'
+    );
+  }
+
+  const { isCdpFacilitator, hasCdpPayload, verifyX402PaymentViaCdp } = await import(
+    './x402-cdp-adapter'
+  );
+
+  if (isCdpFacilitator()) {
+    if (hasCdpPayload(proof)) {
+      return verifyX402PaymentViaCdp(proof);
+    }
+    throw new Error(
+      'CDP x402 facilitator requires client to send full x402 payment payload (X-PAYMENT header with x402Version, scheme, network, payload). Set proof.cdpPaymentPayload or use CDP-compatible client.'
     );
   }
 
