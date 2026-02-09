@@ -23,7 +23,7 @@ import {
   getCachedProtocolBudgets,
   getCachedProtocolWhitelist,
   isCacheEnabled,
-} from '../../cache';
+} from '@/src/lib/cache';
 
 /**
  * Whether to use strict observation mode (fail on errors).

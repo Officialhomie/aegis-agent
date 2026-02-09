@@ -7,7 +7,7 @@
 
 import { createHash } from 'crypto';
 import { logger } from '../../logger';
-import { getCache } from '../../cache';
+import { getCache } from '@/src/lib/cache';
 import type { Decision } from './schemas';
 import type { Observation } from '../observe';
 

@@ -331,7 +331,7 @@ export async function startAutonomousPaymaster(intervalMs: number = 60000): Prom
 
   // Initialize Redis cache layer (Phase 1: Critical for 1000 txs/day scale)
   try {
-    const { initializeCache } = await import('../cache');
+    const { initializeCache } = await import('@/src/lib/cache');
     await initializeCache();
     logger.info('[Aegis] Cache layer initialized successfully');
   } catch (error) {
