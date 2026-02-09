@@ -61,6 +61,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "dotenv": "^17.2.3",
+    "groq-sdk": "^0.37.0",
     "langchain": "^1.2.15",
     "lru-cache": "^11.2.5",
     "lucide-react": "^0.563.0",
@@ -74,9 +75,9 @@
     "react-hook-form": "^7.71.1",
     "redis": "^5.10.0",
     "tailwind-merge": "^3.4.0",
+    "tsx": "^4.21.0",
     "viem": "^2.45.0",
-    "zod": "^3.25.76",
-    "tsx": "^4.21.0"
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

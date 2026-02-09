@@ -96,7 +96,7 @@ function main() {
   }
 
   let added = 0;
-  let failed: string[] = [];
+  const failed: string[] = [];
 
   for (const key of toSync) {
     const value = env[key];

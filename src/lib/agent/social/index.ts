@@ -30,6 +30,7 @@ export {
   runMoltbookHeartbeatNow,
   getSponsorshipStats,
   buildActivitySummary,
+  generateMoltbookPost,
   type SponsorshipStats,
 } from './heartbeat';
 
