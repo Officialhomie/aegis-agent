@@ -4,6 +4,13 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+// Prevent Anthropic SDK from throwing in Vitest (browser-like env)
+vi.mock('@anthropic-ai/sdk', () => ({
+  default: class MockAnthropic {
+    messages = { create: vi.fn().mockResolvedValue({ content: [], id: 'msg-1' }) };
+  },
+}));
+
 const mockSetNX = vi.hoisted(() => vi.fn());
 const mockSet = vi.hoisted(() => vi.fn());
 const mockGet = vi.hoisted(() => vi.fn());

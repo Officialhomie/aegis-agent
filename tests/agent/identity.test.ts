@@ -51,7 +51,7 @@ describe('uploadToIPFS', () => {
       version: '1.0.0',
       created: new Date().toISOString(),
     };
-    await expect(uploadToIPFS(metadata)).rejects.toThrow('IPFS_GATEWAY_URL not configured');
+    await expect(uploadToIPFS(metadata)).rejects.toThrow(/IPFS not configured|IPFS_GATEWAY_URL|PINATA_JWT/);
   });
 
   it('returns ipfs:// CID when gateway returns valid Hash', async () => {

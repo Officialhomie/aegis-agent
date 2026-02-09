@@ -25,10 +25,13 @@ vi.mock('@/src/lib/db', () => ({
   getPrisma: () => mockPrisma,
 }));
 
-// Mock USDC deposit verification
+// Mock USDC deposit verification and GET deposit list
 const mockVerifyAndCreditDeposit = vi.fn();
+const mockGetProtocolDeposits = vi.fn();
 vi.mock('@/src/lib/agent/observe/usdc-deposits', () => ({
-  verifyAndCreditDeposit: (args: unknown) => mockVerifyAndCreditDeposit(args),
+  verifyAndCreditDeposit: (protocolId: string, txHash: string) =>
+    mockVerifyAndCreditDeposit(protocolId, txHash),
+  getProtocolDeposits: (protocolId: string) => mockGetProtocolDeposits(protocolId),
 }));
 
 // Mock logger
@@ -61,10 +64,9 @@ describe('POST /api/protocol/[protocolId]/topup', () => {
 
       mockPrisma.protocolSponsor.findUnique.mockResolvedValue(mockProtocol);
       mockVerifyAndCreditDeposit.mockResolvedValue({
-        verified: true,
-        amountUSD: 100,
-        tokenAmount: BigInt(100_000_000),
-        depositId: 'deposit-123',
+        success: true,
+        amount: 100,
+        newBalance: 300,
       });
 
       const req = createMockRequest(`http://localhost/api/protocol/${protocolId}/topup`, {
@@ -82,8 +84,8 @@ describe('POST /api/protocol/[protocolId]/topup', () => {
       expect(json.success).toBe(true);
       expect(json.protocolId).toBe(protocolId);
       expect(json.txHash).toBe(validTxHash);
-      expect(json.amountUSD).toBe(100);
-      expect(json.depositId).toBe('deposit-123');
+      expect(json.amount).toBe(100);
+      expect(json.newBalance).toBe(300);
       expect(json.verifiedAt).toBeDefined();
     });
 
@@ -148,10 +150,9 @@ describe('POST /api/protocol/[protocolId]/topup', () => {
 
       mockPrisma.protocolSponsor.findUnique.mockResolvedValue(createMockProtocol());
       mockVerifyAndCreditDeposit.mockResolvedValue({
-        verified: true,
-        amountUSD: 50,
-        tokenAmount: BigInt(50_000_000),
-        depositId: 'deposit-456',
+        success: true,
+        amount: 50,
+        newBalance: 150,
       });
 
       const req = createMockRequest(`http://localhost/api/protocol/${protocolId}/topup`, {
@@ -161,11 +162,8 @@ describe('POST /api/protocol/[protocolId]/topup', () => {
 
       await POST(req, { params: Promise.resolve({ protocolId }) });
 
-      expect(mockVerifyAndCreditDeposit).toHaveBeenCalledWith(
-        expect.objectContaining({
-          chainId: 8453, // Default Base mainnet
-        })
-      );
+      // API calls verifyAndCreditDeposit(protocolId, txHash) only
+      expect(mockVerifyAndCreditDeposit).toHaveBeenCalledWith(protocolId, validTxHash);
     });
   });
 
@@ -265,7 +263,7 @@ describe('GET /api/protocol/[protocolId]/topup', () => {
     ];
 
     mockPrisma.protocolSponsor.findUnique.mockResolvedValue(mockProtocol);
-    mockPrisma.depositTransaction.findMany.mockResolvedValue(mockDeposits);
+    mockGetProtocolDeposits.mockResolvedValue(mockDeposits);
 
     const req = createMockRequest(`http://localhost/api/protocol/${protocolId}/topup`, {
       method: 'GET',
@@ -289,7 +287,7 @@ describe('GET /api/protocol/[protocolId]/topup', () => {
     const mockDeposit = createMockDeposit({ txHash, amount: 150 });
 
     mockPrisma.protocolSponsor.findUnique.mockResolvedValue(mockProtocol);
-    mockPrisma.depositTransaction.findUnique.mockResolvedValue(mockDeposit);
+    mockGetProtocolDeposits.mockResolvedValue([mockDeposit]);
 
     const req = createMockRequest(
       `http://localhost/api/protocol/${protocolId}/topup?txHash=${txHash}`,
@@ -322,7 +320,7 @@ describe('GET /api/protocol/[protocolId]/topup', () => {
     const { GET } = await import('../../../app/api/protocol/[protocolId]/topup/route');
 
     mockPrisma.protocolSponsor.findUnique.mockResolvedValue(createMockProtocol());
-    mockPrisma.depositTransaction.findUnique.mockResolvedValue(null);
+    mockGetProtocolDeposits.mockResolvedValue([]);
 
     const txHash = '0x0000000000000000000000000000000000000000000000000000000000000000';
     const req = createMockRequest(

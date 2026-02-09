@@ -4,10 +4,30 @@
  * Tests for the agent's decision-making and policy enforcement.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { DecisionSchema, type Decision } from '@/src/lib/agent/reason/schemas';
 import { validatePolicy } from '@/src/lib/agent/policy';
 import type { AgentConfig } from '@/src/lib/agent';
+
+// Mock DB and sponsorship so policy rules (which call getProtocolBudget, findUnique) don't throw
+vi.mock('@/src/lib/db', () => ({
+  getPrisma: () => ({
+    protocolSponsor: { findUnique: vi.fn().mockResolvedValue({ balanceUSD: 500 }) },
+    approvedAgent: { findUnique: vi.fn().mockResolvedValue(null) },
+  }),
+}));
+vi.mock('@/src/lib/agent/observe/sponsorship', () => ({
+  getProtocolBudget: vi.fn().mockResolvedValue({ balanceUSD: 500 }),
+  getAgentWalletBalance: vi.fn().mockResolvedValue({ ETH: 1, USDC: 100, chainId: 8453 }),
+  getOnchainTxCount: vi.fn().mockResolvedValue(10),
+}));
+vi.mock('@/src/lib/agent/state-store', () => ({
+  getStateStore: vi.fn().mockResolvedValue({
+    get: vi.fn().mockResolvedValue(null),
+    set: vi.fn().mockResolvedValue(undefined),
+    setNX: vi.fn().mockResolvedValue(true),
+  }),
+}));
 
 // Mock config for testing
 const testConfig: AgentConfig = {
