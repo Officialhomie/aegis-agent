@@ -96,6 +96,11 @@ NEYNAR_API_KEY="D3663CB8-..." # Mark as SECRET 🔒
 FARCASTER_SIGNER_UUID="238e59fa-..." # Mark as SECRET 🔒
 FARCASTER_FID=""
 FARCASTER_UPDATE_INTERVAL_MS="900000"
+# Social post LLM (Groq free tier primary, Claude fallback). Set GROQ_API_KEY from console.groq.com for free tier.
+GROQ_API_KEY="" # Mark as SECRET. Optional: use template-only to disable LLM posts.
+SOCIAL_LLM_PROVIDER="groq"
+SOCIAL_LLM_MAX_TOKENS_FARCASTER="150"
+SOCIAL_LLM_MAX_TOKENS_MOLTBOOK="250"
 
 # ============================================
 # X402 PAYMENTS

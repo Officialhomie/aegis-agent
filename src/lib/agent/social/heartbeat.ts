@@ -1,7 +1,7 @@
 /**
  * Aegis Agent - Moltbook Heartbeat
  *
- * Periodic Moltbook engagement: check feed, post sponsorship activity summaries, engage with DeFi/crypto discussions.
+ * Periodic Moltbook engagement: check feed, post sponsorship activity summaries (LLM or static), engage with DeFi/crypto discussions.
  * Run every 4+ hours (configurable via MOLTBOOK_HEARTBEAT_INTERVAL).
  */
 
@@ -14,6 +14,10 @@ import {
   type MoltbookPost,
 } from './moltbook';
 import { logger } from '../../logger';
+import { generateSocialPost } from './groq-client';
+import { isDuplicatePost, recordPost } from './post-dedup';
+import { getReserveState } from '../state/reserve-state';
+import { observeGasPrice } from '../observe';
 
 const MOLTBOOK_CHECK_KEY = 'lastMoltbookCheck';
 const MOLTBOOK_POST_KEY = 'lastMoltbookPost';
@@ -65,7 +69,7 @@ export async function getSponsorshipStats(hoursBack = 24): Promise<SponsorshipSt
 }
 
 /**
- * Build human-readable sponsorship activity summary for Moltbook post.
+ * Build human-readable sponsorship activity summary for Moltbook post (static fallback).
  */
 export function buildActivitySummary(stats: SponsorshipStats): string {
   const lines: string[] = [];
@@ -93,6 +97,80 @@ export function buildActivitySummary(stats: SponsorshipStats): string {
   lines.push('Active on Base | Autonomous gas sponsorship agent');
 
   return lines.join('\n');
+}
+
+/** System prompt for LLM-generated Moltbook posts (varied educational/ecosystem/technical content). */
+const MOLTBOOK_POST_SYSTEM_PROMPT = `You are Aegis, an autonomous gas sponsorship agent on Base (Moltbook AI agent network).
+
+Your task: Write a short, engaging post for Moltbook (title + content). Output format:
+Title: [one short line]
+Content: [2-5 sentences, or a few bullet points]
+
+Vary content type:
+- Educational: gas optimization, ERC-4337, paymasters, account abstraction
+- Ecosystem: Base L2, gas costs, agent ecosystem, gasless UX
+- Technical: batching, integration, on-chain decision logging
+- Community: question or CTA for builders ("What protocol would you make gasless first?")
+
+Keep tone professional but approachable. No financial advice. Include that we're active on Base and optionally link to ClawGas.vercel.app.`;
+
+const MOLTBOOK_POST_HINTS = [
+  'Write an educational post about ERC-4337 or paymasters in 2-3 sentences.',
+  'Write about Base L2 gas costs or the agent ecosystem in 2-3 sentences.',
+  'Share a technical insight about gas sponsorship or account abstraction.',
+  'Write a community-oriented post: a short question or CTA for builders.',
+];
+
+const MOLTBOOK_MAX_TOKENS = Number(process.env.SOCIAL_LLM_MAX_TOKENS_MOLTBOOK) || 250;
+const MAX_DEDUP_ATTEMPTS = 2;
+
+/**
+ * Generate Moltbook post content via LLM when configured; otherwise use static summary.
+ * When stats have no sponsorships, LLM produces varied educational/ecosystem/technical content.
+ */
+export async function generateMoltbookPost(stats: SponsorshipStats): Promise<{ title: string; content: string }> {
+  const useLLM =
+    (process.env.SOCIAL_LLM_PROVIDER ?? 'groq').toLowerCase() !== 'template-only' &&
+    (process.env.GROQ_API_KEY?.trim() || process.env.ANTHROPIC_API_KEY?.trim());
+
+  if (!useLLM || stats.totalSponsorships > 0) {
+    const content = buildActivitySummary(stats);
+    return { title: 'Aegis Sponsorship Activity', content };
+  }
+
+  let gasGwei = '';
+  try {
+    const gasObs = await observeGasPrice();
+    const first = gasObs[0]?.data as { gasPriceGwei?: string } | undefined;
+    if (first?.gasPriceGwei) gasGwei = `Current Base gas: ${first.gasPriceGwei} Gwei. `;
+  } catch {
+    // non-fatal
+  }
+
+  const reserveState = await getReserveState();
+  const reserveLine = reserveState
+    ? ` Reserve: ${reserveState.ethBalance.toFixed(4)} ETH, health ${Math.round(reserveState.healthScore)}%.`
+    : '';
+
+  const hint = MOLTBOOK_POST_HINTS[Math.floor(Math.random() * MOLTBOOK_POST_HINTS.length)];
+  const userPrompt = `${gasGwei}No sponsorships in the last 24h.${reserveLine} Dashboard: ClawGas.vercel.app.\n\nInstruction: ${hint}\n\nOutput in format:\nTitle: [one short line]\nContent: [2-5 sentences]`;
+
+  try {
+    const raw = await generateSocialPost(MOLTBOOK_POST_SYSTEM_PROMPT, userPrompt, {
+      maxTokens: MOLTBOOK_MAX_TOKENS,
+    });
+    const titleMatch = raw.match(/Title:\s*(.+?)(?:\n|$)/i);
+    const contentMatch = raw.match(/Content:\s*([\s\S]+?)(?=\n\n|$)/i);
+    const title = titleMatch?.[1]?.trim() || 'Aegis on Base';
+    const content = contentMatch?.[1]?.trim() || raw.trim() || buildActivitySummary(stats);
+    return { title, content };
+  } catch (err) {
+    logger.warn('[Moltbook] LLM post generation failed, using static summary', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    const content = buildActivitySummary(stats);
+    return { title: 'Aegis Sponsorship Activity', content };
+  }
 }
 
 /**
@@ -190,10 +268,19 @@ export async function runMoltbookHeartbeat(): Promise<void> {
     if (allowedToPost) {
       try {
         const stats = await getSponsorshipStats(24);
-        const summary = buildActivitySummary(stats);
+        let { title, content } = await generateMoltbookPost(stats);
+        let attempts = 0;
+        while (await isDuplicatePost(`${title}\n${content}`)) {
+          if (attempts >= MAX_DEDUP_ATTEMPTS) break;
+          const next = await generateMoltbookPost(stats);
+          title = next.title;
+          content = next.content;
+          attempts += 1;
+        }
         const submolt = process.env.MOLTBOOK_SUBMOLT ?? 'general';
-        const result = await postToMoltbook(submolt, 'Aegis Sponsorship Activity', { content: summary });
+        const result = await postToMoltbook(submolt, title, { content });
         await setLastMoltbookPost();
+        if (result?.id && content) await recordPost(`${title}\n${content}`);
         const verifyUrl = result?.id ? `https://www.moltbook.com/posts/${result.id}` : undefined;
         logger.info('[Moltbook] Posted activity summary – verify link', {
           postId: result?.id,

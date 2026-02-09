@@ -1,6 +1,6 @@
 /**
  * Periodic Farcaster health summaries for transparency.
- * Uses rotating templates and smart formatting for engaging, dynamic posts.
+ * Uses LLM (Groq/Claude) for varied posts when configured; falls back to rotating templates.
  */
 
 import { logger } from '../../logger';
@@ -11,6 +11,10 @@ import {
   getContextualEmoji,
   maybeGetFunFact,
 } from '../personality/farcaster-persona';
+import { FARCASTER_SYSTEM_PROMPT } from '../personality/farcaster-persona';
+import { generateSocialPost } from '../social/groq-client';
+import { isDuplicatePost, recordPost } from '../social/post-dedup';
+import { observeGasPrice } from '../observe';
 import type { ReserveState } from '../state/reserve-state';
 
 const DEFAULT_FARCASTER_UPDATE_INTERVAL_MS = 15 * 60 * 1000; // 15 min (configurable for proof-of-work)
@@ -45,14 +49,6 @@ function runwayDisplay(days: number): string {
   const hours = days * 24;
   if (hours >= 1) return `~${Math.round(hours)}h runway`;
   return '<1h runway';
-}
-
-function activityEmoji(count: number): string {
-  if (count >= 50) return '🔥';
-  if (count >= 20) return '⚡';
-  if (count >= 5) return '⛽';
-  if (count >= 1) return '✨';
-  return '🟢';
 }
 
 // --- Template builders ---
@@ -98,7 +94,7 @@ ${hashtags}`;
   }
 }
 
-function templateReserves(state: ReserveState, dashboardUrl: string): string {
+function templateReserves(state: ReserveState, _dashboardUrl: string): string {
   const bar = progressBar(state.healthScore);
   const emoji = getContextualEmoji('reserves');
   const hashtags = getRandomHashtags(3).join(' ');
@@ -137,7 +133,7 @@ ${hashtags}`;
   }
 }
 
-function templateProtocol(state: ReserveState, dashboardUrl: string): string {
+function templateProtocol(state: ReserveState, _dashboardUrl: string): string {
   const n = state.protocolBudgets.length;
   const names = state.protocolBudgets.slice(0, 3).map((p) => p.protocolId).join(', ');
   const more = n > 3 ? ` +${n - 3} more` : '';
@@ -165,7 +161,7 @@ ${hashtags}`;
   }
 }
 
-function templateQuiet(state: ReserveState, dashboardUrl: string): string {
+function templateQuiet(state: ReserveState, _dashboardUrl: string): string {
   const hashtags = getRandomHashtags(2).join(' ');
 
   return `Standing by on Base...
@@ -177,7 +173,7 @@ Ready to sponsor your next tx
 ${hashtags}`;
 }
 
-function templateMilestone(state: ReserveState, dashboardUrl: string): string {
+function templateMilestone(state: ReserveState, _dashboardUrl: string): string {
   const count = state.sponsorshipsLast24h;
   const emoji = getContextualEmoji('milestones');
   const hashtags = getRandomHashtags(3).join(' ');
@@ -251,6 +247,61 @@ function buildDynamicPost(state: ReserveState): string {
   return fn(state, DASHBOARD_URL);
 }
 
+/** Post-type rotation hints for LLM diversity */
+const POST_TYPE_HINTS = [
+  'Write a short status update about reserve health and runway. Include numbers.',
+  'Write one educational sentence about ERC-4337 or paymasters, then a CTA to the dashboard.',
+  'Write about the Base ecosystem or gasless UX in one or two lines.',
+  'Share a brief technical insight about gas sponsorship or account abstraction.',
+  'Write a community-oriented line (question or call-to-action for builders).',
+];
+
+const MAX_DEDUP_ATTEMPTS = 2;
+const FARCASTER_MAX_TOKENS = Number(process.env.SOCIAL_LLM_MAX_TOKENS_FARCASTER) || 150;
+
+/**
+ * Generate post text via LLM (Groq/Claude) with data context and rotation hint; fallback to templates.
+ */
+async function generateDynamicPost(state: ReserveState): Promise<string> {
+  const useLLM =
+    (process.env.SOCIAL_LLM_PROVIDER ?? 'groq').toLowerCase() !== 'template-only' &&
+    (process.env.GROQ_API_KEY?.trim() || process.env.ANTHROPIC_API_KEY?.trim());
+
+  if (!useLLM) {
+    return buildDynamicPost(state);
+  }
+
+  let gasGwei = '';
+  try {
+    const gasObs = await observeGasPrice();
+    const first = gasObs[0]?.data as { gasPriceGwei?: string } | undefined;
+    if (first?.gasPriceGwei) gasGwei = `Current Base gas: ${first.gasPriceGwei} Gwei. `;
+  } catch {
+    // non-fatal
+  }
+
+  const protocolNames = state.protocolBudgets.slice(0, 5).map((p) => p.protocolId).join(', ');
+  const hint =
+    POST_TYPE_HINTS[Math.floor(Math.random() * POST_TYPE_HINTS.length)];
+
+  const dataContext = `${gasGwei}Data: ETH ${state.ethBalance.toFixed(6)}, USDC $${state.usdcBalance.toFixed(2)}, health ${Math.round(state.healthScore)}%, runway ${state.runwayDays.toFixed(2)} days, sponsorships last 24h: ${state.sponsorshipsLast24h}, protocols: ${state.protocolBudgets.length}${protocolNames ? ` (${protocolNames})` : ''}. Dashboard: ${DASHBOARD_URL}. Emergency mode: ${state.emergencyMode}.`;
+
+  const userPrompt = `${dataContext}\n\nInstruction: ${hint}\n\nOutput only the post (max 300 characters), no preamble.`;
+
+  try {
+    const text = await generateSocialPost(FARCASTER_SYSTEM_PROMPT, userPrompt, {
+      maxTokens: FARCASTER_MAX_TOKENS,
+    });
+    if (text && text.length <= 320) return text;
+    return text ? text.slice(0, 320).trim() : buildDynamicPost(state);
+  } catch (err) {
+    logger.warn('[Farcaster] LLM generation failed, using templates', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return buildDynamicPost(state);
+  }
+}
+
 /**
  * Post a health summary to Farcaster if enough time has passed since last post.
  */
@@ -261,7 +312,6 @@ export async function maybePostFarcasterUpdate(): Promise<void> {
   const lastPost = state.lastFarcasterPost ? new Date(state.lastFarcasterPost).getTime() : 0;
   if (Date.now() - lastPost < FARCASTER_UPDATE_INTERVAL_MS) return;
 
-  // Refresh on-chain balance before posting
   const { getAgentWalletBalance } = await import('../observe/sponsorship');
   const reserves = await getAgentWalletBalance();
   const freshState = await updateReserveState({
@@ -270,9 +320,17 @@ export async function maybePostFarcasterUpdate(): Promise<void> {
     chainId: reserves.chainId,
   });
 
-  const message = buildDynamicPost(freshState);
+  let message = await generateDynamicPost(freshState);
+  let attempts = 0;
+  while (await isDuplicatePost(message)) {
+    if (attempts >= MAX_DEDUP_ATTEMPTS) break;
+    message = await generateDynamicPost(freshState);
+    attempts += 1;
+  }
+
   const result = await postToFarcaster(message);
   await updateReserveState({ lastFarcasterPost: new Date().toISOString() });
+  if (result.success && message) await recordPost(message);
 
   if (result.success && result.castHash) {
     const verifyUrl = `${WARPCAST_CAST_URL}/${result.castHash}`;
