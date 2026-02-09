@@ -131,7 +131,7 @@ export async function getCachedDecision(
 
     // Update hit count
     cachedDecision.hitCount += 1;
-    await cache.set(cacheKey, JSON.stringify(cachedDecision), ttl);
+    await cache.set(cacheKey, JSON.stringify(cachedDecision), { ttlMs: ttl * 1000 });
 
     logger.info('[ResponseCache] Cache hit', {
       hash,
@@ -177,7 +177,7 @@ export async function cacheDecision(
     };
 
     const cache = await getCache();
-    await cache.set(cacheKey, JSON.stringify(cachedDecision), ttl);
+    await cache.set(cacheKey, JSON.stringify(cachedDecision), { ttlMs: ttl * 1000 });
 
     logger.debug('[ResponseCache] Decision cached', {
       hash,
