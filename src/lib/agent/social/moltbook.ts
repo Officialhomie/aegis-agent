@@ -78,6 +78,8 @@ export interface MoltbookAgentProfile {
   follower_count?: number;
   is_claimed?: boolean;
   owner?: { x_handle?: string; x_name?: string };
+  /** Recent posts when returned by API (e.g. getAgentByName) */
+  posts?: MoltbookPost[];
 }
 
 export interface MoltbookFeedResponse {
