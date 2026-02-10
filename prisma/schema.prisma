@@ -1,6 +1,3 @@
-// Aegis Agent - Database Schema
-// This schema defines the memory and state management for the AI agent
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -9,98 +6,206 @@ datasource db {
   provider = "postgresql"
 }
 
-// ============================================
-// AGENT IDENTITY & CONFIGURATION
-// ============================================
-
 model Agent {
-  id          String   @id @default(cuid())
-  name        String
-  description String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  // On-chain identity (ERC-8004 when available)
-  onChainId     String?  @unique
-  walletAddress String?  @unique
-
-  // Moltbook social identity
-  moltbookApiKey    String?   @unique
-  moltbookAgentName String?
-  moltbookClaimedAt DateTime?
-
-  // Configuration
-  confidenceThreshold Float    @default(0.75)
+  id                  String        @id @default(cuid())
+  name                String
+  description         String?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+  onChainId           String?       @unique
+  walletAddress       String?       @unique
+  moltbookApiKey      String?       @unique
+  moltbookAgentName   String?
+  moltbookClaimedAt   DateTime?
+  confidenceThreshold Float         @default(0.75)
   maxTransactionValue BigInt?
-  isActive            Boolean  @default(true)
-
-  // Relations
-  observations Observation[]
-  decisions    Decision[]
-  executions   Execution[]
-  memories     Memory[]
+  isActive            Boolean       @default(true)
+  decisions           Decision[]
+  executions          Execution[]
+  memories            Memory[]
+  observations        Observation[]
 
   @@index([walletAddress])
 }
 
-// ============================================
-// OBSERVATION LAYER
-// ============================================
-
 model Observation {
-  id        String   @id @default(cuid())
-  agentId   String
-  agent     Agent    @relation(fields: [agentId], references: [id])
-  createdAt DateTime @default(now())
-
-  // Source information
-  source    String   // "blockchain", "oracle", "api", "event"
-  chainId   Int?
+  id          String     @id @default(cuid())
+  agentId     String
+  createdAt   DateTime   @default(now())
+  source      String
+  chainId     Int?
   blockNumber BigInt?
-
-  // Observed state (JSON blob of the state snapshot)
-  stateData Json
-
-  // Metadata
-  context   String?  // Additional context about the observation
-
-  // Relations
-  decisions Decision[]
+  stateData   Json
+  context     String?
+  decisions   Decision[]
+  agent       Agent      @relation(fields: [agentId], references: [id])
 
   @@index([agentId, createdAt])
   @@index([source])
 }
 
-// ============================================
-// REASONING & DECISION LAYER
-// ============================================
-
 model Decision {
-  id            String   @id @default(cuid())
+  id            String         @id @default(cuid())
   agentId       String
-  agent         Agent    @relation(fields: [agentId], references: [id])
   observationId String
-  observation   Observation @relation(fields: [observationId], references: [id])
-  createdAt     DateTime @default(now())
-
-  // Decision details
-  action        String   // "EXECUTE", "WAIT", "ALERT_HUMAN", etc.
-  parameters    Json?    // Action parameters
-  confidence    Float    // 0.0 to 1.0
-  reasoning     String   // LLM's reasoning explanation
-
-  // Decision status
+  createdAt     DateTime       @default(now())
+  action        String
+  parameters    Json?
+  confidence    Float
+  reasoning     String
   status        DecisionStatus @default(PENDING)
-
-  // Policy validation
-  policyPassed  Boolean  @default(false)
+  policyPassed  Boolean        @default(false)
   policyErrors  String[]
-
-  // Relations
+  agent         Agent          @relation(fields: [agentId], references: [id])
+  observation   Observation    @relation(fields: [observationId], references: [id])
   execution     Execution?
 
   @@index([agentId, createdAt])
   @@index([status])
+}
+
+model Execution {
+  id           String          @id @default(cuid())
+  agentId      String
+  decisionId   String          @unique
+  createdAt    DateTime        @default(now())
+  completedAt  DateTime?
+  chainId      Int
+  txHash       String?
+  blockNumber  BigInt?
+  gasUsed      BigInt?
+  gasCost      BigInt?
+  status       ExecutionStatus @default(PENDING)
+  errorMessage String?
+  success      Boolean?
+  outcomeData  Json?
+  agent        Agent           @relation(fields: [agentId], references: [id])
+  decision     Decision        @relation(fields: [decisionId], references: [id])
+
+  @@index([agentId, createdAt])
+  @@index([txHash])
+  @@index([status])
+}
+
+model Memory {
+  id           String     @id @default(cuid())
+  agentId      String
+  createdAt    DateTime   @default(now())
+  type         MemoryType
+  content      String
+  metadata     Json?
+  embeddingId  String?    @unique
+  importance   Float      @default(0.5)
+  accessCount  Int        @default(0)
+  lastAccessed DateTime?
+  agent        Agent      @relation(fields: [agentId], references: [id])
+
+  @@index([agentId, type])
+  @@index([importance])
+}
+
+model PaymentRecord {
+  id              String        @id @default(cuid())
+  createdAt       DateTime      @default(now())
+  paymentHash     String        @unique
+  amount          BigInt
+  currency        String
+  chainId         Int
+  requestedAction String
+  requester       String
+  status          PaymentStatus @default(PENDING)
+  executionId     String?
+
+  @@index([paymentHash])
+  @@index([requester])
+}
+
+model ReputationAttestation {
+  id              String   @id @default(cuid())
+  createdAt       DateTime @default(now())
+  agentOnChainId  String
+  attestor        String
+  attestationType String
+  score           Int
+  metadata        Json?
+  chainId         Int
+  txHash          String?
+
+  @@index([agentOnChainId])
+  @@index([attestor])
+}
+
+model ProtocolSponsor {
+  id                   String               @id @default(cuid())
+  protocolId           String               @unique
+  name                 String
+  balanceUSD           Float                @default(0)
+  totalSpent           Float                @default(0)
+  sponsorshipCount     Int                  @default(0)
+  whitelistedContracts String[]
+  tier                 String               @default("bronze")
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+  approvedAgents       ApprovedAgent[]
+  deposits             DepositTransaction[]
+
+  @@index([protocolId])
+}
+
+model DepositTransaction {
+  id            String          @id @default(cuid())
+  protocolId    String
+  txHash        String          @unique
+  amount        Float
+  tokenAmount   BigInt
+  tokenSymbol   String          @default("USDC")
+  chainId       Int
+  confirmed     Boolean         @default(false)
+  blockNumber   BigInt?
+  confirmedAt   DateTime?
+  senderAddress String
+  createdAt     DateTime        @default(now())
+  protocol      ProtocolSponsor @relation(fields: [protocolId], references: [protocolId])
+
+  @@index([protocolId])
+  @@index([txHash])
+  @@index([senderAddress])
+  @@index([confirmed])
+}
+
+model ApprovedAgent {
+  id             String          @id @default(cuid())
+  protocolId     String
+  agentAddress   String
+  agentName      String?
+  approvedBy     String
+  approvedAt     DateTime        @default(now())
+  revokedAt      DateTime?
+  maxDailyBudget Float           @default(10)
+  isActive       Boolean         @default(true)
+  protocol       ProtocolSponsor @relation(fields: [protocolId], references: [protocolId])
+
+  @@unique([protocolId, agentAddress])
+  @@index([protocolId])
+  @@index([agentAddress])
+  @@index([isActive])
+}
+
+model SponsorshipRecord {
+  id               String   @id @default(cuid())
+  userAddress      String
+  protocolId       String
+  decisionHash     String   @unique
+  estimatedCostUSD Float
+  actualCostUSD    Float?
+  txHash           String?
+  signature        String
+  ipfsCid          String?
+  createdAt        DateTime @default(now())
+
+  @@index([userAddress])
+  @@index([protocolId])
+  @@index([decisionHash])
 }
 
 enum DecisionStatus {
@@ -111,72 +216,12 @@ enum DecisionStatus {
   FAILED
 }
 
-// ============================================
-// EXECUTION LAYER
-// ============================================
-
-model Execution {
-  id          String   @id @default(cuid())
-  agentId     String
-  agent       Agent    @relation(fields: [agentId], references: [id])
-  decisionId  String   @unique
-  decision    Decision @relation(fields: [decisionId], references: [id])
-  createdAt   DateTime @default(now())
-  completedAt DateTime?
-
-  // Transaction details
-  chainId       Int
-  txHash        String?
-  blockNumber   BigInt?
-  gasUsed       BigInt?
-  gasCost       BigInt?
-
-  // Execution status
-  status        ExecutionStatus @default(PENDING)
-  errorMessage  String?
-
-  // Outcome evaluation
-  success       Boolean?
-  outcomeData   Json?
-
-  @@index([agentId, createdAt])
-  @@index([txHash])
-  @@index([status])
-}
-
 enum ExecutionStatus {
   PENDING
   SUBMITTED
   CONFIRMED
   FAILED
   REVERTED
-}
-
-// ============================================
-// MEMORY LAYER
-// ============================================
-
-model Memory {
-  id        String   @id @default(cuid())
-  agentId   String
-  agent     Agent    @relation(fields: [agentId], references: [id])
-  createdAt DateTime @default(now())
-
-  // Memory content
-  type        MemoryType
-  content     String     // Textual description for embedding
-  metadata    Json?      // Structured metadata
-
-  // Vector embedding reference (stored in Pinecone)
-  embeddingId String?    @unique
-
-  // Importance scoring for retrieval
-  importance  Float      @default(0.5)
-  accessCount Int        @default(0)
-  lastAccessed DateTime?
-
-  @@index([agentId, type])
-  @@index([importance])
 }
 
 enum MemoryType {
@@ -187,156 +232,9 @@ enum MemoryType {
   USER_FEEDBACK
 }
 
-// ============================================
-// PAYMENT & REPUTATION (x402 / ERC-8004)
-// ============================================
-
-model PaymentRecord {
-  id          String   @id @default(cuid())
-  createdAt   DateTime @default(now())
-
-  // Payment details
-  paymentHash String   @unique
-  amount      BigInt
-  currency    String   // "USDC", "ETH", etc.
-  chainId     Int
-
-  // Request details
-  requestedAction String
-  requester       String  // Address of requester
-
-  // Status
-  status      PaymentStatus @default(PENDING)
-  executionId String?
-
-  @@index([paymentHash])
-  @@index([requester])
-}
-
 enum PaymentStatus {
   PENDING
   CONFIRMED
   EXECUTED
   REFUNDED
-}
-
-model ReputationAttestation {
-  id          String   @id @default(cuid())
-  createdAt   DateTime @default(now())
-
-  // Attestation details
-  agentOnChainId String
-  attestor       String   // Address of attestor
-  attestationType String  // "SUCCESS", "FAILURE", "QUALITY"
-  score          Int      // Rating score
-  metadata       Json?
-
-  // On-chain reference
-  chainId        Int
-  txHash         String?
-
-  @@index([agentOnChainId])
-  @@index([attestor])
-}
-
-// ============================================
-// PAYMASTER SPONSORSHIP (Base Paymaster Agent)
-// ============================================
-
-model ProtocolSponsor {
-  id                   String   @id @default(cuid())
-  protocolId           String   @unique
-  name                 String
-  balanceUSD           Float    @default(0)
-  totalSpent           Float    @default(0)
-  sponsorshipCount     Int      @default(0)
-  whitelistedContracts String[] // Contract addresses allowed for this protocol
-  tier                 String   @default("bronze") // bronze, silver, gold
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
-
-  // Relations
-  deposits       DepositTransaction[]
-  approvedAgents ApprovedAgent[]
-
-  @@index([protocolId])
-}
-
-// ============================================
-// DEPOSIT TRANSACTIONS (On-chain USDC verification)
-// ============================================
-
-model DepositTransaction {
-  id          String   @id @default(cuid())
-  protocolId  String
-  protocol    ProtocolSponsor @relation(fields: [protocolId], references: [protocolId])
-
-  // Transaction details
-  txHash      String   @unique
-  amount      Float    // USD value of deposit
-  tokenAmount BigInt   // Raw token amount (e.g., USDC with 6 decimals)
-  tokenSymbol String   @default("USDC")
-  chainId     Int
-
-  // Verification status
-  confirmed   Boolean  @default(false)
-  blockNumber BigInt?
-  confirmedAt DateTime?
-
-  // Sender info
-  senderAddress String
-
-  createdAt   DateTime @default(now())
-
-  @@index([protocolId])
-  @@index([txHash])
-  @@index([senderAddress])
-  @@index([confirmed])
-}
-
-// ============================================
-// APPROVED AGENTS (Agent-specific eligibility)
-// ============================================
-
-model ApprovedAgent {
-  id             String    @id @default(cuid())
-  protocolId     String
-  protocol       ProtocolSponsor @relation(fields: [protocolId], references: [protocolId])
-
-  // Agent identification
-  agentAddress   String
-  agentName      String?
-
-  // Approval details
-  approvedBy     String    // Admin address who approved
-  approvedAt     DateTime  @default(now())
-  revokedAt      DateTime?
-
-  // Limits
-  maxDailyBudget Float     @default(10) // USD limit per day
-
-  // Status
-  isActive       Boolean   @default(true)
-
-  @@unique([protocolId, agentAddress])
-  @@index([protocolId])
-  @@index([agentAddress])
-  @@index([isActive])
-}
-
-model SponsorshipRecord {
-  id                String   @id @default(cuid())
-  userAddress       String
-  protocolId        String
-  decisionHash      String   @unique
-  estimatedCostUSD  Float
-  actualCostUSD     Float?
-  txHash            String?
-  signature         String
-  ipfsCid           String?
-  createdAt         DateTime @default(now())
-
-  @@index([userAddress])
-  @@index([protocolId])
-  @@index([decisionHash])
 }
