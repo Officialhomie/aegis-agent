@@ -9,7 +9,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { createHash } from 'crypto';
 import { logger } from '../../logger';
 import { getStateStore } from '../state-store';
-import { getCache } from '@/src/lib/cache';
+import { getCache } from '../cache';
 import {
   getAgentPosts,
   getPostComments,

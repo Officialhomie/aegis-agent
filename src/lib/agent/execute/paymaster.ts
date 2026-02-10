@@ -25,7 +25,7 @@ import {
 import type { Decision } from '../reason/schemas';
 import type { SponsorParams } from '../reason/schemas';
 import type { ExecutionResult } from './index';
-import { updateCachedProtocolBudget } from '@/src/lib/cache';
+import { updateCachedProtocolBudget } from '../cache';
 
 const ACTIVITY_LOGGER_ABI = [
   {
