@@ -1,5 +1,5 @@
 contracts/
-cache/
+/cache/
 .github/
 tests/
 *.test.ts
