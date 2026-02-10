@@ -1,6 +1,7 @@
 /**
  * Re-export cache from lib/cache so agent imports resolve reliably in Turbopack/Next build.
- * Use: import { getCache, ... } from '../cache' or from './cache' (from agent/index).
+ * IMPORTANT: Use explicit '/index' suffix because the repo root has a `cache/` directory
+ * (Foundry artifact) that can shadow Turbopack module resolution of bare `../cache`.
  */
 export {
   initializeCache,
@@ -19,4 +20,4 @@ export {
   CacheKeys,
   handleCacheInvalidation,
   type CacheInvalidationEvent,
-} from '../cache';
+} from '../cache/index';
