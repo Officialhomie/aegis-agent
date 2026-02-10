@@ -64,12 +64,27 @@ function getChain(): Chain {
   return networkId === 'base' ? base : baseSepolia;
 }
 
-function getBundlerRpcUrl(): string | undefined {
+/**
+ * Resolve the active bundler/paymaster RPC URL from env.
+ * When BUNDLER_PROVIDER=coinbase and COINBASE_BUNDLER_RPC_URL is set, use CDP; otherwise use Pimlico (BUNDLER_RPC_URL / PAYMASTER_RPC_URL).
+ */
+export function getActiveBundlerRpcUrl(): string | undefined {
+  const provider = (process.env.BUNDLER_PROVIDER ?? 'pimlico').toLowerCase();
+  const coinbaseUrl = process.env.COINBASE_BUNDLER_RPC_URL?.trim();
+  if (provider === 'coinbase' && coinbaseUrl) {
+    return coinbaseUrl;
+  }
   return process.env.BUNDLER_RPC_URL ?? process.env.PAYMASTER_RPC_URL;
 }
 
-function getEntryPointAddress(): Address {
-  return (process.env.ENTRY_POINT_ADDRESS as Address) ?? entryPoint07Address;
+function getBundlerRpcUrl(): string | undefined {
+  return getActiveBundlerRpcUrl();
+}
+
+/** Resolve entry point address from env; empty or unset uses ERC-4337 v0.7 default. */
+export function getEntryPointAddress(): Address {
+  const env = process.env.ENTRY_POINT_ADDRESS?.trim();
+  return (env as Address) || entryPoint07Address;
 }
 
 let bundlerClientInstance: BundlerClient | null = null;
