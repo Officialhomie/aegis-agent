@@ -27,7 +27,8 @@ function getGasPrice(observations: Observation[]): number | null {
 }
 
 /**
- * Extract low-gas wallets count from observations
+ * Extract low-gas wallets count from observations.
+ * Supports both: (1) aggregated obs.data.lowGasWallets array, and (2) per-wallet observations with walletAddress + belowThreshold.
  */
 function getLowGasWalletsCount(observations: Observation[]): number {
   for (const obs of observations) {
@@ -38,7 +39,13 @@ function getLowGasWalletsCount(observations: Observation[]): number {
       }
     }
   }
-  return 0;
+  // Per-wallet low-gas observations (from observeLowGasWallets): data.walletAddress + (belowThreshold or low balanceETH)
+  const perWallet = observations.filter((obs) => {
+    if (!obs.data || typeof obs.data !== 'object' || !('walletAddress' in obs.data)) return false;
+    const d = obs.data as { belowThreshold?: boolean; balanceETH?: number };
+    return d.belowThreshold === true || (typeof d.balanceETH === 'number' && d.balanceETH < 0.02);
+  });
+  return perWallet.length;
 }
 
 /**
@@ -76,7 +83,8 @@ function getAgentReserves(observations: Observation[]): { eth: number | null; us
 }
 
 /**
- * Extract protocol budgets from observations
+ * Extract protocol budgets from observations.
+ * Supports: (1) aggregated obs.data.protocolBudgets array, (2) per-protocol observations with protocolId + balanceUSD.
  */
 function getProtocolBudgets(observations: Observation[]): Array<{ protocolId: string; balanceUSD: number }> {
   for (const obs of observations) {
@@ -89,7 +97,17 @@ function getProtocolBudgets(observations: Observation[]): Array<{ protocolId: st
       }
     }
   }
-  return [];
+  // Per-protocol observations (from observeProtocolBudgets): data.protocolId + data.balanceUSD
+  const list: Array<{ protocolId: string; balanceUSD: number }> = [];
+  for (const obs of observations) {
+    if (obs.data && typeof obs.data === 'object' && 'protocolId' in obs.data && 'balanceUSD' in obs.data) {
+      const d = obs.data as { protocolId?: string; balanceUSD?: number };
+      if (typeof d.protocolId === 'string' && typeof d.balanceUSD === 'number') {
+        list.push({ protocolId: d.protocolId, balanceUSD: d.balanceUSD });
+      }
+    }
+  }
+  return list;
 }
 
 /**
@@ -213,6 +231,38 @@ export function getTemplateDecision(
           usdcBalance: reserves.usdc,
           lowGasWalletsCount,
         },
+      };
+    }
+  }
+
+  // Template 5: SPONSOR_TRANSACTION when exactly one low-gas candidate and protocol has budget (testing / fallback when LLM unavailable)
+  if (lowGasWalletsCount === 1 && protocolBudgets.length > 0) {
+    const firstLowGas = observations.find((obs) => {
+      if (!obs.data || typeof obs.data !== 'object' || !('walletAddress' in obs.data)) return false;
+      const d = obs.data as { belowThreshold?: boolean; balanceETH?: number };
+      return d.belowThreshold === true || (typeof d.balanceETH === 'number' && d.balanceETH < 0.02);
+    });
+    const data = firstLowGas?.data as { walletAddress?: string } | undefined;
+    const agentWallet = data?.walletAddress;
+    const protocol = protocolBudgets[0];
+    if (agentWallet && protocol?.protocolId) {
+      logger.info('[TemplateResponse] Single low-gas candidate - SPONSOR_TRANSACTION (template)', {
+        agentWallet,
+        protocolId: protocol.protocolId,
+      });
+      return {
+        action: 'SPONSOR_TRANSACTION',
+        confidence: 0.85,
+        reasoning: `One low-gas wallet (${agentWallet.slice(0, 10)}...) and protocol ${protocol.protocolId} has budget ($${protocol.balanceUSD.toFixed(2)}). Sponsoring one tx.`,
+        parameters: {
+          agentWallet,
+          protocolId: protocol.protocolId,
+          maxGasLimit: 200000,
+          estimatedCostUSD: 0.05,
+        },
+        preconditions: ['Policy checks pass', 'Bundler healthy'],
+        expectedOutcome: 'One UserOp sponsored and logged on-chain',
+        metadata: { template: 'single-low-gas-sponsor', agentWallet, protocolId: protocol.protocolId },
       };
     }
   }
