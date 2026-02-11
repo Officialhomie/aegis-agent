@@ -54,6 +54,7 @@ async function main() {
     client: publicClient,
     owners: [ownerAccount],
     address: smartWalletAddress, // Use existing wallet
+    version: '1.1',
   });
   console.log('  Smart Account Address:', smartAccount.address);
 

@@ -60,6 +60,7 @@ async function main() {
     client: publicClient,
     owners: [ownerAccount],
     address: smartWalletAddress,
+    version: '1.1',
   });
   console.log('  Smart Account ready:', smartAccount.address);
 
