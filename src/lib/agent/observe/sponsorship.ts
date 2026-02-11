@@ -698,6 +698,113 @@ export async function observeNewWalletActivations(): Promise<Observation[]> {
   return observations;
 }
 
+/**
+ * Observe agents with active delegations that have remaining gas budget.
+ * Prioritizes delegated agents for sponsorship since they have user-allocated budgets.
+ *
+ * Only runs when DELEGATION_ENABLED=true.
+ */
+export async function observeDelegatedAgentOpportunities(): Promise<Observation[]> {
+  if (process.env.DELEGATION_ENABLED !== 'true') {
+    return [];
+  }
+
+  try {
+    const db = getPrisma();
+    const client = getBasePublicClient();
+    const chain = getDefaultChainName() === 'base' ? base : baseSepolia;
+
+    // Find active delegations with remaining budget
+    const activeDelegations = await db.delegation.findMany({
+      where: {
+        status: 'ACTIVE',
+        validUntil: { gt: new Date() },
+        validFrom: { lte: new Date() },
+      },
+      select: {
+        id: true,
+        agent: true,
+        delegator: true,
+        gasBudgetWei: true,
+        gasBudgetSpent: true,
+        permissions: true,
+        validUntil: true,
+        agentOnChainId: true,
+      },
+      take: 50, // Limit to prevent excessive RPC calls
+    });
+
+    if (activeDelegations.length === 0) {
+      logger.debug('[Sponsorship] No active delegations found');
+      return [];
+    }
+
+    const observations: Observation[] = [];
+    const agentWalletAddress = process.env.AGENT_WALLET_ADDRESS?.toLowerCase();
+
+    for (const delegation of activeDelegations) {
+      // Skip if this is the agent's own wallet
+      if (agentWalletAddress && delegation.agent.toLowerCase() === agentWalletAddress) {
+        continue;
+      }
+
+      // Check remaining budget
+      const remaining = delegation.gasBudgetWei - delegation.gasBudgetSpent;
+      if (remaining <= BigInt(0)) {
+        continue;
+      }
+
+      try {
+        // Check agent's ETH balance
+        const balance = await client.getBalance({ address: delegation.agent as `0x${string}` });
+        const eth = Number(formatEther(balance));
+
+        // Only observe if agent has low gas (needs sponsorship)
+        if (eth >= LOW_GAS_THRESHOLD_ETH) {
+          continue;
+        }
+
+        const remainingEth = Number(formatEther(BigInt(remaining.toString())));
+        observations.push({
+          id: `delegation-${delegation.id}-${Date.now()}`,
+          timestamp: new Date(),
+          source: 'delegation',
+          chainId: chain.id,
+          data: {
+            walletAddress: delegation.agent,
+            delegator: delegation.delegator,
+            delegationId: delegation.id,
+            balanceETH: eth,
+            remainingBudgetWei: remaining.toString(),
+            validUntil: delegation.validUntil.toISOString(),
+            agentOnChainId: delegation.agentOnChainId,
+            belowThreshold: true,
+          },
+          context: `Delegated agent with user gas budget (${eth} ETH, ${remainingEth} ETH budget remaining)`,
+        });
+      } catch (error) {
+        logger.warn('[Sponsorship] Failed to check delegated agent balance', {
+          delegationId: delegation.id,
+          agent: delegation.agent,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    logger.info('[Sponsorship] Delegated agent observation complete', {
+      activeDelegations: activeDelegations.length,
+      lowGasAgents: observations.length,
+    });
+
+    return observations;
+  } catch (error) {
+    logger.warn('[Sponsorship] Delegated agent observation failed (degraded)', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return [];
+  }
+}
+
 export interface ObservationHealthSummary {
   healthy: boolean;
   criticalFailures: string[];
@@ -721,6 +828,7 @@ export async function observeBaseSponsorshipOpportunities(): Promise<Observation
   const results: {
     lowGas: Observation[];
     erc8004Agents: Observation[];
+    delegatedAgents: Observation[];
     failedTxs: Observation[];
     newWallets: Observation[];
     protocolBudgets: Observation[];
@@ -729,6 +837,7 @@ export async function observeBaseSponsorshipOpportunities(): Promise<Observation
   } = {
     lowGas: [],
     erc8004Agents: [],
+    delegatedAgents: [],
     failedTxs: [],
     newWallets: [],
     protocolBudgets: [],
@@ -753,6 +862,15 @@ export async function observeBaseSponsorshipOpportunities(): Promise<Observation
   } catch (error) {
     errors.push({ type: 'erc8004Agents', error: error as Error, critical: false });
     logger.warn('[Sponsorship] ERC-8004 agent observation failed (degraded)', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  try {
+    results.delegatedAgents = await observeDelegatedAgentOpportunities();
+  } catch (error) {
+    errors.push({ type: 'delegatedAgents', error: error as Error, critical: false });
+    logger.warn('[Sponsorship] Delegated agent observation failed (degraded)', {
       error: error instanceof Error ? error.message : String(error),
     });
   }
@@ -811,6 +929,7 @@ export async function observeBaseSponsorshipOpportunities(): Promise<Observation
     counts: {
       lowGas: results.lowGas.length,
       erc8004Agents: results.erc8004Agents.length,
+      delegatedAgents: results.delegatedAgents.length,
       failedTxs: results.failedTxs.length,
       newWallets: results.newWallets.length,
       protocolBudgets: results.protocolBudgets.length,
@@ -824,6 +943,7 @@ export async function observeBaseSponsorshipOpportunities(): Promise<Observation
   return [
     ...results.lowGas,
     ...results.erc8004Agents,
+    ...results.delegatedAgents,
     ...results.failedTxs,
     ...results.newWallets,
     ...results.protocolBudgets,

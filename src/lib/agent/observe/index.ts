@@ -24,7 +24,7 @@ export type ObservationData =
 export interface Observation {
   id: string;
   timestamp: Date;
-  source: 'blockchain' | 'oracle' | 'api' | 'event';
+  source: 'blockchain' | 'oracle' | 'api' | 'event' | 'delegation';
   chainId?: number;
   blockNumber?: bigint;
   data: ObservationData;
