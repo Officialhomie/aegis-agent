@@ -208,6 +208,81 @@ model SponsorshipRecord {
   @@index([decisionHash])
 }
 
+// ============================================================================
+// Agent Delegation Framework
+// User-to-Agent delegation with scoped permissions and gas budgets
+// ============================================================================
+
+model Delegation {
+  id             String           @id @default(cuid())
+  delegator      String           // User wallet address (SCW)
+  agent          String           // Agent wallet address
+  agentOnChainId String?          // ERC-8004 agent ID (required if DELEGATION_REQUIRE_ERC8004=true)
+
+  // Signature verification (EIP-712)
+  signature      String           // EIP-712 signature from delegator
+  signatureNonce BigInt           // Replay protection nonce
+
+  // Permissions (JSON schema: contracts, functions, value limits, rate limits)
+  permissions    Json             // DelegationPermissions
+
+  // Budget (Wei) - separate from protocol budget
+  gasBudgetWei   BigInt           // User-allocated gas budget
+  gasBudgetSpent BigInt           @default(0)
+
+  // Status and validity
+  status         DelegationStatus @default(ACTIVE)
+  validFrom      DateTime
+  validUntil     DateTime
+  revokedAt      DateTime?
+  revokedReason  String?
+
+  // On-chain reference (optional audit trail)
+  onChainTxHash  String?
+
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  // Relations
+  usageRecords   DelegationUsage[]
+
+  @@unique([delegator, agent, signatureNonce])
+  @@index([delegator])
+  @@index([agent])
+  @@index([status, validUntil])
+  @@index([agentOnChainId])
+}
+
+model DelegationUsage {
+  id               String     @id @default(cuid())
+  delegationId     String
+  delegation       Delegation @relation(fields: [delegationId], references: [id])
+
+  // Transaction details
+  targetContract   String
+  functionSelector String?
+  valueWei         BigInt
+  gasUsed          BigInt
+  gasCostWei       BigInt
+
+  // Result
+  txHash           String?
+  success          Boolean
+  errorMessage     String?
+
+  createdAt        DateTime   @default(now())
+
+  @@index([delegationId, createdAt])
+  @@index([txHash])
+}
+
+enum DelegationStatus {
+  ACTIVE    // Valid and usable
+  REVOKED   // User revoked
+  EXPIRED   // Past validUntil
+  EXHAUSTED // Budget depleted
+}
+
 enum DecisionStatus {
   PENDING
   APPROVED
