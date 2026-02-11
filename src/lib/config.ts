@@ -1,9 +1,25 @@
 /**
  * Config utilities for validated environment variable loading.
  * Use getConfigNumber for numeric env vars with defaults and optional min/max clamping.
+ * Use getConfigString for string env vars with defaults.
  */
 
 import { logger } from './logger';
+
+/**
+ * Parse a string environment variable with a default value.
+ * Logs when using default.
+ */
+export function getConfigString(key: string, defaultValue: string): string {
+  const raw = process.env[key];
+
+  if (!raw || raw.trim() === '') {
+    logger.debug(`[Config] ${key} not set, using default`, { defaultValue });
+    return defaultValue;
+  }
+
+  return raw.trim();
+}
 
 /**
  * Parse a numeric environment variable with optional min/max clamping.

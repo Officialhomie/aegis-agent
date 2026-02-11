@@ -9,6 +9,7 @@ import { logger } from '../../logger';
 import { getStateStore } from '../state-store';
 import { sponsorshipPolicyRules } from './sponsorship-rules';
 import { reservePolicyRules } from './reserve-rules';
+import { delegationPolicyRules } from './delegation-rules';
 import type { Decision } from '../reason/schemas';
 import type { AgentConfig } from '../index';
 
@@ -302,6 +303,15 @@ export async function validateRules(
     for (const rule of sponsorshipPolicyRules) {
       const result = await rule.validate(decision, config);
       results.push(result);
+    }
+
+    // Check delegation rules if delegationId is present in parameters
+    const params = decision.parameters as Record<string, unknown> | null;
+    if (params && typeof params.delegationId === 'string') {
+      for (const rule of delegationPolicyRules) {
+        const result = await rule.validate(decision, config);
+        results.push(result);
+      }
     }
   }
 

@@ -30,6 +30,11 @@ import type { SponsorParams } from '../reason/schemas';
 import type { ExecutionResult } from './index';
 import { updateCachedProtocolBudget, getCachedProtocolWhitelist } from '../../cache';
 import { buildExecuteCalldata, getActivityLoggerPingData } from './userop-calldata';
+import {
+  deductDelegationBudget,
+  rollbackDelegationBudget,
+  recordDelegationUsage,
+} from '../../delegation';
 
 const ACTIVITY_LOGGER_ABI = [
   {
@@ -728,6 +733,40 @@ export async function sponsorTransaction(
         error: budgetResult.error,
       });
     }
+
+    // Step 5b: Handle delegation budget if delegationId is present
+    if (params.delegationId) {
+      const gasCostWei = paymasterResult.actualGasUsed
+        ? BigInt(paymasterResult.actualGasUsed)
+        : BigInt(maxGasLimit) * BigInt(1_000_000_000); // Estimate at 1 gwei
+
+      const delegationDeductResult = await deductDelegationBudget(params.delegationId, gasCostWei);
+      if (!delegationDeductResult.success) {
+        logger.error('[Paymaster] Delegation budget deduction failed', {
+          delegationId: params.delegationId,
+          gasCostWei: gasCostWei.toString(),
+          error: delegationDeductResult.error,
+          severity: 'HIGH',
+        });
+      }
+
+      // Record delegation usage
+      await recordDelegationUsage({
+        delegationId: params.delegationId,
+        targetContract: targetContract ?? '0x0000000000000000000000000000000000000000',
+        valueWei: BigInt(0),
+        gasUsed: BigInt(paymasterResult.actualGasUsed ?? maxGasLimit),
+        gasCostWei,
+        txHash: paymasterResult.transactionHash,
+        success: true,
+      });
+
+      logger.info('[Paymaster] Delegation usage recorded', {
+        delegationId: params.delegationId,
+        gasCostWei: gasCostWei.toString(),
+        txHash: paymasterResult.transactionHash,
+      });
+    }
   } else {
     logger.warn('[Paymaster] Bundler submission failed - budget NOT deducted', {
       protocolId: params.protocolId,
@@ -736,6 +775,23 @@ export async function sponsorTransaction(
       error: paymasterResult.error,
       note: 'On-chain log exists but sponsorship not executed - protocol budget preserved',
     });
+
+    // Rollback delegation budget if it was deducted optimistically
+    if (params.delegationId) {
+      const estimatedGasWei = BigInt(maxGasLimit) * BigInt(1_000_000_000);
+      await rollbackDelegationBudget(params.delegationId, estimatedGasWei);
+
+      // Record failed usage
+      await recordDelegationUsage({
+        delegationId: params.delegationId,
+        targetContract: targetContract ?? '0x0000000000000000000000000000000000000000',
+        valueWei: BigInt(0),
+        gasUsed: BigInt(0),
+        gasCostWei: BigInt(0),
+        success: false,
+        errorMessage: paymasterResult.error,
+      });
+    }
   }
 
   // Step 6: Create sponsorship record for audit trail

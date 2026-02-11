@@ -66,6 +66,9 @@ export const SponsorParams = z.object({
   maxGasLimit: z.number().int().positive().optional().default(200000),
   estimatedCostUSD: z.number().min(0),
   targetContract: z.string().regex(/^0x[a-fA-F0-9]{40}$/).optional(),
+  // Delegation reference (optional - enables user delegation flow)
+  delegationId: z.string().optional(),
+  delegatorAddress: z.string().regex(/^0x[a-fA-F0-9]{40}$/).optional(),
 });
 export type SponsorParams = z.infer<typeof SponsorParams>;
 
