@@ -3,9 +3,15 @@
  *
  * Encodes execute(to, value, data) calldata so CDP and other paymasters can
  * simulate a valid call. The sender (agentWallet) must be a 4337-compatible account.
+ * When targeting ActivityLogger, use ping() so the inner call succeeds (empty calldata reverts).
  */
 
 import { encodeFunctionData } from 'viem';
+
+/** ABI for AegisActivityLogger.ping() - no-op callable by anyone, used for sponsored UserOps */
+const ACTIVITY_LOGGER_PING_ABI = [
+  { inputs: [], name: 'ping', outputs: [], stateMutability: 'nonpayable', type: 'function' },
+] as const;
 
 /** Minimal ABI for IAccount / SimpleAccount execute(address to, uint256 value, bytes data) */
 const EXECUTE_ABI = [
@@ -34,6 +40,23 @@ export interface BuildUserOpCalldataParams {
 /**
  * Build UserOperation callData for a 4337 account that uses execute(dest, value, func).
  * Use this so CDP simulation sees a valid call instead of empty calldata.
+ */
+/**
+ * Encoded calldata for ActivityLogger.ping(). Use when target is ActivityLogger
+ * so the inner call succeeds (empty calldata would revert - no fallback).
+ */
+export function getActivityLoggerPingData(): `0x${string}` {
+  return encodeFunctionData({
+    abi: ACTIVITY_LOGGER_PING_ABI,
+    functionName: 'ping',
+    args: [],
+  });
+}
+
+/**
+ * Build UserOperation callData for a 4337 account that uses execute(dest, value, func).
+ * When targetContract is the ActivityLogger, pass data from getActivityLoggerPingData()
+ * so CDP simulation sees a valid call (empty data reverts).
  */
 export function buildExecuteCalldata(params: BuildUserOpCalldataParams): `0x${string}` {
   const value = params.value ?? BigInt(0);
