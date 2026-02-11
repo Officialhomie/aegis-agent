@@ -14,7 +14,8 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
-import { createPublicClient, createWalletClient, http, generatePrivateKey, privateKeyToAccount } from 'viem';
+import { createPublicClient, createWalletClient, http } from 'viem';
+import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { base } from 'viem/chains';
 import { getKeystoreAccount } from '../src/lib/keystore';
 
