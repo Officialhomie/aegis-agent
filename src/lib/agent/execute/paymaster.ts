@@ -10,13 +10,15 @@ import { createPublicClient, createWalletClient, http, keccak256, toHex } from '
 import { recoverMessageAddress } from 'viem';
 import { getKeystoreAccount } from '../../keystore';
 import { base, baseSepolia } from 'viem/chains';
-import { createPaymasterClient, getPaymasterStubData, entryPoint07Address } from 'viem/account-abstraction';
+import { createPaymasterClient, getPaymasterStubData } from 'viem/account-abstraction';
 import { getStateStore } from '../state-store';
 import { getPrisma } from '../../db';
 import { uploadDecisionToIPFS } from '../../ipfs';
 import { logger } from '../../logger';
 import {
   getBundlerClient,
+  getActiveBundlerRpcUrl,
+  getEntryPointAddress,
   checkBundlerHealth,
   submitAndWaitForUserOp,
   type UserOpSubmissionResult,
@@ -25,7 +27,8 @@ import {
 import type { Decision } from '../reason/schemas';
 import type { SponsorParams } from '../reason/schemas';
 import type { ExecutionResult } from './index';
-import { updateCachedProtocolBudget } from '../cache';
+import { updateCachedProtocolBudget, getCachedProtocolWhitelist } from '../../cache';
+import { buildExecuteCalldata } from './userop-calldata';
 
 const ACTIVITY_LOGGER_ABI = [
   {
@@ -75,6 +78,21 @@ export interface SignedDecision {
 }
 
 const AGENT_VERSION = '2.0';
+
+/**
+ * Derive conservative gas fee caps for paymaster stubs.
+ * Uses MAX_GAS_PRICE_GWEI when set, otherwise a low default suitable for tests.
+ */
+function getPaymasterFeeCaps(): { maxFeePerGas: bigint; maxPriorityFeePerGas: bigint } {
+  const maxGasPriceGwei = Number(process.env.MAX_GAS_PRICE_GWEI ?? '2');
+  const baseGwei = Number.isFinite(maxGasPriceGwei) && maxGasPriceGwei > 0 ? maxGasPriceGwei : 2;
+  const priorityGwei = Math.max(0.1, Math.min(baseGwei / 2, baseGwei));
+  const gweiToWei = (gwei: number) => BigInt(Math.floor(gwei * 1e9));
+  return {
+    maxFeePerGas: gweiToWei(baseGwei),
+    maxPriorityFeePerGas: gweiToWei(priorityGwei),
+  };
+}
 
 function getChain() {
   const networkId = process.env.AGENT_NETWORK_ID ?? 'base-sepolia';
@@ -317,33 +335,41 @@ export interface PaymasterExecutionResult {
 export async function preparePaymasterSponsorship(params: {
   agentWallet: string;
   maxGasLimit: number;
+  /** Real calldata for the UserOp (execute(target, value, data)); if omitted, stub uses 0x (may be rejected by CDP). */
+  callData?: `0x${string}`;
 }): Promise<{
   ready: boolean;
   paymasterData?: `0x${string}`;
   paymaster?: `0x${string}`;
   error?: string;
 }> {
-  const rpcUrl = process.env.BUNDLER_RPC_URL ?? process.env.PAYMASTER_RPC_URL;
+  const rpcUrl = getActiveBundlerRpcUrl();
   if (!rpcUrl?.trim()) {
-    logger.warn('[Paymaster] BUNDLER_RPC_URL not set - skipping paymaster preparation');
-    return { ready: false, error: 'BUNDLER_RPC_URL not set' };
+    logger.warn('[Paymaster] No bundler RPC URL (BUNDLER_RPC_URL or COINBASE_BUNDLER_RPC_URL with BUNDLER_PROVIDER=coinbase) - skipping paymaster preparation');
+    return { ready: false, error: 'Bundler RPC URL not set' };
   }
 
   const chain = getChain();
-  const entryPoint = (process.env.ENTRY_POINT_ADDRESS as `0x${string}`) ?? entryPoint07Address;
+  const entryPoint = getEntryPointAddress() as `0x${string}`;
+  const callData = params.callData ?? ('0x' as `0x${string}`);
 
   try {
     const paymasterClient = createPaymasterClient({
       transport: http(rpcUrl),
     });
 
+    const { maxFeePerGas, maxPriorityFeePerGas } = getPaymasterFeeCaps();
+
     const stub = await getPaymasterStubData(paymasterClient, {
       chainId: chain.id,
       entryPointAddress: entryPoint,
       sender: params.agentWallet as `0x${string}`,
       nonce: BigInt(0),
-      callData: '0x' as `0x${string}`,
+      callData,
       callGasLimit: BigInt(params.maxGasLimit),
+      // Coinbase CDP requires EIP-1559 fee fields for pm_getPaymasterStubData
+      maxFeePerGas,
+      maxPriorityFeePerGas,
     });
 
     if (!stub || (!('paymaster' in stub) && !('paymasterAndData' in stub))) {
@@ -406,10 +432,13 @@ export async function executePaymasterSponsorship(params: {
     return { paymasterReady: false, error: health.error ?? 'Bundler unavailable' };
   }
 
-  // Prepare paymaster data
+  const callData = params.callData ?? ('0x' as `0x${string}`);
+
+  // Prepare paymaster data with same callData we will send (required for CDP simulation)
   const prepared = await preparePaymasterSponsorship({
     agentWallet: params.agentWallet,
     maxGasLimit: params.maxGasLimit,
+    callData,
   });
 
   if (!prepared.ready) {
@@ -417,21 +446,19 @@ export async function executePaymasterSponsorship(params: {
   }
 
   const chain = getChain();
-  const entryPoint = (process.env.ENTRY_POINT_ADDRESS as `0x${string}`) ?? entryPoint07Address;
+  const { maxFeePerGas, maxPriorityFeePerGas } = getPaymasterFeeCaps();
 
   try {
-    // Build the UserOperation
-    // Note: In production, the actual UserOp would come from the agent's smart account
-    // This is a simplified version for sponsorship approval
+    // Build the UserOperation with same callData and fee caps as stub
     const userOp = {
       sender: params.agentWallet as `0x${string}`,
       nonce: params.nonce ?? BigInt(0),
-      callData: params.callData ?? ('0x' as `0x${string}`),
+      callData,
       callGasLimit: BigInt(params.maxGasLimit),
       verificationGasLimit: BigInt(100000),
       preVerificationGas: BigInt(21000),
-      maxFeePerGas: BigInt(1000000000), // 1 gwei
-      maxPriorityFeePerGas: BigInt(100000000), // 0.1 gwei
+      maxFeePerGas,
+      maxPriorityFeePerGas,
       signature: '0x' as `0x${string}`,
       // Paymaster fields from prepared data
       ...(prepared.paymaster && { paymaster: prepared.paymaster }),
@@ -557,12 +584,33 @@ export async function sponsorTransaction(
     }
   }
 
-  // Step 3: Execute paymaster sponsorship via bundler
-  // IMPORTANT: Budget deduction happens AFTER this succeeds
+  // Step 3: Resolve target contract and build real UserOp calldata (so CDP simulation sees valid calls)
   const maxGasLimit = params.maxGasLimit ?? 200_000;
+  const whitelist = await getCachedProtocolWhitelist(params.protocolId);
+  const activityLogger = process.env.ACTIVITY_LOGGER_ADDRESS as `0x${string}` | undefined;
+  let targetContract: `0x${string}` | undefined;
+  if (params.targetContract) {
+    const normalized = params.targetContract.toLowerCase();
+    if (whitelist.some((a) => a.toLowerCase() === normalized)) {
+      targetContract = params.targetContract as `0x${string}`;
+    }
+  }
+  if (!targetContract && whitelist.length > 0) {
+    targetContract = whitelist[0] as `0x${string}`;
+  }
+  if (!targetContract && activityLogger) {
+    targetContract = activityLogger;
+  }
+  const callData = targetContract
+    ? buildExecuteCalldata({ targetContract, value: BigInt(0), data: '0x' })
+    : undefined;
+
+  // Step 4: Execute paymaster sponsorship via bundler
+  // IMPORTANT: Budget deduction happens AFTER this succeeds
   const paymasterResult = await executePaymasterSponsorship({
     agentWallet: params.agentWallet,
     maxGasLimit,
+    callData,
   });
 
   // Determine actual cost (use actual gas if available, otherwise estimate)
@@ -570,7 +618,7 @@ export async function sponsorTransaction(
     ? calculateActualCostUSD(BigInt(paymasterResult.actualGasUsed))
     : params.estimatedCostUSD;
 
-  // Step 4: ONLY deduct budget if bundler submission succeeded
+  // Step 5: ONLY deduct budget if bundler submission succeeded
   if (paymasterResult.paymasterReady) {
     const budgetResult = await deductProtocolBudget(params.protocolId, actualCostUSD);
     if (!budgetResult.success) {
@@ -594,7 +642,7 @@ export async function sponsorTransaction(
     });
   }
 
-  // Step 5: Create sponsorship record for audit trail
+  // Step 6: Create sponsorship record for audit trail
   try {
     const db = getPrisma();
     await db.sponsorshipRecord.create({

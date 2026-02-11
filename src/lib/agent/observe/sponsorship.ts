@@ -2,10 +2,10 @@
  * Aegis Agent - Base Sponsorship Opportunity Observation
  *
  * Observes Base for paymaster sponsorship opportunities: low gas wallets,
- * failed transactions, protocol budgets, agent reserves, gas price.
+ * ERC-8004 registered agents, failed transactions, protocol budgets, agent reserves, gas price.
  */
 
-import { createPublicClient, http, formatEther } from 'viem';
+import { createPublicClient, decodeEventLog, http, formatEther } from 'viem';
 import { base, baseSepolia } from 'viem/chains';
 import { getPrisma } from '../../db';
 import {
@@ -24,6 +24,8 @@ import {
   getCachedProtocolWhitelist,
   isCacheEnabled,
 } from '../cache';
+import { IDENTITY_REGISTRY_ABI } from '../identity/abis/identity-registry';
+import { getIdentityRegistryAddress } from '../identity/erc8004';
 
 /**
  * Whether to use strict observation mode (fail on errors).
@@ -31,9 +33,17 @@ import {
  */
 const STRICT_MODE = process.env.OBSERVATION_STRICT_MODE !== 'false';
 
-const LOW_GAS_THRESHOLD_ETH = 0.0001;
+const LOW_GAS_THRESHOLD_ETH = 0.01;
 const BASE_CHAIN_ID = 8453;
 const BASE_SEPOLIA_CHAIN_ID = 84532;
+const ERC8004_DISCOVERY_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+let lastERC8004Discovery:
+  | {
+      timestamp: number;
+      observations: Observation[];
+    }
+  | null = null;
 
 /** USDC contract address per chain (Base Sepolia, Base Mainnet). */
 function getUsdcAddressForChain(chainName: string): `0x${string}` | undefined {
@@ -49,6 +59,8 @@ function getUsdcAddressForChain(chainName: string): `0x${string}` | undefined {
 
 type BaseChainName = 'base' | 'baseSepolia';
 
+const BASE_RPC_TIMEOUT_MS = Number(process.env.BASE_RPC_TIMEOUT_MS) || 30_000;
+
 function getBasePublicClient() {
   const rpcUrl =
     process.env.BASE_RPC_URL ??
@@ -59,8 +71,140 @@ function getBasePublicClient() {
   const chain = getDefaultChainName() === 'base' ? base : baseSepolia;
   return createPublicClient({
     chain,
-    transport: http(rpcUrl ?? 'https://mainnet.base.org'),
+    transport: http(rpcUrl ?? 'https://mainnet.base.org', { timeout: BASE_RPC_TIMEOUT_MS }),
   });
+}
+
+/**
+ * Observe ERC-8004 registered agents on Base and return low-gas agent wallets as candidates.
+ * Uses Identity Registry Registered events over a small block window to respect RPC limits.
+ */
+export async function observeERC8004RegisteredAgents(): Promise<Observation[]> {
+  // Simple in-process cache to avoid repeated log scans.
+  if (lastERC8004Discovery && Date.now() - lastERC8004Discovery.timestamp < ERC8004_DISCOVERY_CACHE_TTL_MS) {
+    return lastERC8004Discovery.observations;
+  }
+
+  const registryAddress = getIdentityRegistryAddress();
+  if (!registryAddress) {
+    logger.debug('[Sponsorship] ERC-8004 registry not configured - skipping agent discovery');
+    return [];
+  }
+
+  const rpcUrl =
+    process.env.ERC8004_RPC_URL?.trim() ??
+    process.env.RPC_URL_BASE ??
+    process.env.RPC_URL_8453;
+  if (!rpcUrl) {
+    logger.warn('[Sponsorship] ERC-8004 discovery skipped - no RPC URL configured for Base');
+    return [];
+  }
+
+  try {
+    const client = createPublicClient({
+      chain: base,
+      transport: http(rpcUrl, { timeout: BASE_RPC_TIMEOUT_MS }),
+    });
+
+    // Respect Alchemy free-tier 10-block eth_getLogs limit by defaulting to the last 10 blocks.
+    const latestBlock = await client.getBlockNumber();
+    let fromBlock: bigint;
+    const fromBlockEnv = process.env.ERC8004_DISCOVERY_FROM_BLOCK?.trim();
+    if (fromBlockEnv) {
+      try {
+        fromBlock = fromBlockEnv.startsWith('0x') ? BigInt(fromBlockEnv) : BigInt(Number(fromBlockEnv));
+      } catch {
+        fromBlock = latestBlock > BigInt(9) ? latestBlock - BigInt(9) : BigInt(0);
+      }
+    } else {
+      fromBlock = latestBlock > BigInt(9) ? latestBlock - BigInt(9) : BigInt(0);
+    }
+
+    const logs = await client.getLogs({
+      address: registryAddress,
+      fromBlock,
+      toBlock: latestBlock,
+    });
+
+    const agentWallets = new Map<string, bigint>();
+
+    for (const log of logs) {
+      try {
+        const decoded = decodeEventLog({
+          abi: IDENTITY_REGISTRY_ABI,
+          data: log.data,
+          topics: log.topics,
+        });
+        if (decoded.eventName === 'Registered') {
+          const { agentId, owner } = decoded.args as { agentId: bigint; owner: `0x${string}` };
+          if (owner && typeof owner === 'string') {
+            agentWallets.set(owner.toLowerCase(), agentId);
+          }
+        }
+      } catch {
+        // Ignore non-Registered events or decode failures.
+        continue;
+      }
+    }
+
+    if (agentWallets.size === 0) {
+      logger.debug('[Sponsorship] No ERC-8004 Registered events found in discovery window', {
+        fromBlock: `0x${fromBlock.toString(16)}`,
+        toBlock: `0x${latestBlock.toString(16)}`,
+      });
+      lastERC8004Discovery = { timestamp: Date.now(), observations: [] };
+      return [];
+    }
+
+    const agentWalletAddress = process.env.AGENT_WALLET_ADDRESS?.toLowerCase();
+    const observations: Observation[] = [];
+
+    for (const [wallet, agentId] of agentWallets.entries()) {
+      // Never consider the agent's own wallet as a sponsorship candidate.
+      if (agentWalletAddress && wallet === agentWalletAddress.toLowerCase()) continue;
+
+      try {
+        const balance = await client.getBalance({ address: wallet as `0x${string}` });
+        const eth = Number(formatEther(balance));
+        if (eth >= LOW_GAS_THRESHOLD_ETH) continue;
+
+        const txCount = await client.getTransactionCount({ address: wallet as `0x${string}` });
+        observations.push({
+          id: `lowgas-erc8004-${wallet}-${Date.now()}`,
+          timestamp: new Date(),
+          source: 'event',
+          chainId: base.id,
+          data: {
+            walletAddress: wallet,
+            balanceETH: eth,
+            historicalTxCount: Number(txCount),
+            belowThreshold: true,
+            erc8004AgentId: agentId.toString(),
+          },
+          context: `ERC-8004 registered agent with low gas (${eth} ETH, agentId ${agentId.toString()})`,
+        });
+      } catch (error) {
+        logger.warn('[Sponsorship] Failed to evaluate ERC-8004 agent wallet for sponsorship', {
+          wallet,
+          agentId: agentId.toString(),
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    logger.info('[Sponsorship] ERC-8004 agent discovery complete', {
+      discoveredAgents: agentWallets.size,
+      lowGasAgents: observations.length,
+    });
+
+    lastERC8004Discovery = { timestamp: Date.now(), observations };
+    return observations;
+  } catch (error) {
+    logger.warn('[Sponsorship] ERC-8004 agent discovery failed (degraded)', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return [];
+  }
 }
 
 /**
@@ -576,6 +720,7 @@ export interface ObservationHealthSummary {
 export async function observeBaseSponsorshipOpportunities(): Promise<Observation[]> {
   const results: {
     lowGas: Observation[];
+    erc8004Agents: Observation[];
     failedTxs: Observation[];
     newWallets: Observation[];
     protocolBudgets: Observation[];
@@ -583,6 +728,7 @@ export async function observeBaseSponsorshipOpportunities(): Promise<Observation
     gasPrice: Observation[];
   } = {
     lowGas: [],
+    erc8004Agents: [],
     failedTxs: [],
     newWallets: [],
     protocolBudgets: [],
@@ -598,6 +744,15 @@ export async function observeBaseSponsorshipOpportunities(): Promise<Observation
   } catch (error) {
     errors.push({ type: 'lowGas', error: error as Error, critical: false });
     logger.warn('[Sponsorship] Low gas wallet observation failed (degraded)', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  try {
+    results.erc8004Agents = await observeERC8004RegisteredAgents();
+  } catch (error) {
+    errors.push({ type: 'erc8004Agents', error: error as Error, critical: false });
+    logger.warn('[Sponsorship] ERC-8004 agent observation failed (degraded)', {
       error: error instanceof Error ? error.message : String(error),
     });
   }
@@ -655,6 +810,7 @@ export async function observeBaseSponsorshipOpportunities(): Promise<Observation
   logger.info('[Sponsorship] Observation cycle complete', {
     counts: {
       lowGas: results.lowGas.length,
+      erc8004Agents: results.erc8004Agents.length,
       failedTxs: results.failedTxs.length,
       newWallets: results.newWallets.length,
       protocolBudgets: results.protocolBudgets.length,
@@ -667,6 +823,7 @@ export async function observeBaseSponsorshipOpportunities(): Promise<Observation
 
   return [
     ...results.lowGas,
+    ...results.erc8004Agents,
     ...results.failedTxs,
     ...results.newWallets,
     ...results.protocolBudgets,

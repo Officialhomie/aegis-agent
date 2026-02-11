@@ -144,6 +144,8 @@ export const DecisionMetadata = z
     ethBalance: z.number().optional(),
     usdcBalance: z.number().optional(),
     swapAmount: z.number().optional(),
+    agentWallet: z.string().optional(),
+    protocolId: z.string().optional(),
   })
   .optional();
 

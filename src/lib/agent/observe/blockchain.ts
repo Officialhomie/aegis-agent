@@ -20,6 +20,8 @@ const chains = {
 
 type ChainName = keyof typeof chains;
 
+const RPC_TIMEOUT_MS = Number(process.env.BASE_RPC_TIMEOUT_MS) || 30_000;
+
 function getPublicClient(chainName: ChainName) {
   const chain = chains[chainName];
   const envKey =
@@ -27,7 +29,7 @@ function getPublicClient(chainName: ChainName) {
   const rpcUrl = process.env[envKey] ?? process.env[`${chainName.toUpperCase()}_RPC_URL`];
   return createPublicClient({
     chain,
-    transport: http(rpcUrl),
+    transport: http(rpcUrl, { timeout: RPC_TIMEOUT_MS }),
   });
 }
 
