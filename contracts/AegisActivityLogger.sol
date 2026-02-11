@@ -46,6 +46,13 @@ contract AegisActivityLogger {
         aegisAgent = _aegisAgent;
     }
 
+    /**
+     * No-op callable by anyone. Used for sponsored UserOps where the sender needs
+     * a valid target call that succeeds. CDP requires "valid calls in calldata";
+     * empty calldata reverts here (no fallback), so we provide ping().
+     */
+    function ping() external {}
+
     function logSponsorship(
         address user,
         string calldata protocolId,

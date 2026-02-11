@@ -21,6 +21,7 @@ import {
   getEntryPointAddress,
   checkBundlerHealth,
   submitAndWaitForUserOp,
+  estimateUserOpGas,
   type UserOpSubmissionResult,
   type BundlerHealthStatus,
 } from './bundler-client';
@@ -28,7 +29,7 @@ import type { Decision } from '../reason/schemas';
 import type { SponsorParams } from '../reason/schemas';
 import type { ExecutionResult } from './index';
 import { updateCachedProtocolBudget, getCachedProtocolWhitelist } from '../../cache';
-import { buildExecuteCalldata } from './userop-calldata';
+import { buildExecuteCalldata, getActivityLoggerPingData } from './userop-calldata';
 
 const ACTIVITY_LOGGER_ABI = [
   {
@@ -327,20 +328,35 @@ export interface PaymasterExecutionResult {
   error?: string;
 }
 
+/** Default gas limits used when estimation fails or for initial stub requests */
+const DEFAULT_VERIFICATION_GAS_LIMIT = BigInt(150000);
+const DEFAULT_PRE_VERIFICATION_GAS = BigInt(50000);
+const GAS_BUFFER_MULTIPLIER = BigInt(150); // 150% = 1.5x buffer for safety
+const GAS_BUFFER_DIVISOR = BigInt(100);
+
 /**
- * Prepare paymaster sponsorship: get paymaster stub data and store approval.
+ * Prepare paymaster sponsorship: estimate gas, get paymaster stub data, and store approval.
  * This is the first step - preparing the sponsorship data.
  * Actual UserOp submission happens via submitSponsoredUserOp.
+ *
+ * IMPORTANT: Gas estimation happens BEFORE requesting paymaster data to avoid
+ * zero gas limit errors from the bundler/paymaster.
  */
 export async function preparePaymasterSponsorship(params: {
   agentWallet: string;
   maxGasLimit: number;
   /** Real calldata for the UserOp (execute(target, value, data)); if omitted, stub uses 0x (may be rejected by CDP). */
   callData?: `0x${string}`;
+  nonce?: bigint;
 }): Promise<{
   ready: boolean;
   paymasterData?: `0x${string}`;
   paymaster?: `0x${string}`;
+  estimatedGas?: {
+    callGasLimit: bigint;
+    verificationGasLimit: bigint;
+    preVerificationGas: bigint;
+  };
   error?: string;
 }> {
   const rpcUrl = getActiveBundlerRpcUrl();
@@ -352,21 +368,71 @@ export async function preparePaymasterSponsorship(params: {
   const chain = getChain();
   const entryPoint = getEntryPointAddress() as `0x${string}`;
   const callData = params.callData ?? ('0x' as `0x${string}`);
+  const { maxFeePerGas, maxPriorityFeePerGas } = getPaymasterFeeCaps();
 
+  // Step 1: Estimate gas BEFORE requesting paymaster data
+  // This is critical - zero gas limits will cause bundler simulation to fail
+  let verificationGasLimit = DEFAULT_VERIFICATION_GAS_LIMIT;
+  let preVerificationGas = DEFAULT_PRE_VERIFICATION_GAS;
+  let callGasLimit = BigInt(params.maxGasLimit);
+
+  try {
+    logger.info('[Paymaster] Estimating gas for UserOperation...', {
+      sender: params.agentWallet,
+    });
+
+    const gasEstimate = await estimateUserOpGas({
+      sender: params.agentWallet as `0x${string}`,
+      nonce: params.nonce ?? BigInt(0),
+      callData,
+      callGasLimit: BigInt(params.maxGasLimit),
+      maxFeePerGas,
+      maxPriorityFeePerGas,
+      signature: '0x' as `0x${string}`, // Dummy signature for estimation
+    });
+
+    if (gasEstimate) {
+      // Apply buffer to estimated values for safety (prevent OOG errors)
+      verificationGasLimit = (gasEstimate.verificationGasLimit * GAS_BUFFER_MULTIPLIER) / GAS_BUFFER_DIVISOR;
+      preVerificationGas = (gasEstimate.preVerificationGas * GAS_BUFFER_MULTIPLIER) / GAS_BUFFER_DIVISOR;
+      callGasLimit = (gasEstimate.callGasLimit * GAS_BUFFER_MULTIPLIER) / GAS_BUFFER_DIVISOR;
+
+      logger.info('[Paymaster] Gas estimated successfully', {
+        verificationGasLimit: verificationGasLimit.toString(),
+        preVerificationGas: preVerificationGas.toString(),
+        callGasLimit: callGasLimit.toString(),
+      });
+    } else {
+      logger.warn('[Paymaster] Gas estimation returned null - using default values', {
+        verificationGasLimit: verificationGasLimit.toString(),
+        preVerificationGas: preVerificationGas.toString(),
+      });
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.warn('[Paymaster] Gas estimation failed - using default values', {
+      error: message,
+      verificationGasLimit: verificationGasLimit.toString(),
+      preVerificationGas: preVerificationGas.toString(),
+    });
+  }
+
+  // Step 2: Request paymaster data with proper gas estimates
   try {
     const paymasterClient = createPaymasterClient({
       transport: http(rpcUrl),
     });
 
-    const { maxFeePerGas, maxPriorityFeePerGas } = getPaymasterFeeCaps();
-
     const stub = await getPaymasterStubData(paymasterClient, {
       chainId: chain.id,
       entryPointAddress: entryPoint,
       sender: params.agentWallet as `0x${string}`,
-      nonce: BigInt(0),
+      nonce: params.nonce ?? BigInt(0),
       callData,
-      callGasLimit: BigInt(params.maxGasLimit),
+      callGasLimit,
+      // CRITICAL: Pass non-zero gas limits to avoid simulation failures
+      verificationGasLimit,
+      preVerificationGas,
       // Coinbase CDP requires EIP-1559 fee fields for pm_getPaymasterStubData
       maxFeePerGas,
       maxPriorityFeePerGas,
@@ -385,6 +451,11 @@ export async function preparePaymasterSponsorship(params: {
         maxGasLimit: params.maxGasLimit,
         approvedAt: Date.now(),
         stubData: stub,
+        estimatedGas: {
+          callGasLimit: callGasLimit.toString(),
+          verificationGasLimit: verificationGasLimit.toString(),
+          preVerificationGas: preVerificationGas.toString(),
+        },
       }),
       { px: PAYMASTER_APPROVAL_TTL_MS }
     );
@@ -392,12 +463,19 @@ export async function preparePaymasterSponsorship(params: {
     logger.info('[Paymaster] Paymaster sponsorship prepared', {
       agentWallet: params.agentWallet,
       maxGasLimit: params.maxGasLimit,
+      verificationGasLimit: verificationGasLimit.toString(),
+      preVerificationGas: preVerificationGas.toString(),
     });
 
     return {
       ready: true,
       paymasterData: 'paymasterAndData' in stub ? stub.paymasterAndData : undefined,
       paymaster: 'paymaster' in stub ? stub.paymaster : undefined,
+      estimatedGas: {
+        callGasLimit,
+        verificationGasLimit,
+        preVerificationGas,
+      },
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -435,10 +513,12 @@ export async function executePaymasterSponsorship(params: {
   const callData = params.callData ?? ('0x' as `0x${string}`);
 
   // Prepare paymaster data with same callData we will send (required for CDP simulation)
+  // This also estimates gas - CRITICAL for avoiding zero gas limit errors
   const prepared = await preparePaymasterSponsorship({
     agentWallet: params.agentWallet,
     maxGasLimit: params.maxGasLimit,
     callData,
+    nonce: params.nonce,
   });
 
   if (!prepared.ready) {
@@ -448,15 +528,22 @@ export async function executePaymasterSponsorship(params: {
   const chain = getChain();
   const { maxFeePerGas, maxPriorityFeePerGas } = getPaymasterFeeCaps();
 
+  // Use estimated gas values from preparePaymasterSponsorship, or defaults if not available
+  const estimatedGas = prepared.estimatedGas ?? {
+    callGasLimit: BigInt(params.maxGasLimit),
+    verificationGasLimit: DEFAULT_VERIFICATION_GAS_LIMIT,
+    preVerificationGas: DEFAULT_PRE_VERIFICATION_GAS,
+  };
+
   try {
-    // Build the UserOperation with same callData and fee caps as stub
+    // Build the UserOperation with estimated gas values (NOT hardcoded zeros!)
     const userOp = {
       sender: params.agentWallet as `0x${string}`,
       nonce: params.nonce ?? BigInt(0),
       callData,
-      callGasLimit: BigInt(params.maxGasLimit),
-      verificationGasLimit: BigInt(100000),
-      preVerificationGas: BigInt(21000),
+      callGasLimit: estimatedGas.callGasLimit,
+      verificationGasLimit: estimatedGas.verificationGasLimit,
+      preVerificationGas: estimatedGas.preVerificationGas,
       maxFeePerGas,
       maxPriorityFeePerGas,
       signature: '0x' as `0x${string}`,
@@ -467,7 +554,9 @@ export async function executePaymasterSponsorship(params: {
 
     logger.info('[Paymaster] Submitting sponsored UserOperation to bundler', {
       sender: params.agentWallet,
-      maxGasLimit: params.maxGasLimit,
+      callGasLimit: estimatedGas.callGasLimit.toString(),
+      verificationGasLimit: estimatedGas.verificationGasLimit.toString(),
+      preVerificationGas: estimatedGas.preVerificationGas.toString(),
       chainId: chain.id,
     });
 
@@ -601,8 +690,15 @@ export async function sponsorTransaction(
   if (!targetContract && activityLogger) {
     targetContract = activityLogger;
   }
+  // When target is ActivityLogger, use ping() so inner call succeeds; empty calldata reverts (no fallback)
+  const innerData =
+    targetContract &&
+    activityLogger &&
+    targetContract.toLowerCase() === activityLogger.toLowerCase()
+      ? getActivityLoggerPingData()
+      : ('0x' as `0x${string}`);
   const callData = targetContract
-    ? buildExecuteCalldata({ targetContract, value: BigInt(0), data: '0x' })
+    ? buildExecuteCalldata({ targetContract, value: BigInt(0), data: innerData })
     : undefined;
 
   // Step 4: Execute paymaster sponsorship via bundler

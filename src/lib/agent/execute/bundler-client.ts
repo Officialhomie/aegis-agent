@@ -10,6 +10,7 @@ import { createPublicClient, http, type Address, type Hex, type Chain } from 'vi
 import { base, baseSepolia } from 'viem/chains';
 import {
   createBundlerClient,
+  entryPoint06Address,
   entryPoint07Address,
   type UserOperation,
   type BundlerClient,
@@ -81,10 +82,14 @@ function getBundlerRpcUrl(): string | undefined {
   return getActiveBundlerRpcUrl();
 }
 
-/** Resolve entry point address from env; empty or unset uses ERC-4337 v0.7 default. */
+/**
+ * Resolve entry point address from env.
+ * Default: EntryPoint v0.6 (0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789) for Coinbase Smart Wallet compatibility.
+ * Set ENTRY_POINT_ADDRESS=0x0000000071727De22E5E9d8BAf0edAc6f37da032 for v0.7.
+ */
 export function getEntryPointAddress(): Address {
   const env = process.env.ENTRY_POINT_ADDRESS?.trim();
-  return (env as Address) || entryPoint07Address;
+  return (env as Address) || entryPoint06Address;
 }
 
 let bundlerClientInstance: BundlerClient | null = null;

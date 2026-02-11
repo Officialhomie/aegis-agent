@@ -3,7 +3,18 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { buildExecuteCalldata } from '../../../../src/lib/agent/execute/userop-calldata';
+import {
+  buildExecuteCalldata,
+  getActivityLoggerPingData,
+} from '../../../../src/lib/agent/execute/userop-calldata';
+
+describe('getActivityLoggerPingData', () => {
+  it('returns encoded ping() calldata (4-byte selector + no args)', () => {
+    const data = getActivityLoggerPingData();
+    expect(data).toMatch(/^0x[a-fA-F0-9]+$/);
+    expect(data.length).toBe(10); // 0x + 4-byte selector (8 hex chars)
+  });
+});
 
 describe('buildExecuteCalldata', () => {
   it('returns non-empty hex for execute(target, 0, 0x)', () => {

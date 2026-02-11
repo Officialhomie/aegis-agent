@@ -14,6 +14,8 @@
     "agent:run": "tsx src/lib/agent/index.ts",
     "agent:paymaster": "tsx scripts/deploy-autonomous-paymaster.ts",
     "deploy:activity-logger": "tsx scripts/deploy-activity-logger.ts",
+    "create:smart-wallet": "tsx scripts/create-smart-wallet.ts",
+    "create:smart-wallet-new-owner": "tsx scripts/create-smart-wallet-new-owner.ts",
     "deploy:reactive-observer": "tsx scripts/deploy-reactive-observer.ts",
     "deploy:all": "tsx scripts/deploy-contracts.ts",
     "foundry:setup-keystore": "echo 'Run: cast wallet import deployer-onetruehmie --interactive'",
