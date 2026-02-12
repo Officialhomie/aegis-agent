@@ -20,6 +20,13 @@ export default function ProtocolsDocsPage() {
           Register your protocol with Aegis to sponsor gas fees for your users.
           No code changes required - just register, whitelist contracts, and deposit funds.
         </p>
+        <p className="text-text-muted text-sm">
+          Protocols can also integrate with{' '}
+          <Link href="/docs/delegation" className="text-cyan-400 hover:underline">
+            user-to-agent delegation
+          </Link>{' '}
+          so users delegate a gas budget to agents that then receive sponsored execution.
+        </p>
       </div>
 
       {/* Registration */}

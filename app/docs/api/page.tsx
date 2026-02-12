@@ -1,12 +1,12 @@
 'use client';
 
 import { useState } from 'react';
-import { Code, Server, BarChart3, Webhook, Layers } from 'lucide-react';
+import { Code, Server, BarChart3, Webhook, Layers, UserCheck } from 'lucide-react';
 import { ApiEndpoint } from '@/components/docs/api-endpoint';
 import { Callout } from '@/components/docs/callout';
 import { cn } from '@/lib/utils';
 
-type TabId = 'protocol' | 'dashboard' | 'agent' | 'webhook' | 'v1';
+type TabId = 'protocol' | 'dashboard' | 'agent' | 'webhook' | 'v1' | 'delegation';
 
 const tabs: { id: TabId; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: 'protocol', label: 'Protocol', icon: Server },
@@ -14,6 +14,7 @@ const tabs: { id: TabId; label: string; icon: React.ComponentType<{ className?: 
   { id: 'agent', label: 'Agent', icon: Code },
   { id: 'webhook', label: 'Webhooks', icon: Webhook },
   { id: 'v1', label: 'v1 SDK', icon: Layers },
+  { id: 'delegation', label: 'Delegation', icon: UserCheck },
 ];
 
 export default function ApiReferencePage() {
@@ -385,6 +386,28 @@ export default function ApiReferencePage() {
   }
 }`}
           />
+
+          <ApiEndpoint
+            method="GET"
+            path="/dashboard/cost-savings"
+            description="Phase 1 optimization metrics: Neynar API usage and quota, LLM calls saved (filter/template skips vs total cycles), and estimated savings (USD)."
+            responseBody={`{
+  "neynar": {
+    "month": "2024-01",
+    "used": 120,
+    "quota": 500,
+    "byCategory": { "proof": { "used": 10, "budget": 100 }, "stats": { "used": 50, "budget": 200 }, "health": { "used": 30, "budget": 100 }, "emergency": { "used": 30, "budget": 100 } }
+  },
+  "llm": {
+    "totalCycles": 1000,
+    "skippedByFilter": 400,
+    "skippedByTemplate": 100,
+    "llmCalls": 500
+  },
+  "estimatedSavings": { "neynarUSD": 199, "anthropicUSD": 50, "totalUSD": 249 },
+  "timestamp": "2024-01-15T12:00:00Z"
+}`}
+          />
         </div>
       )}
 
@@ -651,6 +674,137 @@ export default function ApiReferencePage() {
   "requestId": "req_abc123",
   "status": "pending",
   "createdAt": "2024-01-15T12:00:00Z"
+}`}
+          />
+
+          <ApiEndpoint
+            method="GET"
+            path="/v1/passport"
+            description="Get Gas Passport data for an agent (reputation primitive from sponsorship history). Public; no auth. Query by agent address or ERC-8004 on-chain ID."
+            parameters={[
+              { name: 'agent', type: 'string', required: false, description: 'Agent wallet address (0x...). Provide agent or agentOnChainId, not both.' },
+              { name: 'agentOnChainId', type: 'string', required: false, description: 'ERC-8004 agent on-chain ID. Provide agent or agentOnChainId, not both.' },
+            ]}
+            responseBody={`{
+  "agent": "0x1234...",
+  "sponsorCount": 42,
+  "successRateBps": 9500,
+  "protocolCount": 3,
+  "firstSponsorTime": 1705316400,
+  "totalValueSponsored": 12.45,
+  "reputationHash": null
+}`}
+          />
+        </div>
+      )}
+
+      {/* Delegation APIs */}
+      {activeTab === 'delegation' && (
+        <div className="space-y-6">
+          <h2 className="font-display text-xl font-bold text-text-primary">
+            Delegation
+          </h2>
+          <p className="text-text-secondary text-sm">
+            User-to-agent delegation: create, list, get, revoke, and view usage. All
+            require Bearer token (AEGIS_API_KEY).
+          </p>
+          <Callout variant="warning" title="Authentication Required">
+            All delegation endpoints require Authorization: Bearer AEGIS_API_KEY.
+          </Callout>
+
+          <ApiEndpoint
+            method="POST"
+            path="/api/delegation"
+            description="Create a new delegation. Body: delegator, agent, permissions, gasBudgetWei, validFrom, validUntil, nonce, signature (EIP-712)."
+            requestBody={`{
+  "delegator": "0x...",
+  "agent": "0x...",
+  "permissions": { "contracts": [], "functions": [], "maxValuePerTx": "0", "maxGasPerTx": 500000, "maxDailySpend": 100, "maxTxPerDay": 50, "maxTxPerHour": 10 },
+  "gasBudgetWei": "1000000000000000",
+  "validFrom": "2024-01-15T00:00:00.000Z",
+  "validUntil": "2024-02-15T00:00:00.000Z",
+  "nonce": "1",
+  "signature": "0x..."
+}`}
+            responseBody={`{
+  "success": true,
+  "delegation": { "id": "...", "delegator": "0x...", "agent": "0x...", "status": "ACTIVE", ... }
+}`}
+          />
+
+          <ApiEndpoint
+            method="GET"
+            path="/api/delegation"
+            description="List delegations. Query: delegator, agent, status (ACTIVE|REVOKED|EXPIRED|EXHAUSTED|ALL), limit, offset."
+            parameters={[
+              { name: 'delegator', type: 'string', required: false, description: 'Filter by delegator address' },
+              { name: 'agent', type: 'string', required: false, description: 'Filter by agent address' },
+              { name: 'status', type: 'string', required: false, description: 'ACTIVE, REVOKED, EXPIRED, EXHAUSTED, or ALL' },
+              { name: 'limit', type: 'number', required: false, description: 'Max results (default 50)' },
+              { name: 'offset', type: 'number', required: false, description: 'Pagination offset' },
+            ]}
+            responseBody={`{
+  "delegations": [ { "id": "...", "delegator": "0x...", "agent": "0x...", "status": "ACTIVE", "gasBudgetRemaining": "..." } ],
+  "count": 1
+}`}
+          />
+
+          <ApiEndpoint
+            method="GET"
+            path="/api/delegation/{delegationId}"
+            description="Get a single delegation by ID."
+            parameters={[
+              { name: 'delegationId', type: 'string', required: true, description: 'Delegation ID (path)' },
+            ]}
+            responseBody={`{
+  "delegation": { "id": "...", "delegator": "0x...", "agent": "0x...", "permissions": {}, "gasBudgetWei": "...", "gasBudgetSpent": "...", "status": "ACTIVE", "validUntil": "...", "usageCount": 5 }
+}`}
+          />
+
+          <ApiEndpoint
+            method="DELETE"
+            path="/api/delegation/{delegationId}"
+            description="Revoke a delegation. Requires header X-Delegator-Address (must match delegation delegator). Optional body: { reason }."
+            parameters={[
+              { name: 'delegationId', type: 'string', required: true, description: 'Delegation ID (path)' },
+            ]}
+            requestBody={`{ "reason": "No longer needed" }`}
+            responseBody={`{
+  "success": true,
+  "delegationId": "...",
+  "status": "REVOKED"
+}`}
+          />
+
+          <ApiEndpoint
+            method="GET"
+            path="/api/delegation/{delegationId}/usage"
+            description="Get usage history for a delegation. Query: limit, offset."
+            parameters={[
+              { name: 'delegationId', type: 'string', required: true, description: 'Delegation ID (path)' },
+              { name: 'limit', type: 'number', required: false, description: 'Max records' },
+              { name: 'offset', type: 'number', required: false, description: 'Pagination offset' },
+            ]}
+            responseBody={`{
+  "delegationId": "...",
+  "delegator": "0x...",
+  "agent": "0x...",
+  "usage": [ { "id": "...", "txHash": "0x...", "gasUsed": "...", "gasCostWei": "...", "success": true, "createdAt": "..." } ],
+  "summary": { "totalUsage": 5, "totalGasUsed": "...", "gasBudgetSpent": "...", "gasBudgetRemaining": "..." }
+}`}
+          />
+
+          <ApiEndpoint
+            method="GET"
+            path="/api/agent/{agentAddress}/delegations"
+            description="List delegations where the given address is the agent (delegatee)."
+            parameters={[
+              { name: 'agentAddress', type: 'string', required: true, description: 'Agent wallet address (path)' },
+            ]}
+            responseBody={`{
+  "delegations": [ { "id": "...", "delegator": "0x...", "agent": "0x...", "status": "ACTIVE" } ],
+  "count": 1,
+  "summary": { "activeCount": 1, "totalBudget": "...", "totalRemaining": "..." }
 }`}
           />
         </div>

@@ -12,6 +12,8 @@ import {
   Shield,
   HelpCircle,
   ChevronRight,
+  Award,
+  UserCheck,
 } from 'lucide-react';
 
 interface NavItem {
@@ -38,6 +40,7 @@ const docsNav: NavSection[] = [
     items: [
       { title: 'For Protocols', href: '/docs/protocols', icon: Building2 },
       { title: 'For AI Agents', href: '/docs/agents', icon: Bot },
+      { title: 'Delegation', href: '/docs/delegation', icon: UserCheck },
     ],
   },
   {
@@ -45,6 +48,7 @@ const docsNav: NavSection[] = [
     items: [
       { title: 'API Reference', href: '/docs/api', icon: Code },
       { title: 'Architecture', href: '/docs/architecture', icon: Cog },
+      { title: 'Gas Passport', href: '/docs/gas-passport', icon: Award },
     ],
   },
   {

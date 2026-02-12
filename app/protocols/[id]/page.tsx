@@ -1,14 +1,22 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, Plus, Wallet, Activity, Clock } from 'lucide-react';
+import { ArrowLeft, Plus, Wallet, Activity, Clock, Users } from 'lucide-react';
 import { Header } from '@/components/layout/header';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableHead,
+  TableRow,
+  TableCell,
+} from '@/components/ui/table';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Address } from '@/components/common/address';
 import { formatUSD } from '@/lib/utils';
@@ -24,6 +32,15 @@ interface Protocol {
   createdAt: string;
 }
 
+interface ApprovedAgent {
+  id: string;
+  agentAddress: string;
+  agentName: string | null;
+  maxDailyBudget: number;
+  isActive: boolean;
+  approvedAt: string;
+}
+
 export default function ProtocolDetailPage() {
   const params = useParams();
   const protocolId = params.id as string;
@@ -36,6 +53,31 @@ export default function ProtocolDetailPage() {
   const [topupAmount, setTopupAmount] = useState('');
   const [topupLoading, setTopupLoading] = useState(false);
   const [topupSuccess, setTopupSuccess] = useState(false);
+
+  // Approved agents (optional API key)
+  const [agentsApiKey, setAgentsApiKey] = useState('');
+  const [approvedAgents, setApprovedAgents] = useState<ApprovedAgent[]>([]);
+  const [agentsLoading, setAgentsLoading] = useState(false);
+
+  const fetchApprovedAgents = useCallback(async () => {
+    if (!agentsApiKey.trim() || !protocolId) return;
+    setAgentsLoading(true);
+    try {
+      const res = await fetch(`/api/protocol/${protocolId}/agents`, {
+        headers: { Authorization: `Bearer ${agentsApiKey.trim()}` },
+      });
+      const data = await res.json();
+      if (res.ok && data.agents) {
+        setApprovedAgents(data.agents);
+      } else {
+        setApprovedAgents([]);
+      }
+    } catch {
+      setApprovedAgents([]);
+    } finally {
+      setAgentsLoading(false);
+    }
+  }, [protocolId, agentsApiKey]);
 
   useEffect(() => {
     async function fetchProtocol() {
@@ -249,6 +291,84 @@ export default function ProtocolDetailPage() {
                 ))}
               </div>
             )}
+          </CardContent>
+        </Card>
+
+        {/* Approved agents */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Users className="h-5 w-5 text-coral-400" />
+              Approved agents
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-text-muted text-sm mb-4">
+              List agents approved for sponsorship by this protocol. Requires Bearer token
+              (AEGIS_API_KEY). See{' '}
+              <Link href="/docs/api" className="text-cyan-400 hover:underline">
+                API Reference
+              </Link>{' '}
+              (Protocol tab) for GET/POST/DELETE/PATCH /api/protocol/{protocolId}/agents.
+            </p>
+            <div className="flex gap-4 flex-wrap items-end mb-4">
+              <div className="flex-1 min-w-[200px]">
+                <label className="block text-xs text-text-muted mb-1">API key</label>
+                <Input
+                  type="password"
+                  placeholder="AEGIS_API_KEY"
+                  value={agentsApiKey}
+                  onChange={(e) => setAgentsApiKey(e.target.value)}
+                  className="font-mono"
+                />
+              </div>
+              <Button
+                onClick={fetchApprovedAgents}
+                disabled={agentsLoading || !agentsApiKey.trim()}
+              >
+                Load agents
+              </Button>
+            </div>
+            {agentsLoading ? (
+              <Skeleton className="h-24 w-full" />
+            ) : approvedAgents.length === 0 && agentsApiKey.trim() ? (
+              <p className="text-text-muted text-sm">No approved agents or invalid key.</p>
+            ) : approvedAgents.length > 0 ? (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Agent</TableHead>
+                      <TableHead>Name</TableHead>
+                      <TableHead className="text-right">Max daily budget</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Approved at</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {approvedAgents.map((a) => (
+                      <TableRow key={a.id}>
+                        <TableCell>
+                          <Address address={a.agentAddress} chars={8} />
+                        </TableCell>
+                        <TableCell className="text-text-secondary">
+                          {a.agentName ?? '—'}
+                        </TableCell>
+                        <TableCell className="text-right">{formatUSD(a.maxDailyBudget)}</TableCell>
+                        <TableCell>
+                          <Badge variant={a.isActive ? 'success' : 'default'}>
+                            {a.isActive ? 'Active' : 'Inactive'}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-text-muted text-sm">
+                          {new Date(a.approvedAt).toLocaleDateString()}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            ) : null}
           </CardContent>
         </Card>
       </main>

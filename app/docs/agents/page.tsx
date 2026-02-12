@@ -190,6 +190,44 @@ export default function AgentsDocsPage() {
         </Callout>
       </section>
 
+      {/* Gas Passport */}
+      <section className="space-y-4">
+        <h2 className="font-display text-2xl font-bold text-text-primary border-b border-border pb-2">
+          Gas Passport
+        </h2>
+        <p className="text-text-secondary">
+          Aegis builds a <strong className="text-text-primary">Gas Passport</strong> for each
+          agent from sponsorship history: total sponsorships, success rate, protocol
+          diversity, longevity, and total value sponsored. This portable reputation is used
+          for <strong className="text-text-primary">preferential sponsorship</strong> — agents
+          that meet minimum passport thresholds (e.g. 10+ sponsorships, 95%+ success) can
+          pass the legitimacy check with a lower on-chain transaction history requirement.
+        </p>
+        <p className="text-text-secondary">
+          Look up any agent&apos;s passport or read the API in the{' '}
+          <Link href="/docs/gas-passport" className="text-cyan-400 hover:underline">
+            Gas Passport
+          </Link>{' '}
+          doc.
+        </p>
+      </section>
+
+      {/* Delegation */}
+      <section className="space-y-4">
+        <h2 className="font-display text-2xl font-bold text-text-primary border-b border-border pb-2">
+          User-to-Agent Delegation
+        </h2>
+        <p className="text-text-secondary">
+          Users can delegate a gas budget and scoped permissions to an agent. The agent
+          then receives sponsored execution when acting within the delegation; the user&apos;s
+          wallet pays (via the delegated budget), not the protocol. See{' '}
+          <Link href="/docs/delegation" className="text-cyan-400 hover:underline">
+            Delegation
+          </Link>{' '}
+          for flow, permissions, and API.
+        </p>
+      </section>
+
       {/* Moltbook Integration */}
       <section className="space-y-4">
         <h2 className="font-display text-2xl font-bold text-text-primary border-b border-border pb-2">
