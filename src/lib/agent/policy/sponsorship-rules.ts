@@ -10,6 +10,7 @@ import { logger } from '../../logger';
 import { getStateStore } from '../state-store';
 import { getOnchainTxCount, getProtocolBudget, getAgentWalletBalance } from '../observe/sponsorship';
 import { detectAbuse } from '../security/abuse-detection';
+import { getPassport } from '../identity/gas-passport';
 import type { Decision } from '../reason/schemas';
 import type { SponsorParams } from '../reason/schemas';
 import type { AgentConfig } from '../index';
@@ -23,6 +24,10 @@ const MAX_SPONSORSHIP_COST_USD = getConfigNumber('MAX_SPONSORSHIP_COST_USD', 0.5
 const GAS_PRICE_MAX_GWEI = getConfigNumber('GAS_PRICE_MAX_GWEI', 2, 0.1, 1000);
 const MIN_HISTORICAL_TXS = 5;
 const REQUIRE_AGENT_APPROVAL = process.env.REQUIRE_AGENT_APPROVAL === 'true';
+/** Gas Passport preferential: min sponsorships to relax historical-tx requirement */
+const PASSPORT_PREFERENTIAL_MIN_SPONSORSHIPS = getConfigNumber('GAS_PASSPORT_PREFERENTIAL_MIN_SPONSORSHIPS', 10, 1, 1000);
+/** Gas Passport preferential: min success rate (basis points, 9500 = 95%) */
+const PASSPORT_PREFERENTIAL_MIN_SUCCESS_BPS = getConfigNumber('GAS_PASSPORT_PREFERENTIAL_MIN_SUCCESS_BPS', 9500, 0, 10000);
 
 function isSponsorshipDecision(decision: Decision): decision is Decision & { action: 'SPONSOR_TRANSACTION'; parameters: SponsorParams } {
   return decision.action === 'SPONSOR_TRANSACTION' && decision.parameters != null;
@@ -41,9 +46,10 @@ export const sponsorshipPolicyRules: PolicyRule[] = [
         return { ruleName: 'agent-legitimacy-check', passed: true, message: 'N/A', severity: 'ERROR' };
       }
       const agentWallet = decision.parameters.agentWallet as `0x${string}`;
-      const [txCount, abuse] = await Promise.all([
+      const [txCount, abuse, passport] = await Promise.all([
         getOnchainTxCount(agentWallet),
         detectAbuse(decision.parameters.agentWallet),
+        getPassport(decision.parameters.agentWallet),
       ]);
       if (abuse.isAbusive) {
         return {
@@ -53,13 +59,20 @@ export const sponsorshipPolicyRules: PolicyRule[] = [
           severity: 'ERROR',
         };
       }
-      const passed = txCount >= MIN_HISTORICAL_TXS;
+      const passportQualifies =
+        passport.sponsorCount >= PASSPORT_PREFERENTIAL_MIN_SPONSORSHIPS &&
+        passport.successRateBps >= PASSPORT_PREFERENTIAL_MIN_SUCCESS_BPS;
+      const passed =
+        passportQualifies || txCount >= MIN_HISTORICAL_TXS;
+      const message = passed
+        ? passportQualifies && txCount < MIN_HISTORICAL_TXS
+          ? `Gas Passport qualifies (preferential): ${passport.sponsorCount} sponsorships, ${passport.successRateBps / 100}% success`
+          : `Agent has ${txCount} historical txs (min ${MIN_HISTORICAL_TXS})`
+        : `Agent has ${txCount} historical txs (min ${MIN_HISTORICAL_TXS} required)`;
       return {
         ruleName: 'agent-legitimacy-check',
         passed,
-        message: passed
-          ? `Agent has ${txCount} historical txs (min ${MIN_HISTORICAL_TXS})`
-          : `Agent has ${txCount} historical txs (min ${MIN_HISTORICAL_TXS} required)`,
+        message,
         severity: 'ERROR',
       };
     },
