@@ -41,7 +41,11 @@ export async function GET(): Promise<Response> {
         protocolStats: '/api/v1/protocol/:id/stats',
         checkEligibility: '/api/v1/sponsorship/check-eligibility',
         sponsorshipRequest: '/api/v1/sponsorship/request',
+        passport: '/api/v1/passport',
       },
+      delegation: '/api/delegation',
+      delegationById: '/api/delegation/:id',
+      agentDelegations: '/api/agent/:agentAddress/delegations',
     },
     authentication: {
       publicEndpoints: [
@@ -61,8 +65,13 @@ export async function GET(): Promise<Response> {
         '/api/dashboard/verify',
         '/api/v1/protocol/[id]/stats',
         '/api/v1/sponsorship/check-eligibility',
+        '/api/v1/passport',
       ],
       apiKeyEndpoints: [
+        '/api/delegation',
+        '/api/delegation/[delegationId]',
+        '/api/delegation/[delegationId]/usage',
+        '/api/agent/[agentAddress]/delegations',
         '/api/agent/register',
         '/api/agent/cycle',
         '/api/agent/status',
