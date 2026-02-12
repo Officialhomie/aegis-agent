@@ -34,3 +34,9 @@ export {
 } from './unified-reputation';
 
 export { setPrimaryName, getPrimaryName } from './ens';
+
+export {
+  getPassport,
+  getPassportByOnChainId,
+  type PassportData,
+} from './gas-passport';
