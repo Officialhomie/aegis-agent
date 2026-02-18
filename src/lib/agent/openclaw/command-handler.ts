@@ -103,7 +103,7 @@ export async function executeCommand(cmd: ParsedCommand): Promise<CommandResult>
           `USDC: ${(state.usdcBalance ?? 0).toFixed(2)}, ` +
           `runway: ${state.runwayDays?.toFixed(1) ?? '?'} days, ` +
           `health: ${state.healthScore ?? '?'}/100`;
-        return { success: true, message, data: state as Record<string, unknown> };
+        return { success: true, message, data: state as unknown as Record<string, unknown> };
       } catch (err) {
         const message = `Could not fetch reserve state: ${err instanceof Error ? err.message : String(err)}`;
         return { success: false, message };
