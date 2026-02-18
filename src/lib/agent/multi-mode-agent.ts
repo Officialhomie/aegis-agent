@@ -1,30 +1,29 @@
 /**
  * Unified orchestrator for Reserve Pipeline and Gas Sponsorship modes.
- * Runs both modes concurrently with isolated circuit breakers and rate limiters.
+ * Runs both modes concurrently with isolated circuit breakers.
+ *
+ * runCycle() is now a thin coordinator:
+ *   1. OrchestratorService — Observe + Retrieve + Reason → TaskSpec
+ *   2. DispatcherService   — Policy + Route → TaskResult
+ *   3. storeMemory         — Persist outcome
  */
 
 import { logger } from '../logger';
-import { validatePolicy } from './policy';
-import { execute, getCircuitBreaker, executeWithWalletLock, signDecision, sponsorTransaction } from './execute';
-import { storeMemory, retrieveRelevantMemories } from './memory';
-import { postSponsorshipProof } from './social/farcaster';
-import { postSponsorshipToBotchan, postReserveSwapToBotchan } from './social/botchan';
+import { storeMemory } from './memory';
+import { getCircuitBreaker } from './execute';
 import { runFullHeartbeat } from './social/heartbeat';
 import { maybePostFarcasterUpdate } from './transparency/farcaster-updates';
-import { observeGasPrice } from './observe';
-import { getAdaptiveGasSponsorshipConfig } from './modes/gas-sponsorship';
-import { getReservePipelineConfig } from './modes/reserve-pipeline';
 import { checkAndUpdateEmergencyMode } from './emergency';
-import { registerDefaultSkills, executeEventSkills } from './skills';
+import { registerDefaultSkills } from './skills';
+import { getStateStore } from './state-store';
+import { OrchestratorService } from '../../orchestrator';
+import { DispatcherService } from '../../dispatcher';
 import type { AgentMode, AgentModeContext } from './types';
 import type { AgentConfig } from './index';
-import type { AgentMemory } from './index';
-import type { ExecutionResult } from './execute';
 
 const DEFAULT_RESERVE_INTERVAL_MS = 5 * 60 * 1000;
 const DEFAULT_SPONSORSHIP_INTERVAL_MS = 60 * 1000;
-/** Interval to check whether to run Moltbook heartbeat and Farcaster health post (each has its own internal throttle). */
-const SOCIAL_TRANSPARENCY_INTERVAL_MS = 15 * 60 * 1000; // 15 min
+const SOCIAL_TRANSPARENCY_INTERVAL_MS = 15 * 60 * 1000;
 
 export interface MultiModeAgentOptions {
   modes: AgentMode[];
@@ -35,6 +34,9 @@ export class MultiModeAgent {
   private modes: Map<string, AgentModeContext> = new Map();
   private timers: Map<string, ReturnType<typeof setInterval>> = new Map();
   private draining = false;
+  private intervals: Record<string, number>;
+  private orchestrator: OrchestratorService;
+  private dispatcher: DispatcherService;
 
   constructor(options: MultiModeAgentOptions) {
     const { modes, intervals = {} } = options;
@@ -47,14 +49,13 @@ export class MultiModeAgent {
       'gas-sponsorship': intervals['gas-sponsorship'] ?? DEFAULT_SPONSORSHIP_INTERVAL_MS,
       ...intervals,
     };
+    this.orchestrator = new OrchestratorService();
+    this.dispatcher = new DispatcherService();
   }
-
-  private intervals: Record<string, number>;
 
   async start(): Promise<void> {
     await checkAndUpdateEmergencyMode();
 
-    // Register default skills
     registerDefaultSkills();
     logger.info('[MultiMode] Registered default skills');
 
@@ -70,28 +71,39 @@ export class MultiModeAgent {
     }
 
     for (const [id, ctx] of this.modes) {
-      const intervalMs = this.intervals[id] ?? (id === 'reserve-pipeline' ? DEFAULT_RESERVE_INTERVAL_MS : DEFAULT_SPONSORSHIP_INTERVAL_MS);
+      const intervalMs =
+        this.intervals[id] ??
+        (id === 'reserve-pipeline' ? DEFAULT_RESERVE_INTERVAL_MS : DEFAULT_SPONSORSHIP_INTERVAL_MS);
       const t = setInterval(() => {
         if (this.draining) return;
-        this.runCycle(ctx).catch((err) => logger.error('[MultiMode] Cycle error', { mode: id, error: err }));
+        this.runCycle(ctx).catch((err) =>
+          logger.error('[MultiMode] Cycle error', { mode: id, error: err })
+        );
       }, intervalMs);
       this.timers.set(id, t);
       logger.info('[MultiMode] Started mode', { mode: id, intervalMs });
     }
 
-    // Moltbook engagement + Farcaster health updates + scheduled skills (each throttled internally)
     const socialTimer = setInterval(() => {
       if (this.draining) return;
-      runFullHeartbeat().catch((err) => logger.warn('[MultiMode] Full heartbeat error', { error: err }));
-      maybePostFarcasterUpdate().catch((err) => logger.warn('[MultiMode] Farcaster update error', { error: err }));
+      runFullHeartbeat().catch((err) =>
+        logger.warn('[MultiMode] Full heartbeat error', { error: err })
+      );
+      maybePostFarcasterUpdate().catch((err) =>
+        logger.warn('[MultiMode] Farcaster update error', { error: err })
+      );
     }, SOCIAL_TRANSPARENCY_INTERVAL_MS);
     this.timers.set('social-transparency', socialTimer);
-    logger.info('[MultiMode] Started social/transparency with skills', { intervalMs: SOCIAL_TRANSPARENCY_INTERVAL_MS });
+    logger.info('[MultiMode] Started social/transparency with skills', {
+      intervalMs: SOCIAL_TRANSPARENCY_INTERVAL_MS,
+    });
 
     const { processQueue } = await import('./queue/queue-consumer');
     const queueTimer = setInterval(() => {
       if (this.draining) return;
-      processQueue().catch((err) => logger.warn('[MultiMode] Queue consumer error', { error: err }));
+      processQueue().catch((err) =>
+        logger.warn('[MultiMode] Queue consumer error', { error: err })
+      );
     }, 30_000);
     this.timers.set('queue-consumer', queueTimer);
     logger.info('[MultiMode] Started queue consumer', { intervalMs: 30_000 });
@@ -114,87 +126,73 @@ export class MultiModeAgent {
   }
 
   private async runCycle(ctx: AgentModeContext): Promise<void> {
-    const { mode, config: baseConfig } = ctx;
-    const key = mode.id;
+    const key = ctx.mode.id;
     const breaker = getCircuitBreaker(key);
 
-    const health = await (breaker as { checkHealthBeforeExecution?: () => Promise<{ healthy: boolean; reason?: string; warnings?: string[] }> }).checkHealthBeforeExecution?.();
+    // Pause check — OpenClaw can pause the agent via command
+    const store = await getStateStore();
+    const paused = await store.get('aegis:openclaw:paused');
+    if (paused === 'true') {
+      logger.info('[MultiMode] Agent paused via OpenClaw', { mode: key });
+      return;
+    }
+
+    const health = await (
+      breaker as {
+        checkHealthBeforeExecution?: () => Promise<{
+          healthy: boolean;
+          reason?: string;
+          warnings?: string[];
+        }>;
+      }
+    ).checkHealthBeforeExecution?.();
+
     if (health && !health.healthy) {
-      logger.warn('[MultiMode] Health check failed, skipping cycle', { mode: key, reason: health.reason, warnings: health.warnings });
+      logger.warn('[MultiMode] Health check failed, skipping cycle', {
+        mode: key,
+        reason: health.reason,
+        warnings: health.warnings,
+      });
       return;
     }
     if (health?.warnings && health.warnings.length > 0) {
       logger.info('[MultiMode] Health warnings detected', { mode: key, warnings: health.warnings });
     }
 
-    let config = baseConfig;
-    if (key === 'gas-sponsorship') {
-      config = await getAdaptiveGasSponsorshipConfig();
-    } else if (key === 'reserve-pipeline') {
-      config = getReservePipelineConfig();
-    }
-
     const run = async () => {
-      const observations = await mode.observe();
-      const memories = (await retrieveRelevantMemories(observations)) as AgentMemory[];
-      let currentGasPriceGwei: number | undefined;
-      if (key === 'gas-sponsorship') {
-        const gasObs = await observeGasPrice();
-        const gasData = gasObs[0]?.data as { gasPriceGwei?: string } | undefined;
-        currentGasPriceGwei = gasData?.gasPriceGwei != null ? parseFloat(String(gasData.gasPriceGwei)) : undefined;
-      }
-      const configWithGas: AgentConfig = { ...config, currentGasPriceGwei };
+      // — Orchestrator: Observe + Retrieve + Reason → TaskSpec
+      const spec = await this.orchestrator.orchestrate(ctx);
+      if (!spec) return;
 
-      const decision = await mode.reason(observations, memories);
+      // — Dispatcher: Policy + Execute → TaskResult
+      const result = await this.dispatcher.dispatch(spec);
 
-      const policyResult = await validatePolicy(decision, configWithGas);
-      if (!policyResult.passed) {
-        logger.warn('[MultiMode] Policy rejected', { mode: key, errors: policyResult.errors });
-        await storeMemory({ type: 'DECISION', decision, outcome: 'POLICY_REJECTED', policyErrors: policyResult.errors });
-        return;
-      }
-
-      if (decision.confidence < configWithGas.confidenceThreshold) {
-        logger.info('[MultiMode] Below confidence threshold', { mode: key, confidence: decision.confidence });
-        await storeMemory({ type: 'DECISION', observations, decision, outcome: null });
-        return;
-      }
-
-      if (configWithGas.executionMode === 'READONLY') {
-        await storeMemory({ type: 'DECISION', observations, decision, outcome: 'READONLY' });
-        return;
-      }
-
-      let executionResult: ExecutionResult | null = null;
-
-      if (key === 'gas-sponsorship' && decision.action === 'SPONSOR_TRANSACTION') {
-        const signed = await signDecision(decision);
-        executionResult = await sponsorTransaction(decision, configWithGas.executionMode === 'LIVE' ? 'LIVE' : 'SIMULATION');
-        await postSponsorshipProof(signed, executionResult as ExecutionResult & { sponsorshipHash?: string; decisionHash?: string });
-        postSponsorshipToBotchan(signed, executionResult as ExecutionResult & { sponsorshipHash?: string; decisionHash?: string }).catch(() => {});
-        if (executionResult?.success) {
-          const { updateReservesAfterSponsorship } = await import('./execute/post-sponsorship');
-          await updateReservesAfterSponsorship(
-            executionResult as ExecutionResult & { gasUsed?: bigint },
-            configWithGas.currentGasPriceGwei
-          );
-
-          // Trigger event-driven skills (e.g., reputation attestor)
-          const params = decision.parameters as { agentWallet?: string; protocolId?: string } | null;
-          executeEventSkills('sponsorship:success', {
-            userAddress: params?.agentWallet,
-            protocolId: params?.protocolId,
-            txHash: (executionResult as ExecutionResult & { sponsorshipHash?: string }).sponsorshipHash,
-          }).catch((err) => logger.warn('[MultiMode] Event skills error', { error: err }));
-        }
+      // — Memory: Store outcome
+      if (result.skipped && result.skipReason === 'POLICY') {
+        await storeMemory({
+          type: 'DECISION',
+          decision: spec.decision,
+          outcome: 'POLICY_REJECTED',
+          policyErrors: result.policyErrors,
+        });
       } else {
-        executionResult = await executeWithWalletLock(() => execute(decision, configWithGas.executionMode === 'LIVE' ? 'LIVE' : 'SIMULATION'));
-        if (decision.action === 'SWAP_RESERVES' && executionResult && (key === 'gas-sponsorship' || key === 'reserve-pipeline')) {
-          postReserveSwapToBotchan(decision, executionResult).catch(() => {});
-        }
+        await storeMemory({
+          type: 'DECISION',
+          observations: spec.observations,
+          decision: spec.decision,
+          outcome: result.executionResult ?? undefined,
+        });
       }
 
-      await storeMemory({ type: 'DECISION', observations, decision, outcome: executionResult ?? undefined });
+      // — Proactive reporting: notify OpenClaw user of autonomous actions
+      if (!result.skipped && result.executionResult?.success && spec.decision.action !== 'WAIT') {
+        import('./openclaw/proactive-reporter')
+          .then(({ reportToActiveSessions }) => {
+            const summary = `[${key}] ${spec.decision.action}: ${spec.decision.reasoning.slice(0, 120)}`;
+            reportToActiveSessions(summary).catch(() => {});
+          })
+          .catch(() => {});
+      }
     };
 
     try {
@@ -204,13 +202,20 @@ export class MultiModeAgent {
       try {
         await storeMemory({
           type: 'DECISION',
-          decision: { action: 'WAIT', confidence: 0, reasoning: String(err), parameters: null, metadata: {} },
+          decision: {
+            action: 'WAIT',
+            confidence: 0,
+            reasoning: String(err),
+            parameters: null,
+            metadata: {},
+          },
           outcome: { success: false, error: String(err) },
         });
       } catch (storageErr) {
-        logger.warn('[MultiMode] Could not store cycle failure in memory (database unavailable)', {
+        logger.warn('[MultiMode] Could not store cycle failure in memory', {
           mode: key,
-          storageError: storageErr instanceof Error ? storageErr.message : String(storageErr),
+          storageError:
+            storageErr instanceof Error ? storageErr.message : String(storageErr),
         });
       }
     }
