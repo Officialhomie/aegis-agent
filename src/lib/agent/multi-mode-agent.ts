@@ -16,8 +16,8 @@ import { maybePostFarcasterUpdate } from './transparency/farcaster-updates';
 import { checkAndUpdateEmergencyMode } from './emergency';
 import { registerDefaultSkills } from './skills';
 import { getStateStore } from './state-store';
-import { OrchestratorService } from '../../orchestrator';
-import { DispatcherService } from '../../dispatcher';
+import { OrchestratorService } from '../orchestrator';
+import { DispatcherService } from '../dispatcher';
 import type { AgentMode, AgentModeContext } from './types';
 import type { AgentConfig } from './index';
 
