@@ -1,24 +1,10 @@
 import type { Metadata, Viewport } from 'next';
-import { Space_Grotesk, Inter, JetBrains_Mono } from 'next/font/google';
 import './globals.css';
 
-const spaceGrotesk = Space_Grotesk({
-  variable: '--font-space-grotesk',
-  subsets: ['latin'],
-  display: 'swap',
-});
-
-const inter = Inter({
-  variable: '--font-inter',
-  subsets: ['latin'],
-  display: 'swap',
-});
-
-const jetbrainsMono = JetBrains_Mono({
-  variable: '--font-jetbrains-mono',
-  subsets: ['latin'],
-  display: 'swap',
-});
+// Use link-based fonts so build does not require outbound access to Google Fonts (CI/sandbox-friendly).
+// CSS variables are set in globals.css or here for consistency with previous next/font usage.
+const fontClassNames =
+  'font-sans antialiased'; /* Space Grotesk / Inter loaded via link in head */
 
 export const metadata: Metadata = {
   title: {
@@ -68,9 +54,15 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className="dark">
-      <body
-        className={`${spaceGrotesk.variable} ${inter.variable} ${jetbrainsMono.variable} antialiased bg-background text-foreground`}
-      >
+      <head>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
+        <link
+          href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&family=JetBrains+Mono:wght@100..800&family=Space+Grotesk:wght@300..700&display=swap"
+          rel="stylesheet"
+        />
+      </head>
+      <body className={`${fontClassNames} bg-background text-foreground`}>
         {children}
       </body>
     </html>
