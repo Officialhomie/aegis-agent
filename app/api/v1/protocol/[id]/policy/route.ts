@@ -9,9 +9,9 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { updateProtocolPolicyConfig } from '@/lib/protocol/policy-config';
-import { authenticateRequest } from '@/lib/auth/api-key-auth';
-import { logger } from '@/lib/logger';
+import { updateProtocolPolicyConfig } from '@/src/lib/protocol/policy-config';
+import { authenticateRequest } from '@/src/lib/auth/api-key-auth';
+import { logger } from '@/src/lib/logger';
 
 const PolicyConfigSchema = z.object({
   dailyBudgetUSD: z.number().min(0.01).max(10000).optional(),

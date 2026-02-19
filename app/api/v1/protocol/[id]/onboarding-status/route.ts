@@ -8,9 +8,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getOnboardingStatus } from '@/lib/protocol/onboarding';
-import { authenticateRequest } from '@/lib/auth/api-key-auth';
-import { logger } from '@/lib/logger';
+import { getOnboardingStatus } from '@/src/lib/protocol/onboarding';
+import { authenticateRequest } from '@/src/lib/auth/api-key-auth';
+import { logger } from '@/src/lib/logger';
 
 export async function GET(
   request: NextRequest,

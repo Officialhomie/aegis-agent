@@ -9,8 +9,8 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { submitToCDPAllowlist } from '@/lib/protocol/onboarding';
-import { logger } from '@/lib/logger';
+import { submitToCDPAllowlist } from '@/src/lib/protocol/onboarding';
+import { logger } from '@/src/lib/logger';
 
 const BatchSubmitSchema = z.object({
   protocolIds: z.array(z.string()).min(1).max(100),

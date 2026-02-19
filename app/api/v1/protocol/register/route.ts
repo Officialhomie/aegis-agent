@@ -12,9 +12,9 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { registerProtocol } from '@/lib/protocol/onboarding';
-import { generateApiKey, hashApiKey } from '@/lib/auth/api-key-auth';
-import { logger } from '@/lib/logger';
+import { registerProtocol } from '@/src/lib/protocol/onboarding';
+import { generateApiKey, hashApiKey } from '@/src/lib/auth/api-key-auth';
+import { logger } from '@/src/lib/logger';
 
 const RegisterRequestSchema = z.object({
   protocolId: z.string().min(2).max(50).regex(/^[a-z0-9-_]+$/),
