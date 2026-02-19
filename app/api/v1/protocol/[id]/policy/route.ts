@@ -25,9 +25,11 @@ type PolicyConfigUpdate = z.infer<typeof PolicyConfigSchema>;
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  context: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id: requestedProtocolId } = await context.params;
+
     // Authenticate request
     const authHeader = request.headers.get('authorization');
     const authResult = await authenticateRequest(authHeader);
@@ -41,8 +43,6 @@ export async function POST(
         { status: 401 }
       );
     }
-
-    const requestedProtocolId = params.id;
 
     // Verify protocol ID matches authenticated protocol
     if (authResult.protocolId !== requestedProtocolId) {
