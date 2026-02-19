@@ -8,6 +8,7 @@
  * 3. Environment variables (defaults)
  */
 
+import type { Prisma } from '@prisma/client';
 import { getPrisma } from '../db';
 import { getConfigNumber } from '../config';
 import { logger } from '../logger';
@@ -74,10 +75,10 @@ export async function updateProtocolPolicyConfig(
       ...updates,
     };
 
-    // Update in database
+    // Update in database (cast to Prisma JSON input type)
     await db.protocolSponsor.update({
       where: { protocolId },
-      data: { policyConfig: newConfig },
+      data: { policyConfig: newConfig as Prisma.InputJsonValue },
     });
 
     logger.info('[PolicyConfig] Policy config updated', {
@@ -179,11 +180,11 @@ export async function setPolicyOverride(
       create: {
         protocolId,
         ruleType,
-        overrideValue: value,
+        overrideValue: value as Prisma.InputJsonValue,
         createdBy,
       },
       update: {
-        overrideValue: value,
+        overrideValue: value as Prisma.InputJsonValue,
         createdBy,
         createdAt: new Date(), // Update timestamp
       },
