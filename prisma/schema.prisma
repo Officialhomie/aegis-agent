@@ -146,8 +146,28 @@ model ProtocolSponsor {
   tier                 String               @default("bronze")
   createdAt            DateTime             @default(now())
   updatedAt            DateTime             @updatedAt
+
+  // Phase 1: Onboarding workflow
+  onboardingStatus      OnboardingStatus    @default(PENDING_REVIEW)
+  cdpAllowlistStatus    CDPStatus           @default(NOT_SUBMITTED)
+  cdpAllowlistSubmittedAt DateTime?
+  cdpAllowlistApprovedAt  DateTime?
+  simulationModeUntil   DateTime?
+
+  // Phase 1: Self-service config
+  notificationEmail     String?
+  notificationWebhook   String?
+  policyConfig          Json?
+
+  // Phase 1: API access
+  apiKeyHash            String?             @unique
+  apiKeyCreatedAt       DateTime?
+
+  // Relations
   approvedAgents       ApprovedAgent[]
   deposits             DepositTransaction[]
+  onboardingEvents     OnboardingEvent[]
+  policyOverrides      PolicyOverride[]
 
   @@index([protocolId])
 }
@@ -206,6 +226,37 @@ model SponsorshipRecord {
   @@index([userAddress])
   @@index([protocolId])
   @@index([decisionHash])
+}
+
+// ============================================================================
+// Phase 1: Self-Serve Onboarding
+// Protocol onboarding workflow, events, and policy configuration
+// ============================================================================
+
+model OnboardingEvent {
+  id            String          @id @default(cuid())
+  protocolId    String
+  eventType     String          // REGISTERED, CDP_SUBMITTED, CDP_APPROVED, FIRST_SPONSORSHIP
+  eventData     Json?
+  createdAt     DateTime        @default(now())
+
+  protocol      ProtocolSponsor @relation(fields: [protocolId], references: [protocolId])
+
+  @@index([protocolId, createdAt])
+}
+
+model PolicyOverride {
+  id            String          @id @default(cuid())
+  protocolId    String
+  ruleType      String          // DAILY_BUDGET, GAS_PRICE_MAX, RATE_LIMIT
+  overrideValue Json
+  createdAt     DateTime        @default(now())
+  createdBy     String          // Email or address
+
+  protocol      ProtocolSponsor @relation(fields: [protocolId], references: [protocolId])
+
+  @@unique([protocolId, ruleType])
+  @@index([protocolId])
 }
 
 // ============================================================================
@@ -312,4 +363,19 @@ enum PaymentStatus {
   CONFIRMED
   EXECUTED
   REFUNDED
+}
+
+enum OnboardingStatus {
+  PENDING_REVIEW      // Awaiting review
+  APPROVED_SIMULATION // Can use simulation mode
+  PENDING_CDP         // Waiting for CDP
+  LIVE                // Fully live with CDP
+  SUSPENDED
+}
+
+enum CDPStatus {
+  NOT_SUBMITTED
+  SUBMITTED
+  APPROVED
+  REJECTED
 }
