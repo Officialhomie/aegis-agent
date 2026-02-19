@@ -136,18 +136,40 @@ model ReputationAttestation {
 }
 
 model ProtocolSponsor {
-  id                   String               @id @default(cuid())
-  protocolId           String               @unique
+  id                   String   @id @default(cuid())
+  protocolId           String   @unique
   name                 String
-  balanceUSD           Float                @default(0)
-  totalSpent           Float                @default(0)
-  sponsorshipCount     Int                  @default(0)
+  balanceUSD           Float    @default(0)
+  totalSpent           Float    @default(0)
+  sponsorshipCount     Int      @default(0)
   whitelistedContracts String[]
-  tier                 String               @default("bronze")
-  createdAt            DateTime             @default(now())
-  updatedAt            DateTime             @updatedAt
-  approvedAgents       ApprovedAgent[]
-  deposits             DepositTransaction[]
+  tier                 String   @default("bronze")
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  // Phase 1: Onboarding workflow
+  onboardingStatus        OnboardingStatus @default(PENDING_REVIEW)
+  cdpAllowlistStatus      CDPStatus        @default(NOT_SUBMITTED)
+  cdpAllowlistSubmittedAt DateTime?
+  cdpAllowlistApprovedAt  DateTime?
+  simulationModeUntil     DateTime?
+
+  // Phase 1: Self-service config
+  notificationEmail   String?
+  notificationWebhook String?
+  policyConfig        Json?
+
+  // Phase 1: API access
+  apiKeyHash      String?   @unique
+  apiKeyCreatedAt DateTime?
+
+  // Relations
+  approvedAgents   ApprovedAgent[]
+  deposits         DepositTransaction[]
+  onboardingEvents OnboardingEvent[]
+  policyOverrides  PolicyOverride[]
+  runtimeOverrides RuntimeOverride[]
+  blockedWallets   BlockedWallet[]
 
   @@index([protocolId])
 }
@@ -209,42 +231,110 @@ model SponsorshipRecord {
 }
 
 // ============================================================================
+// Phase 1: Self-Serve Onboarding
+// Protocol onboarding workflow, events, and policy configuration
+// ============================================================================
+
+model OnboardingEvent {
+  id         String   @id @default(cuid())
+  protocolId String
+  eventType  String // REGISTERED, CDP_SUBMITTED, CDP_APPROVED, FIRST_SPONSORSHIP
+  eventData  Json?
+  createdAt  DateTime @default(now())
+
+  protocol ProtocolSponsor @relation(fields: [protocolId], references: [protocolId])
+
+  @@index([protocolId, createdAt])
+}
+
+model PolicyOverride {
+  id            String   @id @default(cuid())
+  protocolId    String
+  ruleType      String // DAILY_BUDGET, GAS_PRICE_MAX, RATE_LIMIT
+  overrideValue Json
+  createdAt     DateTime @default(now())
+  createdBy     String // Email or address
+
+  protocol ProtocolSponsor @relation(fields: [protocolId], references: [protocolId])
+
+  @@unique([protocolId, ruleType])
+  @@index([protocolId])
+}
+
+// ============================================================================
+// Phase 2: OpenClaw Full Management
+// Runtime overrides and wallet blocking for conversational management
+// ============================================================================
+
+model RuntimeOverride {
+  id           String              @id @default(cuid())
+  protocolId   String
+  overrideType RuntimeOverrideType
+  value        Json
+  expiresAt    DateTime?
+  createdAt    DateTime            @default(now())
+  createdBy    String // "openclaw" or email
+  isActive     Boolean             @default(true)
+
+  protocol ProtocolSponsor @relation(fields: [protocolId], references: [protocolId])
+
+  @@index([protocolId, overrideType, isActive])
+  @@index([expiresAt])
+}
+
+model BlockedWallet {
+  id            String   @id @default(cuid())
+  protocolId    String
+  walletAddress String
+  reason        String?
+  blockedAt     DateTime @default(now())
+  blockedBy     String
+  isActive      Boolean  @default(true)
+
+  protocol ProtocolSponsor @relation(fields: [protocolId], references: [protocolId])
+
+  @@unique([protocolId, walletAddress])
+  @@index([protocolId, isActive])
+  @@index([walletAddress])
+}
+
+// ============================================================================
 // Agent Delegation Framework
 // User-to-Agent delegation with scoped permissions and gas budgets
 // ============================================================================
 
 model Delegation {
-  id             String           @id @default(cuid())
-  delegator      String           // User wallet address (SCW)
-  agent          String           // Agent wallet address
-  agentOnChainId String?          // ERC-8004 agent ID (required if DELEGATION_REQUIRE_ERC8004=true)
+  id             String  @id @default(cuid())
+  delegator      String // User wallet address (SCW)
+  agent          String // Agent wallet address
+  agentOnChainId String? // ERC-8004 agent ID (required if DELEGATION_REQUIRE_ERC8004=true)
 
   // Signature verification (EIP-712)
-  signature      String           // EIP-712 signature from delegator
-  signatureNonce BigInt           // Replay protection nonce
+  signature      String // EIP-712 signature from delegator
+  signatureNonce BigInt // Replay protection nonce
 
   // Permissions (JSON schema: contracts, functions, value limits, rate limits)
-  permissions    Json             // DelegationPermissions
+  permissions Json // DelegationPermissions
 
   // Budget (Wei) - separate from protocol budget
-  gasBudgetWei   BigInt           // User-allocated gas budget
-  gasBudgetSpent BigInt           @default(0)
+  gasBudgetWei   BigInt // User-allocated gas budget
+  gasBudgetSpent BigInt @default(0)
 
   // Status and validity
-  status         DelegationStatus @default(ACTIVE)
-  validFrom      DateTime
-  validUntil     DateTime
-  revokedAt      DateTime?
-  revokedReason  String?
+  status        DelegationStatus @default(ACTIVE)
+  validFrom     DateTime
+  validUntil    DateTime
+  revokedAt     DateTime?
+  revokedReason String?
 
   // On-chain reference (optional audit trail)
-  onChainTxHash  String?
+  onChainTxHash String?
 
-  createdAt      DateTime         @default(now())
-  updatedAt      DateTime         @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Relations
-  usageRecords   DelegationUsage[]
+  usageRecords DelegationUsage[]
 
   @@unique([delegator, agent, signatureNonce])
   @@index([delegator])
@@ -254,9 +344,9 @@ model Delegation {
 }
 
 model DelegationUsage {
-  id               String     @id @default(cuid())
-  delegationId     String
-  delegation       Delegation @relation(fields: [delegationId], references: [id])
+  id           String     @id @default(cuid())
+  delegationId String
+  delegation   Delegation @relation(fields: [delegationId], references: [id])
 
   // Transaction details
   targetContract   String
@@ -266,20 +356,20 @@ model DelegationUsage {
   gasCostWei       BigInt
 
   // Result
-  txHash           String?
-  success          Boolean
-  errorMessage     String?
+  txHash       String?
+  success      Boolean
+  errorMessage String?
 
-  createdAt        DateTime   @default(now())
+  createdAt DateTime @default(now())
 
   @@index([delegationId, createdAt])
   @@index([txHash])
 }
 
 enum DelegationStatus {
-  ACTIVE    // Valid and usable
-  REVOKED   // User revoked
-  EXPIRED   // Past validUntil
+  ACTIVE // Valid and usable
+  REVOKED // User revoked
+  EXPIRED // Past validUntil
   EXHAUSTED // Budget depleted
 }
 
@@ -312,4 +402,26 @@ enum PaymentStatus {
   CONFIRMED
   EXECUTED
   REFUNDED
+}
+
+enum OnboardingStatus {
+  PENDING_REVIEW // Awaiting review
+  APPROVED_SIMULATION // Can use simulation mode
+  PENDING_CDP // Waiting for CDP
+  LIVE // Fully live with CDP
+  SUSPENDED
+}
+
+enum CDPStatus {
+  NOT_SUBMITTED
+  SUBMITTED
+  APPROVED
+  REJECTED
+}
+
+enum RuntimeOverrideType {
+  PAUSE_UNTIL
+  MAX_GAS_PRICE_GWEI
+  DAILY_BUDGET_USD
+  RATE_LIMIT_OVERRIDE
 }

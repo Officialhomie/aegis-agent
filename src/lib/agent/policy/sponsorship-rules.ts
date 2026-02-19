@@ -11,6 +11,7 @@ import { getStateStore } from '../state-store';
 import { getOnchainTxCount, getProtocolBudget, getAgentWalletBalance } from '../observe/sponsorship';
 import { detectAbuse } from '../security/abuse-detection';
 import { getPassport } from '../identity/gas-passport';
+import { canExecuteSponsorship } from '../../protocol/onboarding';
 import type { Decision } from '../reason/schemas';
 import type { SponsorParams } from '../reason/schemas';
 import type { AgentConfig } from '../index';
@@ -37,6 +38,38 @@ function isSponsorshipDecision(decision: Decision): decision is Decision & { act
  * Sponsorship-specific policy rules (applied when action is SPONSOR_TRANSACTION).
  */
 export const sponsorshipPolicyRules: PolicyRule[] = [
+  {
+    name: 'protocol-onboarding-status',
+    description: 'Protocol must be in valid onboarding status (LIVE or simulation mode)',
+    severity: 'ERROR',
+    validate: async (decision): Promise<RuleResult> => {
+      if (!isSponsorshipDecision(decision)) {
+        return { ruleName: 'protocol-onboarding-status', passed: true, message: 'N/A', severity: 'ERROR' };
+      }
+
+      const protocolId = decision.parameters.protocolId;
+      const executionCheck = await canExecuteSponsorship(protocolId);
+
+      if (!executionCheck.allowed) {
+        return {
+          ruleName: 'protocol-onboarding-status',
+          passed: false,
+          message: executionCheck.reason ?? 'Protocol cannot execute sponsorships',
+          severity: 'ERROR',
+        };
+      }
+
+      // Attach execution mode to decision for paymaster to use
+      (decision as any)._executionMode = executionCheck.mode;
+
+      return {
+        ruleName: 'protocol-onboarding-status',
+        passed: true,
+        message: `Protocol approved for ${executionCheck.mode} mode`,
+        severity: 'ERROR',
+      };
+    },
+  },
   {
     name: 'user-legitimacy-check',
     description: 'User must have >= 5 historical txs and not be on spam list',
