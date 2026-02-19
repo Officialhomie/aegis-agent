@@ -331,6 +331,8 @@ export interface PaymasterExecutionResult {
   transactionHash?: string;
   actualGasUsed?: string;
   error?: string;
+  success?: boolean;
+  simulationMode?: boolean;
 }
 
 /** Default gas limits used when estimation fails or for initial stub requests */
@@ -501,7 +503,26 @@ export async function executePaymasterSponsorship(params: {
   maxGasLimit: number;
   callData?: `0x${string}`;
   nonce?: bigint;
+  mode?: 'LIVE' | 'SIMULATION';
 }): Promise<PaymasterExecutionResult> {
+  const mode = params.mode ?? 'LIVE';
+
+  // Simulation mode: Skip actual execution, return mock success
+  if (mode === 'SIMULATION') {
+    logger.info('[Paymaster] Simulation mode - skipping actual bundler execution', {
+      agentWallet: params.agentWallet,
+    });
+
+    return {
+      paymasterReady: true,
+      userOpHash: `0x${'0'.repeat(64)}` as `0x${string}`, // Mock hash
+      transactionHash: `0x${'0'.repeat(64)}` as `0x${string}`, // Mock hash
+      actualGasUsed: '100000', // Mock gas used
+      success: true,
+      simulationMode: true,
+    };
+  }
+
   const bundlerClient = getBundlerClient();
   if (!bundlerClient) {
     logger.warn('[Paymaster] BUNDLER_RPC_URL not set - skipping paymaster execution');
@@ -708,10 +729,13 @@ export async function sponsorTransaction(
 
   // Step 4: Execute paymaster sponsorship via bundler
   // IMPORTANT: Budget deduction happens AFTER this succeeds
+  // Extract execution mode from decision (set by protocol-onboarding-status policy rule)
+  const executionMode = (decision as any)._executionMode as 'LIVE' | 'SIMULATION' | undefined;
   const paymasterResult = await executePaymasterSponsorship({
     agentWallet: params.agentWallet,
     maxGasLimit,
     callData,
+    mode: executionMode,
   });
 
   // Determine actual cost (use actual gas if available, otherwise estimate)
