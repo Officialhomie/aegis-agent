@@ -12,7 +12,13 @@ export type CommandName =
   | 'report'
   | 'pause'
   | 'resume'
-  | 'help';
+  | 'help'
+  | 'pause_timed'
+  | 'set_budget'
+  | 'analytics'
+  | 'block_wallet'
+  | 'set_gas_cap'
+  | 'topup';
 
 /** Incoming request from OpenClaw (POST /api/openclaw) */
 export interface OpenClawRequest {
