@@ -425,3 +425,78 @@ enum RuntimeOverrideType {
   DAILY_BUDGET_USD
   RATE_LIMIT_OVERRIDE
 }
+
+// ============================================================================
+// Gas Passport V2
+// Comprehensive user reputation and trust scoring system
+// ============================================================================
+
+model GasPassportSnapshot {
+  id            String   @id @default(cuid())
+  walletAddress String   @unique
+
+  // Core metrics
+  sponsorshipCount      Int
+  successRateBps        Int   // Basis points (0-10000)
+  protocolCount         Int
+  totalValueSponsoredUSD Float
+
+  // Computed scores
+  trustScore Int          // 0-1000
+  tier       PassportTier
+  riskLevel  RiskLevel
+
+  // Activity patterns
+  avgSponsorshipsPerWeek Float
+  consistencyScore       Float // 0-1, lower = more consistent
+  recencyDays            Int   // Days since last activity
+  peakActivityHour       Int?  // UTC hour 0-23
+
+  // Value metrics
+  avgSponsorshipValueUSD Float
+  maxSponsorshipValueUSD Float
+  valuePercentile        Int // 0-100
+
+  // Risk indicators
+  failureRateBps   Int // Basis points
+  rejectionRateBps Int // Basis points
+  flagCount        Int @default(0)
+  flags            Json? // Array of flag types
+
+  // External signals (nullable, fetched async)
+  ensName              String?
+  basename             String?
+  farcasterFid         Int?
+  farcasterFollowers   Int?
+  onChainTxCount       Int?
+  isContractDeployer   Boolean @default(false)
+  accountAgeOnChainDays Int?
+
+  // Attestation data
+  reputationHash String? // Merkle root of historical data
+
+  // Timestamps
+  computedAt          DateTime  @default(now())
+  lastSponsorshipAt   DateTime?
+  firstSponsorshipAt  DateTime?
+
+  @@index([walletAddress])
+  @@index([tier])
+  @@index([trustScore])
+}
+
+enum PassportTier {
+  NEWCOMER
+  ACTIVE
+  TRUSTED
+  PREMIUM
+  WHALE
+  FLAGGED
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
