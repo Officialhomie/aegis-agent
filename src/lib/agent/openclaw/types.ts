@@ -18,7 +18,8 @@ export type CommandName =
   | 'analytics'
   | 'block_wallet'
   | 'set_gas_cap'
-  | 'topup';
+  | 'topup'
+  | 'passport';
 
 /** Incoming request from OpenClaw (POST /api/openclaw) */
 export interface OpenClawRequest {
