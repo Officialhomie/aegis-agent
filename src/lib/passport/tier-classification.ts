@@ -10,8 +10,8 @@ import type {
   BehavioralMetrics,
   RiskMetrics,
   PassportConfig,
-  DEFAULT_PASSPORT_CONFIG,
 } from './types';
+import { DEFAULT_PASSPORT_CONFIG } from './types';
 
 const config = DEFAULT_PASSPORT_CONFIG;
 

@@ -12,7 +12,6 @@ import type {
   RiskMetrics,
   RiskFlag,
   RiskLevel,
-  DEFAULT_PASSPORT_CONFIG,
 } from './types';
 
 const db = getPrisma();
