@@ -41,6 +41,7 @@ import {
   blockWallet,
 } from '../../protocol/runtime-overrides';
 import { getProtocolIdFromSession } from './session-manager';
+import { getGasPassport, formatPassportText } from '../../passport';
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Parser
@@ -122,7 +123,9 @@ export function parseCommand(input: string): ParsedCommand {
     lower.includes('top users') ||
     lower.includes('top wallets') ||
     lower.includes('expensive users') ||
-    lower.includes('show spending')
+    lower.includes('show spending') ||
+    lower.includes('show top') ||
+    lower.match(/top\s+\d+/)
   ) {
     const limit = parseNumber(input, 10);
     const period = parsePeriod(input);
@@ -143,6 +146,16 @@ export function parseCommand(input: string): ParsedCommand {
   if (lower.includes('topup') || lower.includes('top up') || lower.includes('deposit')) {
     const amountUSD = parseAmount(input);
     return { name: 'topup', args: { amountUSD: amountUSD.toString() }, rawInput: input };
+  }
+
+  if (
+    lower.includes('passport') ||
+    lower.includes('reputation') ||
+    lower.includes('my score') ||
+    lower.includes('trust score')
+  ) {
+    const wallet = extractAddress(input);
+    return { name: 'passport', args: { wallet }, rawInput: input };
   }
 
   return { name: 'help', args: {}, rawInput: input };
@@ -433,6 +446,29 @@ export async function executeCommand(cmd: ParsedCommand): Promise<CommandResult>
       }
     }
 
+    case 'passport': {
+      try {
+        const wallet = cmd.args.wallet;
+
+        if (!wallet || !/^0x[a-fA-F0-9]{40}$/.test(wallet)) {
+          return {
+            success: false,
+            message: 'Please provide a valid wallet address. Usage: passport 0x...',
+          };
+        }
+
+        const passport = await getGasPassport(wallet, { includeIdentity: true });
+        const message = formatPassportText(passport);
+
+        return { success: true, message };
+      } catch (err) {
+        return {
+          success: false,
+          message: `Failed to get passport: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    }
+
     case 'help':
     default:
       return {
@@ -443,6 +479,7 @@ export async function executeCommand(cmd: ParsedCommand): Promise<CommandResult>
           'MONITORING:',
           '  status                        — Reserve health, runway, ETH/USDC balances',
           '  analytics                     — Show top users and spending stats',
+          '  passport 0x...                — View wallet Gas Passport (trust score)',
           '  report                        — Last 20 activity log entries',
           '',
           'EXECUTION:',
@@ -482,5 +519,6 @@ export function isCommandName(name: string): name is CommandName {
     'block_wallet',
     'set_gas_cap',
     'topup',
+    'passport',
   ].includes(name);
 }
