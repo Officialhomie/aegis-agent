@@ -4,6 +4,7 @@
  * Handles SLA breaches, calculates refunds, and processes them.
  */
 
+import type { Prisma } from '@prisma/client';
 import { getPrisma } from '../../db';
 import { logger } from '../../logger';
 import { BreachType, ExecutionGuarantee, GuaranteeBreachRecord, ServiceTier } from './types';
@@ -41,7 +42,7 @@ export async function handleSlaBreach(params: {
         guaranteeId: guarantee.id,
         usageId: usageId ?? null,
         breachType,
-        breachDetails,
+        breachDetails: breachDetails as Prisma.InputJsonValue,
         refundAmount,
         refundStatus: shouldAutoRefund ? 'APPROVED' : 'PENDING',
         refundedAt: null,
