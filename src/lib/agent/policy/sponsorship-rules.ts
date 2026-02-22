@@ -12,6 +12,7 @@ import { getOnchainTxCount, getProtocolBudget, getAgentWalletBalance } from '../
 import { detectAbuse } from '../security/abuse-detection';
 import { getPassport } from '../identity/gas-passport';
 import { canExecuteSponsorship } from '../../protocol/onboarding';
+import { getActiveRuntimeOverride, isWalletBlocked } from '../../protocol/runtime-overrides';
 import type { Decision } from '../reason/schemas';
 import type { SponsorParams } from '../reason/schemas';
 import type { AgentConfig } from '../index';
@@ -68,6 +69,83 @@ export const sponsorshipPolicyRules: PolicyRule[] = [
         message: `Protocol approved for ${executionCheck.mode} mode`,
         severity: 'ERROR',
       };
+    },
+  },
+  {
+    name: 'runtime-pause-check',
+    description: 'Protocol must not be paused via runtime override',
+    severity: 'ERROR',
+    validate: async (decision): Promise<RuleResult> => {
+      if (!isSponsorshipDecision(decision)) {
+        return { ruleName: 'runtime-pause-check', passed: true, message: 'N/A', severity: 'ERROR' };
+      }
+
+      const protocolId = decision.parameters.protocolId;
+
+      try {
+        const pauseOverride = await getActiveRuntimeOverride(protocolId, 'PAUSE_UNTIL');
+
+        if (pauseOverride) {
+          const until = new Date(pauseOverride.value.until);
+          const now = new Date();
+
+          if (now < until) {
+            return {
+              ruleName: 'runtime-pause-check',
+              passed: false,
+              message: `Protocol paused until ${until.toLocaleString()}`,
+              severity: 'ERROR',
+            };
+          }
+        }
+
+        return {
+          ruleName: 'runtime-pause-check',
+          passed: true,
+          message: 'Protocol not paused',
+          severity: 'ERROR',
+        };
+      } catch (error) {
+        logger.error('[Policy] Failed to check pause override', { error, protocolId });
+        return { ruleName: 'runtime-pause-check', passed: true, message: 'Check skipped (error)', severity: 'ERROR' };
+      }
+    },
+  },
+  {
+    name: 'runtime-blocked-wallet-check',
+    description: 'Wallet must not be blocked via runtime override',
+    severity: 'ERROR',
+    validate: async (decision): Promise<RuleResult> => {
+      if (!isSponsorshipDecision(decision)) {
+        return { ruleName: 'runtime-blocked-wallet-check', passed: true, message: 'N/A', severity: 'ERROR' };
+      }
+
+      const protocolId = decision.parameters.protocolId;
+      const walletAddress = decision.parameters.agentWallet;
+
+      try {
+        const blocked = await isWalletBlocked(protocolId, walletAddress);
+
+        if (blocked) {
+          const shortAddr = `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`;
+          return {
+            ruleName: 'runtime-blocked-wallet-check',
+            passed: false,
+            message: `Wallet ${shortAddr} is blocked by protocol`,
+            severity: 'ERROR',
+          };
+        }
+
+        return {
+          ruleName: 'runtime-blocked-wallet-check',
+          passed: true,
+          message: 'Wallet not blocked',
+          severity: 'ERROR',
+        };
+      } catch (error) {
+        logger.error('[Policy] Failed to check blocked wallet', { error, protocolId, walletAddress });
+        return { ruleName: 'runtime-blocked-wallet-check', passed: true, message: 'Check skipped (error)', severity: 'ERROR' };
+      }
     },
   },
   {
@@ -426,23 +504,54 @@ export const sponsorshipPolicyRules: PolicyRule[] = [
   },
   {
     name: 'gas-price-optimization',
-    description: 'Only sponsor when Base gas price < 2 Gwei',
+    description: 'Only sponsor when Base gas price < max (runtime override > config > env)',
     severity: 'ERROR',
     validate: async (decision, config): Promise<RuleResult> => {
       if (!isSponsorshipDecision(decision)) {
         return { ruleName: 'gas-price-optimization', passed: true, message: 'N/A', severity: 'ERROR' };
       }
+
+      const protocolId = decision.parameters.protocolId;
       const currentGwei = config.currentGasPriceGwei ?? 0;
-      const maxGwei = config.gasPriceMaxGwei ?? GAS_PRICE_MAX_GWEI;
-      const passed = currentGwei < maxGwei;
-      return {
-        ruleName: 'gas-price-optimization',
-        passed,
-        message: passed
-          ? `Gas price OK (${currentGwei} < ${maxGwei} Gwei)`
-          : `Gas price too high (${currentGwei} >= ${maxGwei} Gwei)`,
-        severity: 'ERROR',
-      };
+
+      try {
+        // Policy precedence: runtime override > config > env
+        let maxGwei = GAS_PRICE_MAX_GWEI; // Default from env
+
+        if (config.gasPriceMaxGwei !== undefined) {
+          maxGwei = config.gasPriceMaxGwei; // Config takes precedence
+        }
+
+        // Runtime override takes highest precedence
+        const gasOverride = await getActiveRuntimeOverride(protocolId, 'MAX_GAS_PRICE_GWEI');
+        if (gasOverride && gasOverride.value.maxGwei !== undefined) {
+          maxGwei = gasOverride.value.maxGwei;
+        }
+
+        const passed = currentGwei < maxGwei;
+
+        return {
+          ruleName: 'gas-price-optimization',
+          passed,
+          message: passed
+            ? `Gas price OK (${currentGwei} < ${maxGwei} Gwei)`
+            : `Gas price too high (${currentGwei} >= ${maxGwei} Gwei)`,
+          severity: 'ERROR',
+        };
+      } catch (error) {
+        logger.error('[Policy] Failed to check gas price override', { error, protocolId });
+        // Fall back to config/env on error
+        const maxGwei = config.gasPriceMaxGwei ?? GAS_PRICE_MAX_GWEI;
+        const passed = currentGwei < maxGwei;
+        return {
+          ruleName: 'gas-price-optimization',
+          passed,
+          message: passed
+            ? `Gas price OK (${currentGwei} < ${maxGwei} Gwei, override check failed)`
+            : `Gas price too high (${currentGwei} >= ${maxGwei} Gwei, override check failed)`,
+          severity: 'ERROR',
+        };
+      }
     },
   },
 ];

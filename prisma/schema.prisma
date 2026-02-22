@@ -163,6 +163,10 @@ model ProtocolSponsor {
   apiKeyHash      String?   @unique
   apiKeyCreatedAt DateTime?
 
+  // Phase 3: Execution Guarantees
+  totalGuaranteedUsd  Float @default(0)  // Total locked in active guarantees
+  guaranteeReserveUsd Float @default(0)  // Buffer for refunds (50% of guarantees)
+
   // Relations
   approvedAgents   ApprovedAgent[]
   deposits         DepositTransaction[]
@@ -170,6 +174,7 @@ model ProtocolSponsor {
   policyOverrides  PolicyOverride[]
   runtimeOverrides RuntimeOverride[]
   blockedWallets   BlockedWallet[]
+  guarantees       ExecutionGuarantee[]
 
   @@index([protocolId])
 }
@@ -424,4 +429,215 @@ enum RuntimeOverrideType {
   MAX_GAS_PRICE_GWEI
   DAILY_BUDGET_USD
   RATE_LIMIT_OVERRIDE
+}
+
+// ============================================================================
+// Gas Passport V2
+// Comprehensive user reputation and trust scoring system
+// ============================================================================
+
+model GasPassportSnapshot {
+  id            String   @id @default(cuid())
+  walletAddress String   @unique
+
+  // Core metrics
+  sponsorshipCount      Int
+  successRateBps        Int   // Basis points (0-10000)
+  protocolCount         Int
+  totalValueSponsoredUSD Float
+
+  // Computed scores
+  trustScore Int          // 0-1000
+  tier       PassportTier
+  riskLevel  RiskLevel
+
+  // Activity patterns
+  avgSponsorshipsPerWeek Float
+  consistencyScore       Float // 0-1, lower = more consistent
+  recencyDays            Int   // Days since last activity
+  peakActivityHour       Int?  // UTC hour 0-23
+
+  // Value metrics
+  avgSponsorshipValueUSD Float
+  maxSponsorshipValueUSD Float
+  valuePercentile        Int // 0-100
+
+  // Risk indicators
+  failureRateBps   Int // Basis points
+  rejectionRateBps Int // Basis points
+  flagCount        Int @default(0)
+  flags            Json? // Array of flag types
+
+  // External signals (nullable, fetched async)
+  ensName              String?
+  basename             String?
+  farcasterFid         Int?
+  farcasterFollowers   Int?
+  onChainTxCount       Int?
+  isContractDeployer   Boolean @default(false)
+  accountAgeOnChainDays Int?
+
+  // Attestation data
+  reputationHash String? // Merkle root of historical data
+
+  // Timestamps
+  computedAt          DateTime  @default(now())
+  lastSponsorshipAt   DateTime?
+  firstSponsorshipAt  DateTime?
+
+  @@index([walletAddress])
+  @@index([tier])
+  @@index([trustScore])
+}
+
+enum PassportTier {
+  NEWCOMER
+  ACTIVE
+  TRUSTED
+  PREMIUM
+  WHALE
+  FLAGGED
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+// ============================================================================
+// Phase 3: Execution Guarantees
+// SLA-backed gas sponsorship with budget reservation and refunds
+// ============================================================================
+
+model ExecutionGuarantee {
+  id              String   @id @default(cuid())
+
+  // Core identification
+  type            GuaranteeType
+  beneficiary     String           // Agent wallet address
+  protocolId      String
+
+  // Budget parameters (GAS_BUDGET type)
+  budgetWei       BigInt?
+  budgetUsd       Float?
+  usedWei         BigInt           @default(0)
+  usedUsd         Float            @default(0)
+
+  // Transaction parameters (TX_COUNT type)
+  txCount         Int?
+  usedTxCount     Int              @default(0)
+  maxGasPerTx     BigInt?
+
+  // SLA parameters (TIME_WINDOW type)
+  maxLatencyMs    Int?
+  breachPenalty   Float?           // Refund percentage 0-100
+
+  // Constraints
+  maxGasPrice     BigInt?          // Max gas price in wei
+  validFrom       DateTime
+  validUntil      DateTime
+
+  // Financial
+  lockedAmountUsd Float            // Reserved from protocol
+  premiumPaid     Float            // Premium collected
+  refundsIssued   Float            @default(0)
+  tier            ServiceTier      @default(SILVER)
+
+  // Status tracking
+  status          GuaranteeStatus  @default(PENDING)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  activatedAt     DateTime?
+  expiredAt       DateTime?
+  breachedAt      DateTime?
+
+  // Relations
+  protocol        ProtocolSponsor  @relation(fields: [protocolId], references: [protocolId])
+  usageRecords    GuaranteeUsage[]
+  breaches        GuaranteeBreach[]
+
+  @@index([beneficiary, status])
+  @@index([protocolId, status])
+  @@index([validUntil])
+}
+
+model GuaranteeUsage {
+  id              String             @id @default(cuid())
+  guaranteeId     String
+
+  // Transaction details
+  userOpHash      String
+  txHash          String?
+  gasUsed         BigInt
+  gasPriceWei     BigInt
+  costWei         BigInt
+  costUsd         Float
+
+  // SLA tracking
+  submittedAt     DateTime
+  includedAt      DateTime?
+  latencyMs       Int?
+  slaMet          Boolean?
+
+  createdAt       DateTime           @default(now())
+
+  guarantee       ExecutionGuarantee @relation(fields: [guaranteeId], references: [id])
+
+  @@index([guaranteeId])
+  @@index([submittedAt])
+}
+
+model GuaranteeBreach {
+  id              String             @id @default(cuid())
+  guaranteeId     String
+  usageId         String?
+
+  breachType      BreachType
+  breachDetails   Json               // { latencyMs, maxLatencyMs, etc. }
+  refundAmount    Float
+  refundStatus    RefundStatus       @default(PENDING)
+  refundedAt      DateTime?
+
+  createdAt       DateTime           @default(now())
+
+  guarantee       ExecutionGuarantee @relation(fields: [guaranteeId], references: [id])
+
+  @@index([guaranteeId])
+  @@index([refundStatus])
+}
+
+enum GuaranteeType {
+  GAS_BUDGET      // Reserve USD budget for agent
+  TX_COUNT        // Reserve N transactions
+  TIME_WINDOW     // SLA: execute within X ms
+}
+
+enum GuaranteeStatus {
+  PENDING         // Created, not yet active
+  ACTIVE          // Within valid window, can be used
+  DEPLETED        // Budget/count exhausted
+  EXPIRED         // Past validUntil
+  BREACHED        // SLA failed, refund issued
+  CANCELLED       // Manually cancelled
+}
+
+enum ServiceTier {
+  BRONZE          // 0% premium, best effort
+  SILVER          // 15% premium, 95% SLA
+  GOLD            // 30% premium, 99% SLA + refund
+}
+
+enum BreachType {
+  SLA_MISSED        // Execution took too long
+  EXECUTION_FAILED  // Transaction failed
+  BUDGET_EXCEEDED   // Cost exceeded estimate
+}
+
+enum RefundStatus {
+  PENDING
+  APPROVED
+  REFUNDED
+  REJECTED
 }

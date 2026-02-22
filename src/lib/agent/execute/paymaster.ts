@@ -35,6 +35,14 @@ import {
   rollbackDelegationBudget,
   recordDelegationUsage,
 } from '../../delegation';
+import {
+  findActiveGuarantee,
+  recordGuaranteeUsage,
+  checkGuaranteeCapacity,
+  checkGasPriceConstraint,
+  handleSlaBreach,
+  checkSlaCompliance,
+} from '../guarantees';
 
 const ACTIVITY_LOGGER_ABI = [
   {
@@ -885,4 +893,292 @@ function calculateActualCostUSD(gasUsed: bigint): number {
   // Get ETH price from env or use reasonable estimate
   const ethPriceUSD = Number(process.env.ETH_PRICE_USD ?? '2500');
   return gasCostETH * ethPriceUSD;
+}
+
+/**
+ * Get current gas price in wei
+ */
+function getCurrentGasPriceWei(): bigint {
+  return BigInt(process.env.GAS_PRICE_WEI ?? '1000000000');
+}
+
+/**
+ * Extended sponsorship result with guarantee info
+ */
+export interface GuaranteedSponsorshipResult extends SponsorshipExecutionResult {
+  guaranteeId?: string;
+  slaCompliant?: boolean;
+  guaranteeUsed?: boolean;
+}
+
+/**
+ * Execute SPONSOR_TRANSACTION with guarantee support.
+ *
+ * First checks for active guarantees for the agent. If found:
+ * 1. Validates capacity and gas price constraints
+ * 2. Executes with SLA tracking
+ * 3. Records usage against guarantee
+ * 4. Handles SLA breaches with auto-refunds
+ *
+ * Falls back to normal sponsorship if no guarantee found.
+ */
+export async function sponsorTransactionWithGuarantee(
+  decision: Decision,
+  mode: 'LIVE' | 'SIMULATION'
+): Promise<GuaranteedSponsorshipResult> {
+  if (decision.action !== 'SPONSOR_TRANSACTION') {
+    return {
+      success: false,
+      error: `Expected SPONSOR_TRANSACTION, got ${decision.action}`,
+    };
+  }
+
+  const params = decision.parameters as SponsorParams | null;
+  if (!params) {
+    return { success: false, error: 'SPONSOR_TRANSACTION requires parameters' };
+  }
+
+  // Check for active guarantee
+  const guarantee = await findActiveGuarantee(params.agentWallet, params.protocolId);
+
+  if (!guarantee) {
+    // No guarantee - fall back to normal sponsorship
+    const result = await sponsorTransaction(decision, mode);
+    return { ...result, guaranteeUsed: false };
+  }
+
+  logger.info('[Paymaster] Found active guarantee for agent', {
+    guaranteeId: guarantee.id,
+    agentWallet: params.agentWallet,
+    tier: guarantee.tier,
+    type: guarantee.type,
+  });
+
+  // Validate guarantee capacity
+  const capacityCheck = await checkGuaranteeCapacity(guarantee, params.estimatedCostUSD);
+  if (!capacityCheck.hasCapacity) {
+    logger.warn('[Paymaster] Guarantee capacity exhausted - falling back to normal sponsorship', {
+      guaranteeId: guarantee.id,
+      reason: capacityCheck.reason,
+    });
+    const result = await sponsorTransaction(decision, mode);
+    return { ...result, guaranteeUsed: false };
+  }
+
+  // Validate gas price constraint
+  const currentGasPrice = getCurrentGasPriceWei();
+  const gasPriceCheck = checkGasPriceConstraint(guarantee, currentGasPrice);
+  if (!gasPriceCheck.withinLimit) {
+    logger.warn('[Paymaster] Gas price exceeds guarantee limit - falling back to normal sponsorship', {
+      guaranteeId: guarantee.id,
+      reason: gasPriceCheck.reason,
+    });
+    const result = await sponsorTransaction(decision, mode);
+    return { ...result, guaranteeUsed: false };
+  }
+
+  // Execute with SLA tracking
+  const submittedAt = new Date();
+
+  // Sign decision
+  const signed = await signDecision(decision);
+
+  if (mode === 'SIMULATION') {
+    return {
+      success: true,
+      guaranteeId: guarantee.id,
+      guaranteeUsed: true,
+      slaCompliant: true,
+      simulationResult: {
+        action: 'SPONSOR_TRANSACTION',
+        agentWallet: params.agentWallet,
+        protocolId: params.protocolId,
+        decisionHash: signed.decisionHash,
+        signature: signed.signature,
+        message: 'Simulation: guaranteed sponsorship signed; execution skipped',
+        guaranteeId: guarantee.id,
+      },
+      decisionHash: signed.decisionHash,
+      signature: signed.signature,
+    };
+  }
+
+  // Log sponsorship on-chain
+  const logResult = await logSponsorshipOnchain({
+    agentWallet: params.agentWallet,
+    protocolId: params.protocolId,
+    decisionHash: signed.decisionHash,
+    estimatedCostUSD: params.estimatedCostUSD,
+    metadata: JSON.stringify({
+      reasoning: decision.reasoning.slice(0, 200),
+      guaranteeId: guarantee.id,
+      tier: guarantee.tier,
+    }),
+  });
+
+  if (!logResult.success) {
+    return {
+      success: false,
+      error: logResult.error,
+      decisionHash: signed.decisionHash,
+      signature: signed.signature,
+      guaranteeId: guarantee.id,
+      guaranteeUsed: true,
+    };
+  }
+
+  // Upload to IPFS
+  let ipfsCid: string | undefined;
+  const ipfsResult = await uploadDecisionToIPFS(signed.decisionJSON);
+  if ('cid' in ipfsResult) {
+    ipfsCid = ipfsResult.cid;
+  }
+
+  // Build calldata
+  const maxGasLimit = params.maxGasLimit ?? 200_000;
+  const whitelist = await getCachedProtocolWhitelist(params.protocolId);
+  const activityLogger = process.env.ACTIVITY_LOGGER_ADDRESS as `0x${string}` | undefined;
+  let targetContract: `0x${string}` | undefined;
+
+  if (params.targetContract) {
+    const normalized = params.targetContract.toLowerCase();
+    if (whitelist.some((a) => a.toLowerCase() === normalized)) {
+      targetContract = params.targetContract as `0x${string}`;
+    }
+  }
+  if (!targetContract && whitelist.length > 0) {
+    targetContract = whitelist[0] as `0x${string}`;
+  }
+  if (!targetContract && activityLogger) {
+    targetContract = activityLogger;
+  }
+
+  const innerData =
+    targetContract &&
+    activityLogger &&
+    targetContract.toLowerCase() === activityLogger.toLowerCase()
+      ? getActivityLoggerPingData()
+      : ('0x' as `0x${string}`);
+  const callData = targetContract
+    ? buildExecuteCalldata({ targetContract, value: BigInt(0), data: innerData })
+    : undefined;
+
+  // Execute paymaster sponsorship
+  const executionMode = (decision as any)._executionMode as 'LIVE' | 'SIMULATION' | undefined;
+  const paymasterResult = await executePaymasterSponsorship({
+    agentWallet: params.agentWallet,
+    maxGasLimit,
+    callData,
+    mode: executionMode,
+  });
+
+  const includedAt = paymasterResult.paymasterReady ? new Date() : undefined;
+  const latencyMs = includedAt ? includedAt.getTime() - submittedAt.getTime() : undefined;
+
+  // Calculate actual cost
+  const actualCostUSD = paymasterResult.actualGasUsed
+    ? calculateActualCostUSD(BigInt(paymasterResult.actualGasUsed))
+    : params.estimatedCostUSD;
+
+  // Check SLA compliance
+  let slaCompliant: boolean | undefined;
+  if (paymasterResult.paymasterReady && latencyMs !== undefined) {
+    const slaCheck = checkSlaCompliance(guarantee, latencyMs);
+    slaCompliant = slaCheck.compliant;
+
+    if (!slaCompliant && slaCheck.breach) {
+      // Handle SLA breach
+      logger.warn('[Paymaster] SLA breach detected', {
+        guaranteeId: guarantee.id,
+        latencyMs,
+        maxLatencyMs: guarantee.maxLatencyMs,
+      });
+
+      await handleSlaBreach({
+        guarantee,
+        breachType: slaCheck.breach.type,
+        breachDetails: {
+          ...slaCheck.breach.details,
+          userOpHash: paymasterResult.userOpHash,
+        },
+        costUsd: actualCostUSD,
+      });
+    }
+  }
+
+  // Record guarantee usage (not protocol budget - guarantee funds are already locked)
+  if (paymasterResult.paymasterReady) {
+    try {
+      await recordGuaranteeUsage({
+        guaranteeId: guarantee.id,
+        userOpHash: paymasterResult.userOpHash ?? logResult.txHash ?? signed.decisionHash,
+        txHash: paymasterResult.transactionHash,
+        gasUsed: BigInt(paymasterResult.actualGasUsed ?? maxGasLimit),
+        gasPriceWei: currentGasPrice,
+        costUsd: actualCostUSD,
+        submittedAt,
+        includedAt,
+      });
+
+      logger.info('[Paymaster] Guarantee usage recorded', {
+        guaranteeId: guarantee.id,
+        costUsd: actualCostUSD,
+        slaCompliant,
+      });
+    } catch (err) {
+      logger.error('[Paymaster] Failed to record guarantee usage', {
+        error: err,
+        guaranteeId: guarantee.id,
+        severity: 'HIGH',
+      });
+    }
+  }
+
+  // Create sponsorship record
+  try {
+    const db = getPrisma();
+    await db.sponsorshipRecord.create({
+      data: {
+        userAddress: params.agentWallet,
+        protocolId: params.protocolId,
+        decisionHash: signed.decisionHash,
+        estimatedCostUSD: params.estimatedCostUSD,
+        actualCostUSD: paymasterResult.paymasterReady ? actualCostUSD : null,
+        txHash: logResult.txHash ?? null,
+        signature: signed.signature,
+        ipfsCid: ipfsCid ?? undefined,
+      },
+    });
+  } catch (err) {
+    logger.error('[Paymaster] Failed to create sponsorship record', {
+      error: err,
+      severity: 'HIGH',
+    });
+  }
+
+  return {
+    success: paymasterResult.paymasterReady,
+    transactionHash: paymasterResult.transactionHash ?? logResult.txHash,
+    sponsorshipHash: paymasterResult.userOpHash ?? logResult.txHash,
+    decisionHash: signed.decisionHash,
+    signature: signed.signature,
+    paymasterReady: paymasterResult.paymasterReady,
+    ipfsCid,
+    guaranteeId: guarantee.id,
+    guaranteeUsed: true,
+    slaCompliant,
+    simulationResult: {
+      action: 'SPONSOR_TRANSACTION',
+      agentWallet: params.agentWallet,
+      protocolId: params.protocolId,
+      onChainTxHash: logResult.txHash,
+      bundlerTxHash: paymasterResult.transactionHash,
+      userOpHash: paymasterResult.userOpHash,
+      paymasterReady: paymasterResult.paymasterReady,
+      actualGasUsed: paymasterResult.actualGasUsed,
+      ipfsCid,
+      guaranteeId: guarantee.id,
+      slaCompliant,
+    },
+  };
 }
