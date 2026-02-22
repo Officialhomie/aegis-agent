@@ -15,6 +15,10 @@ import {
   TrendingDown,
   MessageCircle,
   DollarSign,
+  Zap,
+  ChevronRight,
+  CheckCircle,
+  AlertTriangle,
 } from 'lucide-react';
 import { Header } from '@/components/layout/header';
 import { Button } from '@/components/ui/button';
@@ -103,10 +107,19 @@ interface CostSavings {
   timestamp: string;
 }
 
+interface GuaranteeSummary {
+  total: number;
+  active: number;
+  totalLocked: number;
+  avgCompliance: number;
+  recentBreaches: number;
+}
+
 export default function DashboardPage() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [activity, setActivity] = useState<ActivityRecord[]>([]);
   const [costSavings, setCostSavings] = useState<CostSavings | null>(null);
+  const [guarantees, setGuarantees] = useState<GuaranteeSummary | null>(null);
   const [verifyHash, setVerifyHash] = useState('');
   const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
   const [loading, setLoading] = useState(true);
@@ -143,18 +156,44 @@ export default function DashboardPage() {
     }
   }, []);
 
+  const fetchGuarantees = useCallback(async () => {
+    try {
+      const res = await fetch('/api/v1/guarantees');
+      const data = await res.json();
+      if (res.ok && data.success) {
+        const all = data.guarantees ?? [];
+        const active = all.filter((g: any) => g.status === 'ACTIVE');
+        const totalLocked = all.reduce((sum: number, g: any) => sum + (g.financial?.lockedAmount ?? 0), 0);
+        const avgCompliance = all.length > 0
+          ? all.reduce((sum: number, g: any) => sum + (g.sla?.complianceRate ?? 100), 0) / all.length
+          : 100;
+        const recentBreaches = all.reduce((sum: number, g: any) => sum + (g.sla?.slaBreached ?? 0), 0);
+
+        setGuarantees({
+          total: all.length,
+          active: active.length,
+          totalLocked,
+          avgCompliance,
+          recentBreaches,
+        });
+      }
+    } catch {
+      // Silently fail
+    }
+  }, []);
+
   useEffect(() => {
     const loadData = async () => {
       setLoading(true);
-      await Promise.all([fetchStats(), fetchActivity(), fetchCostSavings()]);
+      await Promise.all([fetchStats(), fetchActivity(), fetchCostSavings(), fetchGuarantees()]);
       setLoading(false);
     };
     loadData();
-  }, [fetchStats, fetchActivity, fetchCostSavings]);
+  }, [fetchStats, fetchActivity, fetchCostSavings, fetchGuarantees]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
-    await Promise.all([fetchStats(), fetchActivity(), fetchCostSavings()]);
+    await Promise.all([fetchStats(), fetchActivity(), fetchCostSavings(), fetchGuarantees()]);
     setRefreshing(false);
   };
 
@@ -307,6 +346,89 @@ export default function DashboardPage() {
                 )}
               </div>
             </div>
+          </CardContent>
+        </Card>
+
+        {/* Execution Guarantees */}
+        <Card className="mb-8">
+          <CardHeader>
+            <CardTitle className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Zap className="h-5 w-5 text-yellow-400" />
+                Execution Guarantees
+              </div>
+              <Link href="/dashboard/guarantees">
+                <Button variant="ghost" size="sm">
+                  View All
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </Link>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {loading ? (
+              <div className="grid sm:grid-cols-4 gap-6">
+                {[1, 2, 3, 4].map((i) => (
+                  <Skeleton key={i} className="h-20" />
+                ))}
+              </div>
+            ) : guarantees ? (
+              <div className="grid sm:grid-cols-4 gap-6">
+                <div>
+                  <div className="flex items-center gap-2 text-text-muted text-sm mb-2">
+                    <Shield className="h-4 w-4" />
+                    Active Guarantees
+                  </div>
+                  <div className="text-2xl font-bold text-text-primary">
+                    {guarantees.active}
+                    <span className="text-base font-normal text-text-muted ml-1">
+                      / {guarantees.total}
+                    </span>
+                  </div>
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 text-text-muted text-sm mb-2">
+                    <DollarSign className="h-4 w-4" />
+                    Locked Amount
+                  </div>
+                  <div className="text-2xl font-bold text-cyan-400">
+                    {formatUSD(guarantees.totalLocked)}
+                  </div>
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 text-text-muted text-sm mb-2">
+                    <CheckCircle className="h-4 w-4" />
+                    SLA Compliance
+                  </div>
+                  <div className={`text-2xl font-bold ${
+                    guarantees.avgCompliance >= 99 ? 'text-success' :
+                    guarantees.avgCompliance >= 95 ? 'text-warning' : 'text-error'
+                  }`}>
+                    {guarantees.avgCompliance.toFixed(1)}%
+                  </div>
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 text-text-muted text-sm mb-2">
+                    <AlertTriangle className="h-4 w-4" />
+                    Recent Breaches
+                  </div>
+                  <div className={`text-2xl font-bold ${
+                    guarantees.recentBreaches === 0 ? 'text-success' : 'text-warning'
+                  }`}>
+                    {guarantees.recentBreaches}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="text-center py-6">
+                <p className="text-text-muted mb-4">No execution guarantees yet</p>
+                <Link href="/dashboard/guarantees">
+                  <Button variant="secondary">
+                    Create Guarantee
+                  </Button>
+                </Link>
+              </div>
+            )}
           </CardContent>
         </Card>
 
