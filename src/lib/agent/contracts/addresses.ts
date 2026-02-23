@@ -32,6 +32,16 @@ export const CONTRACTS = {
       positionManager: "0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1",
       permit2: "0x000000000022D473030F116dDEE9F6B43aC78BA3",
     },
+    /** Uniswap V4 on Base mainnet (official deployments) */
+    uniswapV4: {
+      poolManager: "0x498581fF718922c3f8e6A244956aF099B2652b2b",
+      positionDescriptor: "0x25D093633990Dc94bEdeED76c8F3cdaA75f3E7D5",
+      positionManager: "0x7C5f5A4bBd8Fd63184577525326123B519429BDc",
+      quoter: "0x0D5e0F971ED27aBFF6C2837BF31316121532048D",
+      stateView: "0xA3C0C9b65bAD0b08107AA264b0F3db444b867a71",
+      universalRouter: "0x6fF5693b99212Da76ad316178A184AB56D299b43",
+      permit2: "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+    },
     aave: {
       pool: "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5",
       wethGateway: "0xa0d9C1E9E48Ca30c8d8C3B5D69FF5dc1f6DFfC24",
