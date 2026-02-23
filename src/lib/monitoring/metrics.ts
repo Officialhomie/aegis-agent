@@ -278,6 +278,8 @@ initCounter('aegis_observation_filter_total', 'Total observation filter checks')
 initCounter('aegis_observation_filter_skips', 'Cycles skipped by observation filter');
 initCounter('aegis_template_response_used', 'Decisions made by template (no LLM)');
 initCounter('aegis_llm_calls_total', 'Total LLM reasoning calls');
+initCounter('aegis_skills_enforced_reject_total', 'Sponsorship rejected by skills (enforced)');
+initCounter('aegis_skills_parse_fail_total', 'Skill LLM parse or evaluation failures (fail-closed)');
 
 /**
  * Record a sponsorship attempt with outcome.
@@ -401,4 +403,6 @@ export function resetMetrics(): void {
   initCounter('aegis_observation_filter_skips', 'Cycles skipped by observation filter');
   initCounter('aegis_template_response_used', 'Decisions made by template (no LLM)');
   initCounter('aegis_llm_calls_total', 'Total LLM reasoning calls');
+  initCounter('aegis_skills_enforced_reject_total', 'Sponsorship rejected by skills (enforced)');
+  initCounter('aegis_skills_parse_fail_total', 'Skill LLM parse or evaluation failures (fail-closed)');
 }
