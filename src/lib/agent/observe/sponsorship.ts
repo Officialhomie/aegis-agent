@@ -1000,3 +1000,84 @@ export async function getObservationHealthStatus(): Promise<ObservationHealthSum
     observationCounts: counts,
   };
 }
+
+/**
+ * Observe recent transactions interacting with target contracts (e.g. Uniswap V4 PoolManager).
+ * Uses Blockscout API to fetch transactions to each contract, then returns observations
+ * for each unique sender that could be eligible for gas sponsorship (low balance or frequent user).
+ * Used by targeted campaign CLI to discover candidates for protocol-specific sponsorship.
+ */
+export async function observeContractInteractions(
+  targetContracts: string[],
+  chainName: BaseChainName = 'base'
+): Promise<Observation[]> {
+  const baseUrl = process.env.BLOCKSCOUT_API_URL?.trim();
+  if (!baseUrl) {
+    logger.debug('[Sponsorship] observeContractInteractions: BLOCKSCOUT_API_URL not set');
+    return [];
+  }
+  if (targetContracts.length === 0) return [];
+
+  const chain = chainName === 'base' ? base : baseSepolia;
+  const chainId = chain.id;
+  const seenSenders = new Map<string, { targetContract: string; txCount: number }>();
+  const limitPerContract = 5;
+
+  for (const contract of targetContracts.slice(0, 10)) {
+    if (!contract || !/^0x[a-fA-F0-9]{40}$/.test(contract)) continue;
+    try {
+      const url = `${baseUrl.replace(/\/$/, '')}/api?module=account&action=txlist&address=${contract}&sort=desc&offset=${limitPerContract}&filterby=to`;
+      const res = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(8000) });
+      if (!res.ok) continue;
+      const data = (await res.json()) as { status?: string; result?: { from?: string }[] };
+      const txs = Array.isArray(data?.result) ? data.result : [];
+      for (const tx of txs) {
+        const from = (tx?.from ?? '').toLowerCase();
+        if (!from || !from.startsWith('0x') || from.length !== 42) continue;
+        const prev = seenSenders.get(from);
+        if (prev) {
+          prev.txCount += 1;
+        } else {
+          seenSenders.set(from, { targetContract: contract.toLowerCase(), txCount: 1 });
+        }
+      }
+    } catch (err) {
+      logger.warn('[Sponsorship] observeContractInteractions fetch failed', { contract, error: err });
+    }
+  }
+
+  if (seenSenders.size === 0) return [];
+
+  const client = getBasePublicClient();
+  const observations: Observation[] = [];
+  const lowGasThreshold = LOW_GAS_THRESHOLD_ETH;
+
+  for (const [sender, meta] of seenSenders) {
+    try {
+      const balance = await client.getBalance({ address: sender as `0x${string}` });
+      const eth = Number(formatEther(balance));
+      observations.push({
+        id: `contract-interaction-${sender}-${Date.now()}`,
+        timestamp: new Date(),
+        source: 'api',
+        chainId,
+        data: {
+          agentWallet: sender,
+          targetContract: meta.targetContract,
+          contractTxCount: meta.txCount,
+          balanceETH: eth,
+          belowThreshold: eth < lowGasThreshold,
+        },
+        context: `Contract interaction (${meta.targetContract.slice(0, 10)}..., ${meta.txCount} txs)`,
+      });
+    } catch {
+      // Skip balance check failure
+    }
+  }
+
+  logger.debug('[Sponsorship] observeContractInteractions', {
+    targetContracts: targetContracts.length,
+    uniqueSenders: observations.length,
+  });
+  return observations;
+}
