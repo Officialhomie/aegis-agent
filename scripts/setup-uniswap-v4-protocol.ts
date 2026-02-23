@@ -3,6 +3,9 @@
  * Idempotent: safe to run multiple times.
  *
  * Usage: npx tsx scripts/setup-uniswap-v4-protocol.ts
+ *
+ * If you get P2022 "column (not available)" on ProtocolSponsor, run: npx prisma db push
+ * then run this script again.
  */
 
 import 'dotenv/config';
