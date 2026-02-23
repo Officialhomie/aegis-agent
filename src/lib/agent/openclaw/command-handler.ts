@@ -70,6 +70,22 @@ export function parseCommand(input: string): ParsedCommand {
     return { name: 'cycle', args: {}, rawInput: input };
   }
 
+  if (
+    (lower.includes('sponsor the next') || lower.includes('sponsor next')) &&
+    (lower.includes('transaction') || lower.includes('tx') || /\d+/.test(lower)) &&
+    (lower.includes('base') || lower.includes('mainnet')) &&
+    (lower.includes('uniswap') || lower.includes('uniswap v4') || lower.includes('uniswap v3'))
+  ) {
+    const limit = parseNumber(input, 10);
+    const protocol = lower.includes('v4') ? 'uniswap-v4' : 'uniswap-v4';
+    const chain = lower.includes('base') ? 'base' : 'base';
+    return { name: 'campaign', args: { protocol, chain, limit: limit.toString() }, rawInput: input };
+  }
+
+  if (lower.includes('campaign status') || lower.includes('campaign progress') || lower === 'campaign_status') {
+    return { name: 'campaign_status', args: {}, rawInput: input };
+  }
+
   if (lower.startsWith('sponsor ')) {
     const parts = input.trim().split(/\s+/);
     const wallet = parts.find((p) => /^0x[a-fA-F0-9]{40}$/.test(p)) ?? '';
@@ -469,6 +485,71 @@ export async function executeCommand(cmd: ParsedCommand): Promise<CommandResult>
       }
     }
 
+    case 'campaign': {
+      try {
+        const protocol = cmd.args.protocol ?? 'uniswap-v4';
+        const chain = cmd.args.chain ?? 'base';
+        const limit = cmd.args.limit ?? '10';
+        const { spawn } = await import('child_process');
+        const path = await import('path');
+        const scriptPath = path.join(process.cwd(), 'scripts', 'run-targeted-campaign.ts');
+        const child = spawn(
+          'npx',
+          ['tsx', scriptPath, '--protocol', protocol, '--chain', chain, '--limit', limit],
+          { detached: true, stdio: 'ignore', cwd: process.cwd() }
+        );
+        child.unref();
+        return {
+          success: true,
+          message: `Campaign started: sponsor next ${limit} transactions on ${chain} for ${protocol}. Say "campaign status" for progress.`,
+        };
+      } catch (err) {
+        return {
+          success: false,
+          message: `Failed to start campaign: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    }
+
+    case 'campaign_status': {
+      try {
+        const sessionId = (cmd as unknown as { sessionId?: string }).sessionId;
+        if (!sessionId) {
+          return { success: false, message: 'Session ID required for campaign status' };
+        }
+        const protocolId = await getProtocolIdFromSession(sessionId);
+        const { getActiveCampaignForProtocol, getCampaignReport } = await import('../campaigns');
+        const active = await getActiveCampaignForProtocol(protocolId);
+        if (!active) {
+          return {
+            success: true,
+            message: 'No active campaign for your protocol. Start one with: "sponsor the next 10 transactions on base mainnet for uniswap v4"',
+          };
+        }
+        const report = await getCampaignReport(active.id);
+        if (!report) {
+          return { success: true, message: `Campaign ${active.id}: ${active.completedSponsorships}/${active.maxSponsorships} completed.` };
+        }
+        const lines = [
+          `Campaign ${report.campaign.id} (${report.campaign.protocol} on ${report.campaign.chain}):`,
+          `  Completed: ${report.campaign.completed}/${report.campaign.limit}`,
+          `  Status: ${report.campaign.status}`,
+          `  Total gas used: ${report.totals.totalGasUsed}`,
+          `  Total cost USD: $${report.totals.totalCostUSD.toFixed(4)}`,
+        ];
+        if (report.transactions.length > 0) {
+          lines.push('  Recent tx hashes:');
+          report.transactions.slice(-5).forEach((t) => lines.push(`    ${t.txHash}`));
+        }
+        return { success: true, message: lines.join('\n') };
+      } catch (err) {
+        return {
+          success: false,
+          message: `Failed to get campaign status: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    }
+
     case 'help':
     default:
       return {
@@ -484,6 +565,8 @@ export async function executeCommand(cmd: ParsedCommand): Promise<CommandResult>
           '',
           'EXECUTION:',
           '  cycle                         — Trigger one sponsorship cycle now',
+          '  sponsor the next N txs on base for uniswap v4 — Start targeted campaign',
+          '  campaign status               — Show active campaign progress',
           '  sponsor <0x...wallet> <proto> — Manually queue a sponsorship',
           '  pause                         — Pause the autonomous loop',
           '  pause for 2 hours             — Pause for a specific duration',
@@ -520,5 +603,7 @@ export function isCommandName(name: string): name is CommandName {
     'set_gas_cap',
     'topup',
     'passport',
+    'campaign',
+    'campaign_status',
   ].includes(name);
 }
