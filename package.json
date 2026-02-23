@@ -34,6 +34,9 @@
     "env:merge": "tsx scripts/merge-env.ts",
     "check:redis": "tsx scripts/check-redis.ts",
     "check:db": "tsx scripts/check-db.ts",
+    "check:preflight": "tsx scripts/preflight-check.ts",
+    "campaign:setup-uniswap-v4": "tsx scripts/setup-uniswap-v4-protocol.ts",
+    "campaign:run": "tsx scripts/run-targeted-campaign.ts",
     "vercel:env:sync": "tsx scripts/sync-vercel-env.ts",
     "vercel:env:dry": "tsx scripts/sync-vercel-env.ts --dry-run",
     "typecheck": "tsc --noEmit"
