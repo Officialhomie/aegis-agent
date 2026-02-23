@@ -58,7 +58,7 @@ describe('DispatcherService', () => {
     dispatcher = new DispatcherService();
     vi.clearAllMocks();
     // Reset mocks to passing defaults
-    vi.mocked(validatePolicy).mockResolvedValue({ passed: true, errors: [], warnings: [] });
+    vi.mocked(validatePolicy).mockResolvedValue({ passed: true, errors: [], warnings: [], appliedRules: [] });
     vi.mocked(getExecutor).mockReturnValue({
       handles: ['WAIT'],
       execute: vi.fn().mockResolvedValue({ success: true }),
@@ -70,6 +70,7 @@ describe('DispatcherService', () => {
       passed: false,
       errors: ['Budget exceeded'],
       warnings: [],
+      appliedRules: [],
     });
 
     const spec = buildSpec();
