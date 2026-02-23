@@ -19,7 +19,9 @@ export type CommandName =
   | 'block_wallet'
   | 'set_gas_cap'
   | 'topup'
-  | 'passport';
+  | 'passport'
+  | 'campaign'
+  | 'campaign_status';
 
 /** Incoming request from OpenClaw (POST /api/openclaw) */
 export interface OpenClawRequest {
