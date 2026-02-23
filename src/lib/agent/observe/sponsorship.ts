@@ -5,7 +5,7 @@
  * ERC-8004 registered agents, failed transactions, protocol budgets, agent reserves, gas price.
  */
 
-import { createPublicClient, decodeEventLog, http, formatEther } from 'viem';
+import { createPublicClient, type PublicClient, decodeEventLog, http, formatEther } from 'viem';
 import { base, baseSepolia } from 'viem/chains';
 import { getPrisma } from '../../db';
 import {
@@ -61,18 +61,28 @@ type BaseChainName = 'base' | 'baseSepolia';
 
 const BASE_RPC_TIMEOUT_MS = Number(process.env.BASE_RPC_TIMEOUT_MS) || 30_000;
 
+const clientCache = new Map<string, PublicClient>();
+
 function getBasePublicClient() {
+  const chainName = getDefaultChainName();
+  const cached = clientCache.get(chainName);
+  if (cached) return cached;
   const rpcUrl =
     process.env.BASE_RPC_URL ??
     process.env.RPC_URL_BASE ??
-    (getDefaultChainName() === 'base'
+    (chainName === 'base'
       ? process.env.RPC_URL_BASE
       : process.env.RPC_URL_BASE_SEPOLIA);
-  const chain = getDefaultChainName() === 'base' ? base : baseSepolia;
-  return createPublicClient({
+  const chain = chainName === 'base' ? base : baseSepolia;
+  const client = createPublicClient({
     chain,
-    transport: http(rpcUrl ?? 'https://mainnet.base.org', { timeout: BASE_RPC_TIMEOUT_MS }),
+    transport: http(rpcUrl ?? 'https://mainnet.base.org', {
+      timeout: BASE_RPC_TIMEOUT_MS,
+      batch: true,
+    }),
   });
+  clientCache.set(chainName, client as PublicClient);
+  return client;
 }
 
 /**
@@ -332,14 +342,21 @@ export interface MultiChainBalance {
   USDC: number;
 }
 
+const BALANCE_CACHE_TTL_MS = 60_000;
+let balanceCache: { result: MultiChainBalance[]; expiry: number } | null = null;
+
 /**
  * Get agent wallet ETH and USDC balances for all supported chains (e.g. Base Sepolia and Base Mainnet).
  * Uses AGENT_WALLET_ADDRESS and per-chain USDC addresses (USDC_ADDRESS, USDC_ADDRESS_BASE_MAINNET).
+ * Results are cached for 60s to collapse repeated RPC calls.
  *
  * IMPORTANT: In STRICT_MODE, throws BalanceObservationError if ETH balance cannot be fetched.
  * USDC balance failures are logged but don't block (USDC is optional).
  */
 export async function getAgentWalletBalances(): Promise<MultiChainBalance[]> {
+  if (balanceCache && Date.now() < balanceCache.expiry) {
+    return balanceCache.result;
+  }
   const address = process.env.AGENT_WALLET_ADDRESS as `0x${string}` | undefined;
   const chainIdByName: Record<string, number> = { base: BASE_CHAIN_ID, baseSepolia: BASE_SEPOLIA_CHAIN_ID };
   if (!address || address === '0x0000000000000000000000000000000000000000') {
@@ -418,6 +435,7 @@ export async function getAgentWalletBalances(): Promise<MultiChainBalance[]> {
     );
   }
 
+  balanceCache = { result: results, expiry: Date.now() + BALANCE_CACHE_TTL_MS };
   return results;
 }
 
@@ -437,18 +455,25 @@ export async function getAgentWalletBalance(): Promise<{
   return { ETH: first.ETH, USDC: first.USDC, chainId: first.chainId };
 }
 
+const GAS_PRICE_CACHE_TTL_MS = 30_000;
+let gasPriceCache: { result: Observation[]; expiry: number } | null = null;
+
 /**
  * Observe current Base gas price.
+ * Results are cached for 30s to avoid redundant eth_gasPrice RPC calls.
  * IMPORTANT: In STRICT_MODE, throws GasPriceObservationError on failure.
  * Gas price is critical for sponsorship timing decisions.
  */
 export async function observeGasPrice(): Promise<Observation[]> {
+  if (gasPriceCache && Date.now() < gasPriceCache.expiry) {
+    return gasPriceCache.result;
+  }
   const client = getBasePublicClient();
   const chain = getDefaultChainName() === 'base' ? base : baseSepolia;
   try {
     const gasPrice = await client.getGasPrice();
     const gasPriceGwei = formatEther(gasPrice * BigInt(1e9));
-    return [
+    const result: Observation[] = [
       {
         id: `gas-base-${Date.now()}`,
         timestamp: new Date(),
@@ -462,6 +487,8 @@ export async function observeGasPrice(): Promise<Observation[]> {
         context: 'Current Base gas price for sponsorship timing',
       },
     ];
+    gasPriceCache = { result, expiry: Date.now() + GAS_PRICE_CACHE_TTL_MS };
+    return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logger.error('[Sponsorship] Failed to observe gas price', {
