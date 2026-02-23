@@ -181,7 +181,7 @@ export function parseCommand(input: string): ParsedCommand {
 // Executor
 // ──────────────────────────────────────────────────────────────────────────────
 
-export async function executeCommand(cmd: ParsedCommand): Promise<CommandResult> {
+export async function executeCommand(cmd: ParsedCommand, sessionId?: string): Promise<CommandResult> {
   logger.info('[OpenClaw] Executing command', { name: cmd.name });
 
   switch (cmd.name) {
@@ -270,8 +270,7 @@ export async function executeCommand(cmd: ParsedCommand): Promise<CommandResult>
         const durationMs = parseInt(cmd.args.durationMs ?? '0');
         const until = new Date(Date.now() + durationMs);
 
-        // Get protocol ID from session (passed in cmd.sessionId)
-        const sessionId = (cmd as any).sessionId;
+        // Get protocol ID from session (passed by API route)
         if (!sessionId) {
           return { success: false, message: 'Session ID required for this command' };
         }
@@ -310,7 +309,6 @@ export async function executeCommand(cmd: ParsedCommand): Promise<CommandResult>
           return { success: false, message: 'Budget must be between $0.01 and $10,000' };
         }
 
-        const sessionId = (cmd as any).sessionId;
         if (!sessionId) {
           return { success: false, message: 'Session ID required for this command' };
         }
@@ -341,7 +339,6 @@ export async function executeCommand(cmd: ParsedCommand): Promise<CommandResult>
         const limit = parseInt(cmd.args.limit ?? '10');
         const period = cmd.args.period ?? 'week';
 
-        const sessionId = (cmd as any).sessionId;
         if (!sessionId) {
           return { success: false, message: 'Session ID required for this command' };
         }
@@ -372,7 +369,6 @@ export async function executeCommand(cmd: ParsedCommand): Promise<CommandResult>
           return { success: false, message: 'Invalid wallet address' };
         }
 
-        const sessionId = (cmd as any).sessionId;
         if (!sessionId) {
           return { success: false, message: 'Session ID required for this command' };
         }
@@ -408,7 +404,6 @@ export async function executeCommand(cmd: ParsedCommand): Promise<CommandResult>
           return { success: false, message: 'Gas price must be between 0.1 and 1000 gwei' };
         }
 
-        const sessionId = (cmd as any).sessionId;
         if (!sessionId) {
           return { success: false, message: 'Session ID required for this command' };
         }
@@ -513,11 +508,9 @@ export async function executeCommand(cmd: ParsedCommand): Promise<CommandResult>
 
     case 'campaign_status': {
       try {
-        const sessionId = (cmd as unknown as { sessionId?: string }).sessionId;
-        if (!sessionId) {
-          return { success: false, message: 'Session ID required for campaign status' };
-        }
-        const protocolId = await getProtocolIdFromSession(sessionId);
+        const protocolId = sessionId
+          ? await getProtocolIdFromSession(sessionId).catch(() => 'uniswap-v4')
+          : 'uniswap-v4';
         const { getActiveCampaignForProtocol, getCampaignReport } = await import('../campaigns');
         const active = await getActiveCampaignForProtocol(protocolId);
         if (!active) {
