@@ -1,6 +1,7 @@
 /**
  * Aegis Agent - Skill-based policy rules
  * Optional sponsorship validation using the Skills framework (gas, reputation, protocol vetting).
+ * When SKILLS_ENFORCED=true, policy uses this result to pass/fail.
  */
 
 import { executeSkillChain } from '../../skills/executor';
@@ -24,26 +25,35 @@ export interface ValidateWithSkillsOptions {
   /** Current gas price in Gwei (for gas-estimation skill context) */
   currentGasPriceGwei?: number;
   chainId?: number;
+  /** Optional passport data for agent-reputation skill */
+  passport?: { tier?: string };
+}
+
+export interface ValidateWithSkillsResult {
+  approved: boolean;
+  reasoning: string;
+  appliedSkills: string[];
+  decision: 'APPROVE' | 'REJECT' | 'ESCALATE';
+  confidence: number;
+  warnings: string[];
 }
 
 /**
  * Run skill-based validation for a SPONSOR_TRANSACTION decision.
- * Returns approved/rejected and reasoning. Does not replace existing policy rules;
- * call this in addition to or as part of policy validation if skills are enabled.
+ * Returns full result for auditability; when SKILLS_ENFORCED=true, policy uses approved to pass/fail.
  */
 export async function validateWithSkills(
   decision: Decision,
   options: ValidateWithSkillsOptions = {}
-): Promise<{
-  approved: boolean;
-  reasoning: string;
-  appliedSkills: string[];
-}> {
+): Promise<ValidateWithSkillsResult> {
   if (!isSponsorshipDecision(decision)) {
     return {
       approved: true,
       reasoning: 'Not a sponsorship decision; skills skip.',
       appliedSkills: [],
+      decision: 'APPROVE',
+      confidence: 100,
+      warnings: [],
     };
   }
 
@@ -57,6 +67,7 @@ export async function validateWithSkills(
     estimatedCostUSD: params.estimatedCostUSD,
     currentGasPrice: gasPriceWei,
     chainId: options.chainId,
+    passport: options.passport,
   };
 
   try {
@@ -72,6 +83,9 @@ export async function validateWithSkills(
       approved: result.decision === 'APPROVE',
       reasoning: result.reasoning,
       appliedSkills: result.appliedSkills,
+      decision: result.decision ?? 'APPROVE',
+      confidence: result.confidence,
+      warnings: result.warnings ?? [],
     };
   } catch (err) {
     logger.warn('[Policy] Skill-based validation failed', { error: err });
@@ -79,6 +93,9 @@ export async function validateWithSkills(
       approved: true,
       reasoning: 'Skill execution failed; falling back to allow (existing rules still apply).',
       appliedSkills: [],
+      decision: 'APPROVE',
+      confidence: 0,
+      warnings: [err instanceof Error ? err.message : String(err)],
     };
   }
 }
