@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Parse .env and output railway variables --set args (one per line KEY=VALUE).
- * Skip comments, empty values, and REDIS_URL (set as reference in dashboard).
+ * Skip comments, empty values, and REDIS_URL (set as reference in dashboard, e.g. ${{ Redis.REDIS_URL }}; or use sync-railway-env.ts with --all-services to push from .env). See docs/RAILWAY_REDIS_STATE.md.
  * Usage: node scripts/set-railway-vars.js | while IFS= read -r line; do railway variables --set "$line"; done
  * Or: railway variables --set "$(node scripts/set-railway-vars.js | head -1)"
  */
