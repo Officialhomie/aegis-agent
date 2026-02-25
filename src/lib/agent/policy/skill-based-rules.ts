@@ -59,7 +59,8 @@ export async function validateWithSkills(
 
   const params = decision.parameters;
   const currentGasPriceGwei = options.currentGasPriceGwei ?? 0;
-  const gasPriceWei = BigInt(currentGasPriceGwei) * BigInt(1e9);
+  // Convert Gwei to Wei: multiply by 1e9 first (keeping decimal precision), then floor and convert to BigInt
+  const gasPriceWei = BigInt(Math.floor(currentGasPriceGwei * 1e9));
 
   const context = {
     agentWallet: params.agentWallet,
