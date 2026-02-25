@@ -1033,6 +1033,10 @@ export async function getObservationHealthStatus(): Promise<ObservationHealthSum
  * Uses Blockscout API to fetch transactions to each contract, then returns observations
  * for each unique sender that could be eligible for gas sponsorship (low balance or frequent user).
  * Used by targeted campaign CLI to discover candidates for protocol-specific sponsorship.
+ *
+ * Blockscout (e.g. https://base.blockscout.com): no API key required for public Base instance;
+ * rate limit is 5 req/s without key. If RPC balance check fails (e.g. rate limit), candidates
+ * are still included with balanceETH: 0 so discovery is not lost.
  */
 export async function observeContractInteractions(
   targetContracts: string[],
@@ -1055,9 +1059,16 @@ export async function observeContractInteractions(
     try {
       const url = `${baseUrl.replace(/\/$/, '')}/api?module=account&action=txlist&address=${contract}&sort=desc&offset=${limitPerContract}&filterby=to`;
       const res = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(8000) });
-      if (!res.ok) continue;
-      const data = (await res.json()) as { status?: string; result?: { from?: string }[] };
-      const txs = Array.isArray(data?.result) ? data.result : [];
+      if (!res.ok) {
+        logger.warn('[Sponsorship] observeContractInteractions Blockscout non-OK', { contract: contract.slice(0, 10) + '...', status: res.status });
+        continue;
+      }
+      const data = (await res.json()) as { status?: string; message?: string; result?: { from?: string }[] | string };
+      const rawResult = data?.result;
+      const txs = Array.isArray(rawResult) ? rawResult : [];
+      if (typeof rawResult === 'string' && rawResult.toLowerCase().includes('error')) {
+        logger.debug('[Sponsorship] observeContractInteractions Blockscout returned error string', { contract: contract.slice(0, 10) + '...', result: rawResult.slice(0, 80) });
+      }
       for (const tx of txs) {
         const from = (tx?.from ?? '').toLowerCase();
         if (!from || !from.startsWith('0x') || from.length !== 42) continue;
@@ -1073,13 +1084,43 @@ export async function observeContractInteractions(
     }
   }
 
-  if (seenSenders.size === 0) return [];
+  if (seenSenders.size === 0) {
+    logger.debug('[Sponsorship] observeContractInteractions: no senders from Blockscout');
+    return [];
+  }
+
+  // CRITICAL: Filter out EOAs - only smart accounts are eligible for sponsorship
+  logger.info('[Sponsorship] Validating sender accounts (filtering EOAs)', { total: seenSenders.size });
+  const { filterSmartAccounts } = await import('../validation');
+  const senderAddresses = Array.from(seenSenders.keys()) as `0x${string}`[];
+  const { valid: smartAccountSenders, rejected: rejectedEOAs } = await filterSmartAccounts(senderAddresses, chainName);
+
+  if (rejectedEOAs.length > 0) {
+    logger.info('[Sponsorship] Rejected EOAs (not eligible for sponsorship)', {
+      count: rejectedEOAs.length,
+      examples: rejectedEOAs.slice(0, 3).map(r => ({ address: r.address.slice(0, 10) + '...', reason: r.reason })),
+    });
+  }
+
+  if (smartAccountSenders.length === 0) {
+    logger.warn('[Sponsorship] No smart accounts found - all senders were EOAs');
+    return [];
+  }
+
+  logger.info('[Sponsorship] Smart account validation complete', {
+    smartAccounts: smartAccountSenders.length,
+    rejectedEOAs: rejectedEOAs.length,
+  });
 
   const client = getBasePublicClient();
   const observations: Observation[] = [];
   const lowGasThreshold = LOW_GAS_THRESHOLD_ETH;
+  let balanceFailures = 0;
 
-  for (const [sender, meta] of seenSenders) {
+  // Only process validated smart accounts
+  for (const sender of smartAccountSenders) {
+    const meta = seenSenders.get(sender.toLowerCase());
+    if (!meta) continue;
     try {
       const balance = await client.getBalance({ address: sender as `0x${string}` });
       const eth = Number(formatEther(balance));
@@ -1097,14 +1138,41 @@ export async function observeContractInteractions(
         },
         context: `Contract interaction (${meta.targetContract.slice(0, 10)}..., ${meta.txCount} txs)`,
       });
-    } catch {
-      // Skip balance check failure
+    } catch (err) {
+      balanceFailures += 1;
+      // Still add candidate so we don't drop them when RPC is rate-limited or flaky; policy may still allow
+      observations.push({
+        id: `contract-interaction-${sender}-${Date.now()}`,
+        timestamp: new Date(),
+        source: 'api',
+        chainId,
+        data: {
+          agentWallet: sender,
+          targetContract: meta.targetContract,
+          contractTxCount: meta.txCount,
+          balanceETH: 0,
+          belowThreshold: true,
+        },
+        context: `Contract interaction (${meta.targetContract.slice(0, 10)}..., ${meta.txCount} txs, balance unknown)`,
+      });
+      logger.debug('[Sponsorship] observeContractInteractions balance check failed, including candidate anyway', {
+        sender: sender.slice(0, 10) + '...',
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
+  if (balanceFailures > 0) {
+    logger.warn('[Sponsorship] observeContractInteractions: RPC balance check failed for some senders, candidates still included', {
+      totalSenders: seenSenders.size,
+      balanceFailures,
+      observationsReturned: observations.length,
+    });
+  }
   logger.debug('[Sponsorship] observeContractInteractions', {
     targetContracts: targetContracts.length,
-    uniqueSenders: observations.length,
+    uniqueSenders: seenSenders.size,
+    observationsReturned: observations.length,
   });
   return observations;
 }
