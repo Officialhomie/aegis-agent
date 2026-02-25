@@ -15,6 +15,7 @@ import { validatePolicy } from '../src/lib/agent/policy';
 import { sponsorTransaction } from '../src/lib/agent/execute/paymaster';
 import {
   createCampaign,
+  getCampaign,
   recordSponsorshipInCampaign,
   getCampaignReport,
 } from '../src/lib/agent/campaigns';
@@ -28,12 +29,13 @@ const DELAY_BETWEEN_SPONSORSHIPS_MS = 15 * 1000;
 const DEFAULT_ESTIMATED_COST_USD = 0.25;
 const MAX_GAS_LIMIT = 200_000;
 
-function parseArgs(): { protocol: string; chain: string; limit: number; contracts: string[] } {
+function parseArgs(): { protocol: string; chain: string; limit: number; contracts: string[]; campaignId: string | null } {
   const args = process.argv.slice(2);
   let protocol = 'uniswap-v4';
   let chain = 'base';
   let limit = 10;
   let contracts: string[] = [];
+  let campaignId: string | null = null;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--protocol' && args[i + 1]) {
@@ -44,10 +46,12 @@ function parseArgs(): { protocol: string; chain: string; limit: number; contract
       limit = parseInt(args[++i], 10) || 10;
     } else if (args[i] === '--contracts' && args[i + 1]) {
       contracts = args[++i].split(',').map((s) => s.trim()).filter((s) => /^0x[a-fA-F0-9]{40}$/.test(s));
+    } else if (args[i] === '--campaign-id' && args[i + 1]) {
+      campaignId = args[++i];
     }
   }
 
-  return { protocol, chain, limit, contracts };
+  return { protocol, chain, limit, contracts, campaignId };
 }
 
 function getTargetContracts(chain: string, contractsOverride: string[]): string[] {
@@ -67,7 +71,7 @@ function getTargetContracts(chain: string, contractsOverride: string[]): string[
 }
 
 async function main() {
-  const { protocol, chain, limit, contracts: contractsOverride } = parseArgs();
+  const { protocol, chain, limit, contracts: contractsOverride, campaignId: existingCampaignId } = parseArgs();
   const targetContracts = getTargetContracts(chain, contractsOverride);
 
   if (targetContracts.length === 0) {
@@ -78,28 +82,43 @@ async function main() {
   const chainId = chain === 'base' ? BASE_CHAIN_ID : BASE_SEPOLIA_CHAIN_ID;
   const chainName = chain === 'base' ? 'base' : 'baseSepolia';
 
-  console.log('[Campaign] Configuration:', { protocol, chain, chainId, limit, targetContracts: targetContracts.length });
+  let campaign: Awaited<ReturnType<typeof createCampaign>>;
 
-  const db = getPrisma();
-  const protocolRecord = await db.protocolSponsor.findUnique({
-    where: { protocolId: protocol },
-  });
-  if (!protocolRecord) {
-    console.error(`Protocol "${protocol}" not found. Run: npx tsx scripts/setup-uniswap-v4-protocol.ts`);
-    process.exit(1);
-  }
-  if ((protocolRecord.whitelistedContracts?.length ?? 0) === 0) {
-    console.error(`Protocol "${protocol}" has no whitelisted contracts. Run setup script.`);
-    process.exit(1);
+  if (existingCampaignId) {
+    campaign = await getCampaign(existingCampaignId);
+    if (!campaign || campaign.status !== 'active') {
+      console.error('Campaign not found or not active:', existingCampaignId);
+      process.exit(1);
+    }
+    console.log('[Campaign] Resuming existing campaign:', { campaignId: campaign.id, protocol: campaign.protocolId, limit: campaign.maxSponsorships });
+  } else {
+    const db = getPrisma();
+    const protocolRecord = await db.protocolSponsor.findUnique({
+      where: { protocolId: protocol },
+    });
+    if (!protocolRecord) {
+      console.error(`Protocol "${protocol}" not found. Run: npx tsx scripts/setup-uniswap-v4-protocol.ts`);
+      process.exit(1);
+    }
+    if ((protocolRecord.whitelistedContracts?.length ?? 0) === 0) {
+      console.error(`Protocol "${protocol}" has no whitelisted contracts. Run setup script.`);
+      process.exit(1);
+    }
+
+    campaign = await createCampaign({
+      protocolId: protocol,
+      chainId,
+      chainName,
+      targetContracts,
+      maxSponsorships: limit,
+    });
   }
 
-  const campaign = await createCampaign({
-    protocolId: protocol,
-    chainId,
-    chainName,
-    targetContracts,
-    maxSponsorships: limit,
-  });
+  const runProtocol = campaign.protocolId;
+  const runLimit = campaign.maxSponsorships;
+  const runTargetContracts = campaign.targetContracts?.length ? campaign.targetContracts : targetContracts;
+
+  console.log('[Campaign] Configuration:', { protocol: runProtocol, chain, chainId, limit: runLimit, targetContracts: runTargetContracts.length });
 
   const gasObs = await observeGasPrice();
   const gasData = gasObs[0]?.data as { gasPriceGwei?: string } | undefined;
@@ -114,27 +133,27 @@ async function main() {
   };
 
   let completed = 0;
-  const observations = await observeContractInteractions(targetContracts, chainName);
+  const observations = await observeContractInteractions(runTargetContracts, chainName);
   const candidates = observations
     .filter((o) => (o.data as { agentWallet?: string }).agentWallet)
-    .slice(0, limit * 2);
+    .slice(0, runLimit * 2);
 
   console.log('[Campaign] Candidates from contract interactions:', candidates.length);
 
   for (const obs of candidates) {
-    if (completed >= limit) break;
+    if (completed >= runLimit) break;
     const data = obs.data as { agentWallet?: string; targetContract?: string };
     const agentWallet = data.agentWallet;
-    const targetContract = data.targetContract ?? targetContracts[0];
+    const targetContract = data.targetContract ?? runTargetContracts[0];
     if (!agentWallet || !/^0x[a-fA-F0-9]{40}$/.test(agentWallet)) continue;
 
     const decision: Decision = {
       action: 'SPONSOR_TRANSACTION',
       confidence: 0.95,
-      reasoning: `Targeted campaign: sponsor next tx for ${agentWallet} on ${protocol} (${targetContract})`,
+      reasoning: `Targeted campaign: sponsor next tx for ${agentWallet} on ${runProtocol} (${targetContract})`,
       parameters: {
         agentWallet,
-        protocolId: protocol,
+        protocolId: runProtocol,
         maxGasLimit: MAX_GAS_LIMIT,
         estimatedCostUSD: DEFAULT_ESTIMATED_COST_USD,
         targetContract,
@@ -179,7 +198,7 @@ const costUSD = gasUsedStr
       completed += 1;
       console.log(`[Campaign] Sponsored ${completed}/${limit}`, { txHash: txHash.slice(0, 18) + '...', agentWallet: agentWallet.slice(0, 10) + '...' });
 
-      if (completed < limit) {
+      if (completed < runLimit) {
         await new Promise((r) => setTimeout(r, DELAY_BETWEEN_SPONSORSHIPS_MS));
       }
     } catch (err) {
@@ -198,8 +217,10 @@ const costUSD = gasUsedStr
     console.log('Transaction hashes:', report.transactions.map((t) => t.txHash).join('\n  '));
   }
 
-  await db.$disconnect();
-  process.exit(completed >= limit ? 0 : 1);
+  if (!existingCampaignId) {
+    await getPrisma().$disconnect();
+  }
+  process.exit(completed >= runLimit ? 0 : 1);
 }
 
 main().catch((err) => {
