@@ -42,6 +42,8 @@ import {
 } from '../../protocol/runtime-overrides';
 import { getProtocolIdFromSession } from './session-manager';
 import { getGasPassport, formatPassportText } from '../../passport';
+import { getPrisma } from '../../db';
+import { CONTRACTS } from '../contracts/addresses';
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Parser
@@ -485,13 +487,46 @@ export async function executeCommand(cmd: ParsedCommand, sessionId?: string): Pr
         const protocol = cmd.args.protocol ?? 'uniswap-v4';
         const chain = cmd.args.chain ?? 'base';
         const limit = cmd.args.limit ?? '10';
+        const db = getPrisma();
+        const protocolRecord = await db.protocolSponsor.findUnique({
+          where: { protocolId: protocol },
+        });
+        if (!protocolRecord) {
+          return {
+            success: false,
+            message: `Protocol "${protocol}" not found. Run: npx tsx scripts/setup-uniswap-v4-protocol.ts`,
+          };
+        }
+        if ((protocolRecord.whitelistedContracts?.length ?? 0) === 0) {
+          return {
+            success: false,
+            message: `Protocol "${protocol}" has no whitelisted contracts. Run setup script.`,
+          };
+        }
+        const chainId = chain === 'base' ? 8453 : 84532;
+        const chainName = chain === 'base' ? 'base' : 'baseSepolia';
+        const v4 = CONTRACTS.base?.uniswapV4;
+        const targetContracts = v4
+          ? [v4.poolManager, v4.positionManager, v4.universalRouter, v4.quoter, v4.stateView, v4.permit2]
+          : [];
+        if (targetContracts.length === 0) {
+          return { success: false, message: 'No target contracts configured for base.' };
+        }
+        const { createCampaign } = await import('../campaigns');
+        const campaign = await createCampaign({
+          protocolId: protocol,
+          chainId,
+          chainName,
+          targetContracts,
+          maxSponsorships: parseInt(limit, 10) || 10,
+        });
         const { spawn } = await import('child_process');
         const path = await import('path');
         const scriptPath = path.join(process.cwd(), 'scripts', 'run-targeted-campaign.ts');
         const child = spawn(
           'npx',
-          ['tsx', scriptPath, '--protocol', protocol, '--chain', chain, '--limit', limit],
-          { detached: true, stdio: 'ignore', cwd: process.cwd() }
+          ['tsx', scriptPath, '--campaign-id', campaign.id],
+          { detached: true, stdio: 'ignore', cwd: process.cwd(), env: process.env }
         );
         child.unref();
         return {
@@ -533,6 +568,9 @@ export async function executeCommand(cmd: ParsedCommand, sessionId?: string): Pr
         if (report.transactions.length > 0) {
           lines.push('  Recent tx hashes:');
           report.transactions.slice(-5).forEach((t) => lines.push(`    ${t.txHash}`));
+        }
+        if (report.campaign.completed === 0 && report.campaign.status === 'active') {
+          lines.push('  Tip: Discovery uses BLOCKSCOUT_API_URL (e.g. https://base.blockscout.com). If unset or unreachable, no candidates are found. Set it in .env and restart, or run the campaign script manually to see logs.');
         }
         return { success: true, message: lines.join('\n') };
       } catch (err) {
