@@ -5,17 +5,23 @@
  * UserOperation data across chains. We use it to discover active smart
  * accounts with proven transaction history.
  *
- * API Endpoints:
- * - /userops - Get recent UserOperations
- * - /bundles - Get bundler activity
- * - /accounts - Get smart account info
+ * Real API Documentation:
+ * - Docs: https://jiffyscan.readme.io/reference/getting-started-1
+ * - API Key: https://dashboard.jiffyscan.xyz/
+ * - Auth: x-api-key header
+ *
+ * Endpoints:
+ * - GET /v0/getUserOp?hash=<hash> - Get specific UserOp
+ * - GET /v0/getAccountActivity?address=<address>&network=<network> - Get account activity
+ * - GET /v0/getLatestUserOps?network=<network>&limit=<limit> - Get recent UserOps
  */
 
 import { logger } from '../../logger';
 import type { Address } from 'viem';
 
-const JIFFYSCAN_API_BASE = 'https://api.jiffyscan.xyz';
+const JIFFYSCAN_API_BASE = 'https://api.jiffyscan.xyz/v0';
 const JIFFYSCAN_FRONTEND = 'https://www.jiffyscan.xyz';
+const JIFFYSCAN_API_KEY = process.env.JIFFYSCAN_API_KEY; // Get from dashboard.jiffyscan.xyz
 
 export interface JiffyScanUserOp {
   userOpHash: string;
@@ -69,11 +75,9 @@ export async function discoverFromJiffyScan(
   });
 
   try {
-    // Note: JiffyScan might not have a public API yet
-    // This is a placeholder for when they launch their API
-    // For now, we'll use Entry Point events as fallback
-
-    // Attempt to fetch from JiffyScan API (if available)
+    // Fetch from JiffyScan API using real endpoints
+    // Requires JIFFYSCAN_API_KEY environment variable
+    // Falls back to Entry Point events if API unavailable
     const userOps = await fetchUserOps(chain, limit);
 
     if (userOps.length === 0) {
@@ -156,34 +160,62 @@ export async function discoverFromJiffyScan(
 }
 
 /**
- * Fetch recent UserOperations from JiffyScan
+ * Fetch recent UserOperations from JiffyScan API
  *
- * Note: This is a placeholder implementation. JiffyScan's public API
- * may not be available yet. In production, we fall back to Entry Point
- * event monitoring.
+ * Real implementation using JiffyScan's v0 API.
+ * Requires JIFFYSCAN_API_KEY environment variable.
  */
 async function fetchUserOps(
   chain: string,
   limit: number
 ): Promise<JiffyScanUserOp[]> {
+  // Check for API key
+  if (!JIFFYSCAN_API_KEY) {
+    logger.warn('[JiffyScan] No API key configured', {
+      message: 'Set JIFFYSCAN_API_KEY in .env. Get key from https://dashboard.jiffyscan.xyz/',
+      fallback: 'Using Entry Point monitoring instead',
+    });
+    return [];
+  }
+
   try {
-    // Attempt to fetch from JiffyScan API
-    // This endpoint may not exist yet - adjust based on actual API
-    const response = await fetch(
-      `${JIFFYSCAN_API_BASE}/v1/userops?chain=${chain}&limit=${limit}&sort=recent`,
-      {
-        headers: {
-          'Accept': 'application/json',
-        },
-        signal: AbortSignal.timeout(10000), // 10 second timeout
-      }
-    );
+    // Map our chain names to JiffyScan network names
+    const networkMap: Record<string, string> = {
+      base: 'base',
+      mainnet: 'ethereum',
+      optimism: 'optimism',
+      arbitrum: 'arbitrum',
+      polygon: 'polygon',
+    };
+
+    const network = networkMap[chain] || chain;
+
+    // Real JiffyScan API endpoint
+    const url = `${JIFFYSCAN_API_BASE}/getLatestUserOps?network=${network}&limit=${limit}`;
+
+    logger.debug('[JiffyScan] Fetching UserOps', { network, limit });
+
+    const response = await fetch(url, {
+      headers: {
+        'Accept': 'application/json',
+        'x-api-key': JIFFYSCAN_API_KEY,
+      },
+      signal: AbortSignal.timeout(10000), // 10 second timeout
+    });
 
     if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        logger.error('[JiffyScan] API authentication failed', {
+          status: response.status,
+          message: 'Check JIFFYSCAN_API_KEY is valid',
+        });
+        return [];
+      }
+
       if (response.status === 404) {
-        // API not available yet - this is expected
-        logger.debug('[JiffyScan] API endpoint not available (404)', {
-          message: 'Use Entry Point monitoring as fallback',
+        logger.warn('[JiffyScan] Endpoint not found', {
+          url,
+          message: 'API endpoint may have changed. Check documentation.',
         });
         return [];
       }
@@ -193,25 +225,123 @@ async function fetchUserOps(
 
     const data = await response.json();
 
-    // Parse response based on actual API format
-    const userOps: JiffyScanUserOp[] = Array.isArray(data?.userOps) ? data.userOps : [];
+    // Parse JiffyScan API response format
+    // Adjust based on actual API response structure
+    let userOps: JiffyScanUserOp[] = [];
+
+    if (Array.isArray(data)) {
+      // If response is an array of UserOps
+      userOps = data.map((op: any) => ({
+        userOpHash: op.userOpHash || op.hash,
+        sender: op.sender,
+        nonce: op.nonce || '0',
+        actualGasCost: op.actualGasCost || '0',
+        actualGasUsed: op.actualGasUsed || '0',
+        success: op.success !== false,
+        paymaster: op.paymaster,
+        target: op.target,
+        blockNumber: op.blockNumber || 0,
+        blockTime: op.blockTime || op.timestamp || Date.now() / 1000,
+        transactionHash: op.transactionHash || op.txHash || '',
+      }));
+    } else if (data.userOps && Array.isArray(data.userOps)) {
+      // If response has userOps array
+      userOps = data.userOps.map((op: any) => ({
+        userOpHash: op.userOpHash || op.hash,
+        sender: op.sender,
+        nonce: op.nonce || '0',
+        actualGasCost: op.actualGasCost || '0',
+        actualGasUsed: op.actualGasUsed || '0',
+        success: op.success !== false,
+        paymaster: op.paymaster,
+        target: op.target,
+        blockNumber: op.blockNumber || 0,
+        blockTime: op.blockTime || op.timestamp || Date.now() / 1000,
+        transactionHash: op.transactionHash || op.txHash || '',
+      }));
+    } else {
+      logger.warn('[JiffyScan] Unexpected API response format', {
+        hasData: !!data,
+        keys: Object.keys(data || {}).join(', '),
+      });
+    }
+
+    logger.info('[JiffyScan] Fetched UserOps', {
+      network,
+      count: userOps.length,
+    });
 
     return userOps;
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
       logger.warn('[JiffyScan] Request timeout', { timeout: '10s' });
     } else if (error instanceof TypeError && error.message.includes('fetch')) {
-      // Network error - API might not exist
-      logger.debug('[JiffyScan] API not reachable', {
-        message: 'This is expected if JiffyScan API is not public yet',
+      logger.warn('[JiffyScan] Network error', {
+        message: 'Could not reach JiffyScan API',
       });
     } else {
-      logger.warn('[JiffyScan] Fetch UserOps failed', {
+      logger.error('[JiffyScan] Fetch UserOps failed', {
         error: error instanceof Error ? error.message : String(error),
       });
     }
 
     return [];
+  }
+}
+
+/**
+ * Fetch activity for a specific smart account
+ *
+ * Uses JiffyScan's getAccountActivity endpoint.
+ */
+export async function getAccountActivity(
+  address: Address,
+  chain: string = 'base'
+): Promise<{
+  totalOps: number;
+  recentOps: JiffyScanUserOp[];
+}> {
+  if (!JIFFYSCAN_API_KEY) {
+    logger.warn('[JiffyScan] No API key for getAccountActivity');
+    return { totalOps: 0, recentOps: [] };
+  }
+
+  try {
+    const networkMap: Record<string, string> = {
+      base: 'base',
+      mainnet: 'ethereum',
+    };
+
+    const network = networkMap[chain] || chain;
+    const url = `${JIFFYSCAN_API_BASE}/getAccountActivity?address=${address}&network=${network}`;
+
+    const response = await fetch(url, {
+      headers: {
+        'Accept': 'application/json',
+        'x-api-key': JIFFYSCAN_API_KEY,
+      },
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (!response.ok) {
+      logger.warn('[JiffyScan] getAccountActivity failed', {
+        status: response.status,
+        address: address.slice(0, 10) + '...',
+      });
+      return { totalOps: 0, recentOps: [] };
+    }
+
+    const data = await response.json();
+
+    const totalOps = data.totalOps || data.total || 0;
+    const recentOps = Array.isArray(data.ops) ? data.ops : [];
+
+    return { totalOps, recentOps };
+  } catch (error) {
+    logger.error('[JiffyScan] getAccountActivity error', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return { totalOps: 0, recentOps: [] };
   }
 }
 
@@ -223,15 +353,27 @@ export function getJiffyScanURL(address: Address, chain: string = 'base'): strin
 }
 
 /**
- * Check if JiffyScan API is available
+ * Check if JiffyScan API is available and configured
  *
- * Returns true if the API responds, false otherwise.
+ * Returns true if API key is set and API responds.
  */
 export async function isJiffyScanAvailable(): Promise<boolean> {
+  if (!JIFFYSCAN_API_KEY) {
+    return false;
+  }
+
   try {
-    const response = await fetch(`${JIFFYSCAN_API_BASE}/health`, {
-      signal: AbortSignal.timeout(5000),
-    });
+    // Test with a simple getUserOp request (use a known hash or latest)
+    // If no health endpoint, we test with actual API call
+    const response = await fetch(
+      `${JIFFYSCAN_API_BASE}/getLatestUserOps?network=base&limit=1`,
+      {
+        headers: {
+          'x-api-key': JIFFYSCAN_API_KEY,
+        },
+        signal: AbortSignal.timeout(5000),
+      }
+    );
 
     return response.ok;
   } catch {
@@ -252,10 +394,27 @@ export async function getDiscoverySourceStatus(): Promise<{
 }> {
   const jiffyscanAvailable = await isJiffyScanAvailable();
 
+  // Import Dune availability check
+  let duneAvailable = false;
+  try {
+    const { isDuneAvailable } = await import('./dune-analytics');
+    duneAvailable = await isDuneAvailable();
+  } catch (error) {
+    // Module not available or error checking
+    duneAvailable = false;
+  }
+
+  // Prioritize sources: JiffyScan > Dune > Entry Point
+  const recommended = jiffyscanAvailable
+    ? 'jiffyscan'
+    : duneAvailable
+    ? 'dune'
+    : 'entryPoint';
+
   return {
     jiffyscan: jiffyscanAvailable,
     entryPoint: true, // Always available (on-chain)
-    dune: false, // Requires API key
-    recommended: jiffyscanAvailable ? 'jiffyscan' : 'entryPoint',
+    dune: duneAvailable,
+    recommended,
   };
 }
