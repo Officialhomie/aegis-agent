@@ -3,16 +3,19 @@
  *
  * Discovers active smart accounts from multiple intelligence sources:
  * 1. JiffyScan API (if available)
- * 2. Entry Point events (on-chain)
- * 3. Protocol-specific discovery (Blockscout)
+ * 2. Dune Analytics (historical data)
+ * 3. Entry Point events (on-chain)
+ * 4. Protocol-specific discovery (Blockscout)
  *
  * Usage:
  *   npx tsx scripts/discover-active-accounts.ts --chain base --protocols uniswap-v4,aave-v3
  *   npx tsx scripts/discover-active-accounts.ts --chain base --source jiffyscan --limit 100
+ *   npx tsx scripts/discover-active-accounts.ts --chain base --source dune --limit 100
  */
 
 import 'dotenv/config';
 import { discoverFromJiffyScan, getDiscoverySourceStatus } from '../src/lib/agent/observe/jiffyscan';
+import { discoverFromDune, isDuneAvailable } from '../src/lib/agent/observe/dune-analytics';
 import { getActiveSmartAccounts } from '../src/lib/agent/observe/userOp-monitor';
 import { observeContractInteractions } from '../src/lib/agent/observe/sponsorship';
 import { CONTRACTS } from '../src/lib/agent/contracts/addresses';
@@ -31,17 +34,19 @@ interface DiscoveryResult {
 
 function parseArgs(): {
   chain: 'base' | 'baseSepolia';
-  source: 'all' | 'jiffyscan' | 'entryPoint' | 'protocols';
+  source: 'all' | 'jiffyscan' | 'dune' | 'entryPoint' | 'protocols';
   protocols: string[];
   limit: number;
   minActivity: number;
+  days: number;
 } {
   const args = process.argv.slice(2);
   let chain: 'base' | 'baseSepolia' = 'base';
-  let source: 'all' | 'jiffyscan' | 'entryPoint' | 'protocols' = 'all';
+  let source: 'all' | 'jiffyscan' | 'dune' | 'entryPoint' | 'protocols' = 'all';
   let protocols: string[] = [];
   let limit = 100;
   let minActivity = 1;
+  let days = 7;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--chain' && args[i + 1]) {
@@ -54,10 +59,12 @@ function parseArgs(): {
       limit = parseInt(args[++i], 10) || 100;
     } else if (args[i] === '--min-activity' && args[i + 1]) {
       minActivity = parseInt(args[++i], 10) || 1;
+    } else if (args[i] === '--days' && args[i + 1]) {
+      days = parseInt(args[++i], 10) || 7;
     }
   }
 
-  return { chain, source, protocols, limit, minActivity };
+  return { chain, source, protocols, limit, minActivity, days };
 }
 
 function getProtocolContracts(protocols: string[], chain: 'base'): Address[] {
@@ -104,6 +111,37 @@ async function discoverFromJiffyScanSource(
 
   return {
     source: 'jiffyscan',
+    accounts: result.accounts.map((acc) => ({
+      address: acc.address,
+      activityCount: acc.totalOps,
+      lastActive: acc.lastSeen,
+    })),
+    timestamp: Date.now(),
+  };
+}
+
+async function discoverFromDuneSource(
+  chain: 'base' | 'baseSepolia',
+  limit: number,
+  days: number
+): Promise<DiscoveryResult> {
+  console.log('[Discovery] Attempting Dune Analytics discovery...');
+
+  const result = await discoverFromDune({
+    chain: chain === 'base' ? 'base' : 'ethereum',
+    days,
+    minOps: 1,
+    limit,
+  });
+
+  if (result.accounts.length === 0) {
+    console.log('[Discovery] Dune: No accounts found (API may not be available or no data)');
+  } else {
+    console.log(`[Discovery] Dune: Found ${result.accounts.length} active accounts`);
+  }
+
+  return {
+    source: 'dune',
     accounts: result.accounts.map((acc) => ({
       address: acc.address,
       activityCount: acc.totalOps,
@@ -200,7 +238,7 @@ async function discoverFromProtocols(
 }
 
 async function main() {
-  const { chain, source, protocols, limit, minActivity } = parseArgs();
+  const { chain, source, protocols, limit, minActivity, days } = parseArgs();
 
   console.log('=== Multi-Source Active Smart Account Discovery ===\n');
   console.log('Configuration:', {
@@ -209,6 +247,7 @@ async function main() {
     protocols: protocols.length > 0 ? protocols : 'none',
     limit,
     minActivity,
+    days,
   });
   console.log();
 
@@ -230,7 +269,13 @@ async function main() {
     results.push(jiffyResult);
   }
 
-  // Source 2: Protocol-specific discovery (needed for Entry Point monitoring)
+  // Source 2: Dune Analytics
+  if (source === 'all' || source === 'dune') {
+    const duneResult = await discoverFromDuneSource(chain, limit, days);
+    results.push(duneResult);
+  }
+
+  // Source 3: Protocol-specific discovery (needed for Entry Point monitoring)
   let protocolAccounts: Address[] = [];
   if (source === 'all' || source === 'protocols' || source === 'entryPoint') {
     const defaultProtocols = protocols.length > 0 ? protocols : ['uniswap-v4'];
@@ -239,7 +284,7 @@ async function main() {
     protocolAccounts = protocolResult.accounts.map((a) => a.address);
   }
 
-  // Source 3: Entry Point events (requires smart accounts from protocol discovery)
+  // Source 4: Entry Point events (requires smart accounts from protocol discovery)
   if (source === 'all' || source === 'entryPoint') {
     if (protocolAccounts.length > 0) {
       const entryPointResult = await discoverFromEntryPoint(chain, protocolAccounts, minActivity);
