@@ -19,6 +19,7 @@ import { discoverFromDune, isDuneAvailable } from '../src/lib/agent/observe/dune
 import { getActiveSmartAccounts } from '../src/lib/agent/observe/userOp-monitor';
 import { observeContractInteractions } from '../src/lib/agent/observe/sponsorship';
 import { CONTRACTS } from '../src/lib/agent/contracts/addresses';
+import { validateAccount } from '../src/lib/agent/validation/account-validator';
 import type { Address } from 'viem';
 
 interface DiscoveryResult {
@@ -237,6 +238,81 @@ async function discoverFromProtocols(
   };
 }
 
+/**
+ * Enrich discovered accounts with tier data for agent-first prioritization.
+ * Filters out tier 0 (EOAs) and adds tier/type metadata.
+ */
+async function enrichWithTierData(
+  accounts: Array<{
+    address: Address;
+    sources: string[];
+    totalActivity: number;
+    protocols?: string[];
+  }>,
+  chain: 'base' | 'baseSepolia'
+): Promise<Array<{
+  address: Address;
+  sources: string[];
+  totalActivity: number;
+  protocols?: string[];
+  agentTier: number;
+  agentType: 'ERC8004_AGENT' | 'ERC4337_ACCOUNT' | 'SMART_CONTRACT' | 'EOA' | 'UNKNOWN';
+  isERC8004: boolean;
+  isERC4337: boolean;
+}>> {
+  const enriched: Array<{
+    address: Address;
+    sources: string[];
+    totalActivity: number;
+    protocols?: string[];
+    agentTier: number;
+    agentType: 'ERC8004_AGENT' | 'ERC4337_ACCOUNT' | 'SMART_CONTRACT' | 'EOA' | 'UNKNOWN';
+    isERC8004: boolean;
+    isERC4337: boolean;
+  }> = [];
+
+  console.log(`\n[Enrichment] Classifying ${accounts.length} accounts with tier data...`);
+
+  let processed = 0;
+  for (const account of accounts) {
+    processed++;
+    if (processed % 10 === 0 || processed === accounts.length) {
+      process.stdout.write(`\r[Enrichment] Classified ${processed}/${accounts.length} accounts...`);
+    }
+
+    try {
+      const validation = await validateAccount(account.address, chain);
+
+      // ENFORCE: Filter out tier 0 (EOAs) - Agent-first execution guarantee
+      if (!validation.isValid || validation.agentTier === 0) {
+        console.log(`\n[Enrichment] Rejected EOA: ${account.address.slice(0, 10)}...`);
+        continue;
+      }
+
+      enriched.push({
+        ...account,
+        agentTier: validation.agentTier,
+        agentType: validation.agentType,
+        isERC8004: validation.isERC8004Registered ?? false,
+        isERC4337: validation.isERC4337Compatible ?? false,
+      });
+    } catch (error) {
+      console.log(`\n[Enrichment] Validation error for ${account.address.slice(0, 10)}..., defaulting to tier 3`);
+      // Default to tier 3 on error
+      enriched.push({
+        ...account,
+        agentTier: 3,
+        agentType: 'UNKNOWN',
+        isERC8004: false,
+        isERC4337: false,
+      });
+    }
+  }
+
+  console.log('\n');
+  return enriched;
+}
+
 async function main() {
   const { chain, source, protocols, limit, minActivity, days } = parseArgs();
 
@@ -339,27 +415,50 @@ async function main() {
     }
   }
 
-  // Sort by total activity and multi-source validation
-  const rankedAccounts = Array.from(allAccounts.values())
-    .sort((a, b) => {
-      // Prioritize accounts found by multiple sources
-      if (a.sources.length !== b.sources.length) {
-        return b.sources.length - a.sources.length;
-      }
-      // Then by activity count
-      return b.totalActivity - a.totalActivity;
-    });
+  // Enrich with tier data - Agent-first execution guarantee
+  const enrichedAccounts = await enrichWithTierData(Array.from(allAccounts.values()), chain);
+
+  // Sort by tier-based priority (1 > 2 > 3), then multi-source, then activity
+  const rankedAccounts = enrichedAccounts.sort((a, b) => {
+    // Tier 1 (ERC-8004) has highest priority
+    if (a.agentTier !== b.agentTier) {
+      return a.agentTier - b.agentTier; // Lower tier number = higher priority
+    }
+    // Within same tier, prioritize accounts found by multiple sources
+    if (a.sources.length !== b.sources.length) {
+      return b.sources.length - a.sources.length;
+    }
+    // Then by activity count
+    return b.totalActivity - a.totalActivity;
+  });
+
+  // Calculate tier distribution
+  const tierStats = {
+    tier1: rankedAccounts.filter((a) => a.agentTier === 1).length,
+    tier2: rankedAccounts.filter((a) => a.agentTier === 2).length,
+    tier3: rankedAccounts.filter((a) => a.agentTier === 3).length,
+  };
 
   console.log('=== Aggregated Rankings (All Sources) ===\n');
   console.log(`Total Unique Accounts: ${rankedAccounts.length}`);
   console.log(`Multi-Source Accounts: ${rankedAccounts.filter((a) => a.sources.length > 1).length}`);
   console.log();
+  console.log('Tier Distribution:');
+  console.log(`  Tier 1 (ERC-8004 Agents):    ${tierStats.tier1}`);
+  console.log(`  Tier 2 (ERC-4337 Accounts):  ${tierStats.tier2}`);
+  console.log(`  Tier 3 (Smart Contracts):    ${tierStats.tier3}`);
+  console.log();
 
   if (rankedAccounts.length > 0) {
-    console.log('Top 10 Accounts:');
+    console.log('Top 10 Accounts (Tier-Prioritized):');
     rankedAccounts.slice(0, 10).forEach((acc, idx) => {
+      const tierLabel =
+        acc.agentTier === 1 ? 'T1 (ERC-8004)' :
+        acc.agentTier === 2 ? 'T2 (ERC-4337)' :
+        'T3 (Smart)';
       console.log(
         `${idx + 1}. ${acc.address.slice(0, 10)}... - ` +
+        `${tierLabel} - ` +
         `${acc.totalActivity} ops - ` +
         `Sources: ${acc.sources.join(', ')}`
       );
