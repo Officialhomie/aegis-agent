@@ -26,6 +26,7 @@ import {
 } from '../cache';
 import { IDENTITY_REGISTRY_ABI } from '../identity/abis/identity-registry';
 import { getIdentityRegistryAddress } from '../identity/erc8004';
+import { validateAccount } from '../validation/account-validator';
 
 /**
  * Whether to use strict observation mode (fail on errors).
@@ -174,6 +175,18 @@ export async function observeERC8004RegisteredAgents(): Promise<Observation[]> {
       if (agentWalletAddress && wallet === agentWalletAddress.toLowerCase()) continue;
 
       try {
+        // Validate account and get tier data - Agent-first execution guarantee
+        const validation = await validateAccount(wallet as `0x${string}`, 'base');
+
+        // ENFORCE: Reject tier 0 (EOAs) - should never happen for ERC-8004 but enforce
+        if (!validation.isValid || validation.agentTier === 0) {
+          logger.warn('[Sponsorship] ERC-8004 wallet is EOA - rejecting', {
+            wallet,
+            agentId: agentId.toString(),
+          });
+          continue;
+        }
+
         const balance = await client.getBalance({ address: wallet as `0x${string}` });
         const eth = Number(formatEther(balance));
         if (eth >= LOW_GAS_THRESHOLD_ETH) continue;
@@ -190,8 +203,13 @@ export async function observeERC8004RegisteredAgents(): Promise<Observation[]> {
             historicalTxCount: Number(txCount),
             belowThreshold: true,
             erc8004AgentId: agentId.toString(),
+            // Agent-first execution guarantees
+            agentTier: validation.agentTier,
+            agentType: validation.agentType,
+            isERC8004: validation.isERC8004Registered ?? false,
+            isERC4337: validation.isERC4337Compatible ?? false,
           },
-          context: `ERC-8004 registered agent with low gas (${eth} ETH, agentId ${agentId.toString()})`,
+          context: `ERC-8004 registered agent with low gas (${eth} ETH, agentId ${agentId.toString()}, tier ${validation.agentTier})`,
         });
       } catch (error) {
         logger.warn('[Sponsorship] Failed to evaluate ERC-8004 agent wallet for sponsorship', {
@@ -1117,10 +1135,37 @@ export async function observeContractInteractions(
   const lowGasThreshold = LOW_GAS_THRESHOLD_ETH;
   let balanceFailures = 0;
 
-  // Only process validated smart accounts
+  // Only process validated smart accounts - add tier data
+  const tierStats = { tier1: 0, tier2: 0, tier3: 0 };
+
   for (const sender of smartAccountSenders) {
     const meta = seenSenders.get(sender.toLowerCase());
     if (!meta) continue;
+
+    // Get tier data for agent-first execution guarantees
+    let validation;
+    try {
+      validation = await validateAccount(sender as `0x${string}`, chainName);
+      // Track tier distribution
+      if (validation.agentTier === 1) tierStats.tier1++;
+      else if (validation.agentTier === 2) tierStats.tier2++;
+      else if (validation.agentTier === 3) tierStats.tier3++;
+    } catch (err) {
+      logger.debug('[Sponsorship] Failed to validate account tier, defaulting to tier 3', {
+        sender: sender.slice(0, 10) + '...',
+        error: err instanceof Error ? err.message : String(err),
+      });
+      // Default to tier 3 on validation error
+      validation = {
+        isValid: true,
+        accountType: 'smart_account' as const,
+        reason: 'Smart contract (tier validation failed)',
+        agentTier: 3,
+        agentType: 'UNKNOWN' as const,
+      };
+      tierStats.tier3++;
+    }
+
     try {
       const balance = await client.getBalance({ address: sender as `0x${string}` });
       const eth = Number(formatEther(balance));
@@ -1135,8 +1180,13 @@ export async function observeContractInteractions(
           contractTxCount: meta.txCount,
           balanceETH: eth,
           belowThreshold: eth < lowGasThreshold,
+          // Agent-first execution guarantees
+          agentTier: validation.agentTier,
+          agentType: validation.agentType,
+          isERC8004: validation.isERC8004Registered ?? false,
+          isERC4337: validation.isERC4337Compatible ?? false,
         },
-        context: `Contract interaction (${meta.targetContract.slice(0, 10)}..., ${meta.txCount} txs)`,
+        context: `Contract interaction (${meta.targetContract.slice(0, 10)}..., ${meta.txCount} txs, tier ${validation.agentTier})`,
       });
     } catch (err) {
       balanceFailures += 1;
@@ -1152,8 +1202,13 @@ export async function observeContractInteractions(
           contractTxCount: meta.txCount,
           balanceETH: 0,
           belowThreshold: true,
+          // Agent-first execution guarantees
+          agentTier: validation.agentTier,
+          agentType: validation.agentType,
+          isERC8004: validation.isERC8004Registered ?? false,
+          isERC4337: validation.isERC4337Compatible ?? false,
         },
-        context: `Contract interaction (${meta.targetContract.slice(0, 10)}..., ${meta.txCount} txs, balance unknown)`,
+        context: `Contract interaction (${meta.targetContract.slice(0, 10)}..., ${meta.txCount} txs, balance unknown, tier ${validation.agentTier})`,
       });
       logger.debug('[Sponsorship] observeContractInteractions balance check failed, including candidate anyway', {
         sender: sender.slice(0, 10) + '...',
@@ -1161,6 +1216,14 @@ export async function observeContractInteractions(
       });
     }
   }
+
+  // Log tier distribution
+  logger.info('[Sponsorship] Protocol discovery tier distribution', {
+    tier1: tierStats.tier1,
+    tier2: tierStats.tier2,
+    tier3: tierStats.tier3,
+    total: observations.length,
+  });
 
   if (balanceFailures > 0) {
     logger.warn('[Sponsorship] observeContractInteractions: RPC balance check failed for some senders, candidates still included', {
