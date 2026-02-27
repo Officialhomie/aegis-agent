@@ -11,6 +11,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { verifyApiAuth } from '@/src/lib/auth/api-auth';
 import { enqueueRequest } from '@/src/lib/agent/queue/sponsorship-queue';
+import { validateAccount } from '@/src/lib/agent/validation/account-validator';
 
 const RequestSchema = z.object({
   agentWallet: z.string().regex(/^0x[a-fA-F0-9]{40}$/, 'Invalid agent wallet address'),
@@ -40,6 +41,21 @@ export async function POST(request: Request): Promise<Response> {
       );
     }
 
+    // Validate account and get tier data - Agent-first execution guarantee
+    const validation = await validateAccount(parsed.data.agentWallet as `0x${string}`, 'base');
+
+    // ENFORCE: Reject EOAs (tier 0)
+    if (!validation.isValid || validation.agentTier === 0) {
+      return NextResponse.json(
+        {
+          error: 'EOA rejected - Agent-first policy requires smart accounts only',
+          address: parsed.data.agentWallet,
+          reason: validation.reason,
+        },
+        { status: 400 }
+      );
+    }
+
     const { requestId, position } = await enqueueRequest({
       agentAddress: parsed.data.agentWallet,
       protocolId: parsed.data.protocolId,
@@ -48,6 +64,12 @@ export async function POST(request: Request): Promise<Response> {
       targetContract: parsed.data.targetContract,
       maxGasLimit: parsed.data.maxGasLimit,
       signature: parsed.data.signature,
+      // Agent-first execution guarantees
+      agentTier: validation.agentTier,
+      agentType: validation.agentType,
+      isERC8004: validation.isERC8004Registered ?? false,
+      isERC4337: validation.isERC4337Compatible ?? false,
+      priority: validation.agentTier === 1 ? 200 : validation.agentTier === 2 ? 150 : 100,
     });
 
     return NextResponse.json({
