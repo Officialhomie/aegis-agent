@@ -35,6 +35,13 @@ export interface SponsorshipRequest {
   signature?: string;
   signatureTimestamp?: number;
 
+  // Agent-first execution guarantees
+  agentTier: number; // 0 = rejected, 1 = ERC-8004, 2 = ERC-4337, 3 = smart contract
+  agentType: 'ERC8004_AGENT' | 'ERC4337_ACCOUNT' | 'SMART_CONTRACT' | 'EOA' | 'UNKNOWN';
+  isERC8004: boolean;
+  isERC4337: boolean;
+  priority: number; // Higher = more important (default 100)
+
   // Status tracking
   status: RequestStatus;
   processingStartedAt?: number;
@@ -131,6 +138,22 @@ export async function enqueueRequest(
   const store = await getStateStore();
   const keys = getQueueKeys();
 
+  // ENFORCE: Reject EOAs (tier 0) - Agent-first execution guarantee
+  if (request.agentTier === 0 || request.agentType === 'EOA') {
+    const error = `EOA rejected - Agent-first policy requires smart accounts only (address: ${request.agentAddress})`;
+    logger.error('[Queue] EOA rejection', {
+      agentAddress: request.agentAddress,
+      agentTier: request.agentTier,
+      agentType: request.agentType,
+    });
+    throw new Error(error);
+  }
+
+  // Validate tier is present
+  if (!request.agentTier || request.agentTier < 1 || request.agentTier > 3) {
+    throw new Error(`Invalid agent tier: ${request.agentTier}. Must be 1, 2, or 3.`);
+  }
+
   const requestId = generateRequestId();
   const fullRequest: SponsorshipRequest = {
     ...request,
@@ -139,6 +162,7 @@ export async function enqueueRequest(
     requestedAt: Date.now(),
     retryCount: 0,
     maxRetries: MAX_RETRIES,
+    priority: request.priority ?? 100, // Default priority
   };
 
   // Acquire lock for queue modification
@@ -172,6 +196,11 @@ export async function enqueueRequest(
     protocolId: request.protocolId,
     agentAddress: request.agentAddress.slice(0, 10) + '...',
     source: request.source,
+    agentTier: request.agentTier,
+    agentType: request.agentType,
+    isERC8004: request.isERC8004,
+    isERC4337: request.isERC4337,
+    priority: request.priority,
     position,
   });
 
@@ -181,6 +210,12 @@ export async function enqueueRequest(
 /**
  * Get the next pending request for processing.
  * Moves the request from pending to processing state.
+ *
+ * TIER-BASED PRIORITIZATION:
+ * - Tier 1 (ERC-8004 agents) processed FIRST
+ * - Tier 2 (ERC-4337 accounts) processed SECOND
+ * - Tier 3 (smart contracts) processed THIRD
+ * - Within same tier: higher priority first, then older requests first
  */
 export async function dequeueRequest(): Promise<SponsorshipRequest | null> {
   const store = await getStateStore();
@@ -197,50 +232,84 @@ export async function dequeueRequest(): Promise<SponsorshipRequest | null> {
     return null;
   }
 
-  // Pop first item (FIFO)
-  const requestId = pending.items.shift()!;
+  // Load ALL pending requests to sort by tier
+  const requests: Array<SponsorshipRequest & { requestId: string }> = [];
+  for (const requestId of pending.items) {
+    const requestData = await store.get(keys.request(requestId));
+    if (requestData) {
+      try {
+        const request = JSON.parse(requestData) as SponsorshipRequest;
+        requests.push({ ...request, requestId });
+      } catch (error) {
+        logger.error('[Queue] Failed to parse request', { requestId, error });
+      }
+    }
+  }
+
+  if (requests.length === 0) {
+    return null;
+  }
+
+  // Sort by tier-based priority:
+  // 1. Lower tier number = higher priority (1 > 2 > 3)
+  // 2. Within same tier, higher priority value first
+  // 3. Within same tier and priority, older requests first (FIFO)
+  requests.sort((a, b) => {
+    // Tier comparison (lower tier = higher priority)
+    if (a.agentTier !== b.agentTier) {
+      return a.agentTier - b.agentTier;
+    }
+
+    // Priority comparison (higher priority = first)
+    if (a.priority !== b.priority) {
+      return b.priority - a.priority;
+    }
+
+    // Age comparison (older = first)
+    return a.requestedAt - b.requestedAt;
+  });
+
+  // Take highest priority request
+  const selectedRequest = requests[0];
+  const requestId = selectedRequest.requestId;
+
+  // Remove from pending list
+  const requestIndex = pending.items.indexOf(requestId);
+  if (requestIndex !== -1) {
+    pending.items.splice(requestIndex, 1);
+  }
   pending.updatedAt = Date.now();
   await saveQueueList(store, keys.pending, pending);
 
-  // Get request data
-  const requestData = await store.get(keys.request(requestId));
-  if (!requestData) {
-    logger.warn('[Queue] Request data not found', { requestId });
-    return null;
-  }
+  // Update status to processing
+  const updatedRequest: SponsorshipRequest = {
+    ...selectedRequest,
+    status: 'processing',
+    processingStartedAt: Date.now(),
+  };
 
-  try {
-    const request = JSON.parse(requestData) as SponsorshipRequest;
+  await store.set(
+    keys.request(requestId),
+    JSON.stringify(updatedRequest),
+    { px: REQUEST_TTL_MS }
+  );
 
-    // Update status to processing
-    const updatedRequest: SponsorshipRequest = {
-      ...request,
-      status: 'processing',
-      processingStartedAt: Date.now(),
-    };
+  // Add to processing list
+  const processing = await getQueueList(store, keys.processing);
+  processing.items.push(requestId);
+  processing.updatedAt = Date.now();
+  await saveQueueList(store, keys.processing, processing);
 
-    await store.set(
-      keys.request(requestId),
-      JSON.stringify(updatedRequest),
-      { px: REQUEST_TTL_MS }
-    );
+  logger.info('[Queue] Request dequeued (tier-based priority)', {
+    requestId,
+    protocolId: selectedRequest.protocolId,
+    agentTier: selectedRequest.agentTier,
+    agentType: selectedRequest.agentType,
+    priority: selectedRequest.priority,
+    queuePosition: `${requestIndex + 1}/${pending.items.length + 1}`,
+  });
 
-    // Add to processing list
-    const processing = await getQueueList(store, keys.processing);
-    processing.items.push(requestId);
-    processing.updatedAt = Date.now();
-    await saveQueueList(store, keys.processing, processing);
-
-    logger.info('[Queue] Request dequeued for processing', {
-      requestId,
-      protocolId: request.protocolId,
-    });
-
-    return updatedRequest;
-  } catch (error) {
-    logger.error('[Queue] Failed to parse request data', { requestId, error });
-    return null;
-  }
+  return updatedRequest;
 }
 
 /**
