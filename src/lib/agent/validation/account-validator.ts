@@ -16,6 +16,9 @@ export interface AccountValidationResult {
   bytecodeHash?: string;
   isERC4337Compatible?: boolean;
   isERC8004Registered?: boolean;
+  // Agent-first execution guarantees
+  agentTier: number; // 0 = EOA (rejected), 1 = ERC-8004, 2 = ERC-4337, 3 = smart contract
+  agentType: 'ERC8004_AGENT' | 'ERC4337_ACCOUNT' | 'SMART_CONTRACT' | 'EOA' | 'UNKNOWN';
 }
 
 /**
@@ -44,7 +47,7 @@ export async function isSmartAccount(
     const bytecode = await client.getBytecode({ address });
 
     // EOAs have no bytecode or '0x'
-    const hasCode = bytecode && bytecode !== '0x' && bytecode.length > 2;
+    const hasCode = Boolean(bytecode && bytecode !== '0x' && bytecode.length > 2);
 
     logger.debug('[AccountValidator] Smart account check', {
       address: address.slice(0, 10) + '...',
@@ -124,25 +127,47 @@ export async function validateAccount(
       isValid: false,
       accountType: 'eoa',
       reason: 'Address is an EOA (no contract bytecode)',
+      agentTier: 0, // REJECTED - EOAs never sponsored
+      agentType: 'EOA',
     };
   }
 
-  // Check ERC-4337 compatibility
+  // Check ERC-8004 registration FIRST (highest priority)
+  const erc8004Registered = await isERC8004RegisteredAgent(address, chainName);
+
+  // Check ERC-4337 compatibility SECOND
   const erc4337Compatible = await isERC4337Compatible(address, chainName);
 
-  // Check ERC-8004 registration
-  const erc8004Registered = await isERC8004RegisteredAgent(address, chainName);
+  // Determine tier based on agent-first prioritization
+  let agentTier: number;
+  let agentType: 'ERC8004_AGENT' | 'ERC4337_ACCOUNT' | 'SMART_CONTRACT' | 'EOA' | 'UNKNOWN';
+  let reason: string;
+
+  if (erc8004Registered) {
+    // Tier 1: ERC-8004 registered agent (PRIORITY)
+    agentTier = 1;
+    agentType = 'ERC8004_AGENT';
+    reason = 'ERC-8004 registered agent';
+  } else if (erc4337Compatible) {
+    // Tier 2: ERC-4337 smart account (STANDARD)
+    agentTier = 2;
+    agentType = 'ERC4337_ACCOUNT';
+    reason = 'ERC-4337 compatible smart account';
+  } else {
+    // Tier 3: Other smart contract (FALLBACK)
+    agentTier = 3;
+    agentType = 'SMART_CONTRACT';
+    reason = 'Smart contract account';
+  }
 
   return {
     isValid: true,
     accountType: 'smart_account',
-    reason: erc8004Registered
-      ? 'ERC-8004 registered agent'
-      : erc4337Compatible
-      ? 'ERC-4337 compatible smart account'
-      : 'Smart contract account',
+    reason,
     isERC4337Compatible: erc4337Compatible,
     isERC8004Registered: erc8004Registered,
+    agentTier,
+    agentType,
   };
 }
 
