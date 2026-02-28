@@ -34,6 +34,8 @@ import {
   parseNumber,
   parsePeriod,
   extractReason,
+  parseTier,
+  parseAgentAddress,
 } from './parsers';
 import { getAnalyticsSummary, formatAnalyticsMessage } from './analytics';
 import {
@@ -174,6 +176,53 @@ export function parseCommand(input: string): ParsedCommand {
   ) {
     const wallet = extractAddress(input);
     return { name: 'passport', args: { wallet }, rawInput: input };
+  }
+
+  // Agent-first tier management commands
+  if (lower.includes('set min tier') || lower.includes('minimum tier')) {
+    const tier = parseTier(input);
+    return { name: 'set_min_tier', args: { tier: tier?.toString() ?? '1' }, rawInput: input };
+  }
+
+  if (
+    lower.includes('prioritize') ||
+    lower.includes('boost agent') ||
+    lower.includes('override tier')
+  ) {
+    const address = parseAgentAddress(input);
+    const tier = parseTier(input);
+    return {
+      name: 'prioritize_agent',
+      args: { address, tier: tier?.toString() ?? '1' },
+      rawInput: input,
+    };
+  }
+
+  if (lower.includes('pause tier')) {
+    const tier = parseTier(input);
+    const durationMs = parseDuration(input);
+    return {
+      name: 'pause_tier',
+      args: { tier: tier?.toString() ?? '3', durationMs: durationMs.toString() },
+      rawInput: input,
+    };
+  }
+
+  if (lower.includes('resume tier')) {
+    const tier = parseTier(input);
+    return { name: 'resume_tier', args: { tier: tier?.toString() ?? '3' }, rawInput: input };
+  }
+
+  if (lower.includes('queue stats') || lower.includes('show queue') || lower.includes('queue status')) {
+    return { name: 'queue_stats', args: {}, rawInput: input };
+  }
+
+  if (
+    lower.includes('tier report') ||
+    lower.includes('tier distribution') ||
+    lower.includes('tier status')
+  ) {
+    return { name: 'tier_report', args: {}, rawInput: input };
   }
 
   return { name: 'help', args: {}, rawInput: input };
@@ -581,6 +630,272 @@ export async function executeCommand(cmd: ParsedCommand, sessionId?: string): Pr
       }
     }
 
+    // Agent-first tier management commands
+    case 'set_min_tier': {
+      try {
+        const tier = parseInt(cmd.args.tier ?? '1');
+        if (tier < 1 || tier > 3) {
+          return { success: false, message: 'Invalid tier. Must be 1, 2, or 3.' };
+        }
+
+        if (!sessionId) {
+          return { success: false, message: 'Session ID required for this command' };
+        }
+
+        const protocolId = await getProtocolIdFromSession(sessionId);
+        const prisma = getPrisma();
+
+        await prisma.protocolSponsor.update({
+          where: { protocolId },
+          data: { minAgentTier: tier },
+        });
+
+        const tierLabel = tier === 1 ? 'ERC-8004 agents only' : tier === 2 ? 'ERC-4337+ accounts' : 'All smart contracts';
+        return {
+          success: true,
+          message: `Minimum tier set to ${tier} (${tierLabel})`,
+        };
+      } catch (err) {
+        return {
+          success: false,
+          message: `Failed to set minimum tier: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    }
+
+    case 'prioritize_agent': {
+      try {
+        const address = cmd.args.address;
+        const tier = parseInt(cmd.args.tier ?? '1');
+
+        if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address)) {
+          return { success: false, message: 'Invalid agent address' };
+        }
+
+        if (tier < 1 || tier > 3) {
+          return { success: false, message: 'Invalid tier. Must be 1, 2, or 3.' };
+        }
+
+        if (!sessionId) {
+          return { success: false, message: 'Session ID required for this command' };
+        }
+
+        const protocolId = await getProtocolIdFromSession(sessionId);
+        const prisma = getPrisma();
+
+        // Update or create ApprovedAgent with tier override
+        await prisma.approvedAgent.upsert({
+          where: {
+            protocolId_agentAddress: {
+              protocolId,
+              agentAddress: address,
+            },
+          },
+          create: {
+            protocolId,
+            agentAddress: address,
+            approvedBy: 'openclaw',
+            agentTier: tier,
+            tierOverride: true,
+          },
+          update: {
+            agentTier: tier,
+            tierOverride: true,
+            lastValidated: new Date(),
+          },
+        });
+
+        return {
+          success: true,
+          message: `Agent ${address.slice(0, 10)}... prioritized to tier ${tier}`,
+        };
+      } catch (err) {
+        return {
+          success: false,
+          message: `Failed to prioritize agent: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    }
+
+    case 'pause_tier': {
+      try {
+        const tier = parseInt(cmd.args.tier ?? '3');
+        const durationMs = parseInt(cmd.args.durationMs ?? '0');
+
+        if (tier < 1 || tier > 3) {
+          return { success: false, message: 'Invalid tier. Must be 1, 2, or 3.' };
+        }
+
+        if (!sessionId) {
+          return { success: false, message: 'Session ID required for this command' };
+        }
+
+        const protocolId = await getProtocolIdFromSession(sessionId);
+        const until = new Date(Date.now() + durationMs);
+        const prisma = getPrisma();
+
+        // Get current tierPausedUntil JSON
+        const protocol = await prisma.protocolSponsor.findUnique({
+          where: { protocolId },
+          select: { tierPausedUntil: true },
+        });
+
+        const pausedUntil = (protocol?.tierPausedUntil as Record<string, string | null>) ?? {};
+        pausedUntil[`tier${tier}`] = until.toISOString();
+
+        await prisma.protocolSponsor.update({
+          where: { protocolId },
+          data: { tierPausedUntil: pausedUntil },
+        });
+
+        const hours = Math.floor(durationMs / (1000 * 60 * 60));
+        const minutes = Math.floor((durationMs % (1000 * 60 * 60)) / (1000 * 60));
+        const timeStr = hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+
+        return {
+          success: true,
+          message: `Tier ${tier} paused for ${timeStr} (until ${until.toLocaleString()})`,
+        };
+      } catch (err) {
+        return {
+          success: false,
+          message: `Failed to pause tier: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    }
+
+    case 'resume_tier': {
+      try {
+        const tier = parseInt(cmd.args.tier ?? '3');
+
+        if (tier < 1 || tier > 3) {
+          return { success: false, message: 'Invalid tier. Must be 1, 2, or 3.' };
+        }
+
+        if (!sessionId) {
+          return { success: false, message: 'Session ID required for this command' };
+        }
+
+        const protocolId = await getProtocolIdFromSession(sessionId);
+        const prisma = getPrisma();
+
+        // Get current tierPausedUntil JSON
+        const protocol = await prisma.protocolSponsor.findUnique({
+          where: { protocolId },
+          select: { tierPausedUntil: true },
+        });
+
+        const pausedUntil = (protocol?.tierPausedUntil as Record<string, string | null>) ?? {};
+        pausedUntil[`tier${tier}`] = null;
+
+        await prisma.protocolSponsor.update({
+          where: { protocolId },
+          data: { tierPausedUntil: pausedUntil },
+        });
+
+        return {
+          success: true,
+          message: `Tier ${tier} resumed`,
+        };
+      } catch (err) {
+        return {
+          success: false,
+          message: `Failed to resume tier: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    }
+
+    case 'queue_stats': {
+      try {
+        const { printQueueReport } = await import('../queue/queue-analytics');
+
+        // Capture console output
+        const originalLog = console.log;
+        const lines: string[] = [];
+        console.log = (...args) => {
+          lines.push(args.join(' '));
+        };
+
+        await printQueueReport();
+
+        console.log = originalLog;
+
+        return {
+          success: true,
+          message: lines.join('\n'),
+        };
+      } catch (err) {
+        return {
+          success: false,
+          message: `Failed to get queue stats: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    }
+
+    case 'tier_report': {
+      try {
+        const prisma = getPrisma();
+
+        // Get tier distribution from SponsorshipRecord
+        const records = await prisma.sponsorshipRecord.groupBy({
+          by: ['agentTier'],
+          _count: true,
+        });
+
+        // Get tier distribution from QueueItem
+        const queueItems = await prisma.queueItem.groupBy({
+          by: ['agentTier', 'status'],
+          _count: true,
+        });
+
+        const tierCounts = {
+          tier1: { total: 0, pending: 0, processing: 0 },
+          tier2: { total: 0, pending: 0, processing: 0 },
+          tier3: { total: 0, pending: 0, processing: 0 },
+        };
+
+        records.forEach((r) => {
+          if (r.agentTier === 1) tierCounts.tier1.total = r._count;
+          else if (r.agentTier === 2) tierCounts.tier2.total = r._count;
+          else if (r.agentTier === 3) tierCounts.tier3.total = r._count;
+        });
+
+        queueItems.forEach((q) => {
+          const key = `tier${q.agentTier}` as 'tier1' | 'tier2' | 'tier3';
+          if (key in tierCounts) {
+            if (q.status === 'pending') tierCounts[key].pending = q._count;
+            else if (q.status === 'processing') tierCounts[key].processing = q._count;
+          }
+        });
+
+        const message = [
+          'Tier Distribution Report:',
+          '',
+          `Tier 1 (ERC-8004 Agents):`,
+          `  Sponsored: ${tierCounts.tier1.total}`,
+          `  Pending: ${tierCounts.tier1.pending}`,
+          `  Processing: ${tierCounts.tier1.processing}`,
+          '',
+          `Tier 2 (ERC-4337 Accounts):`,
+          `  Sponsored: ${tierCounts.tier2.total}`,
+          `  Pending: ${tierCounts.tier2.pending}`,
+          `  Processing: ${tierCounts.tier2.processing}`,
+          '',
+          `Tier 3 (Smart Contracts):`,
+          `  Sponsored: ${tierCounts.tier3.total}`,
+          `  Pending: ${tierCounts.tier3.pending}`,
+          `  Processing: ${tierCounts.tier3.processing}`,
+        ].join('\n');
+
+        return { success: true, message };
+      } catch (err) {
+        return {
+          success: false,
+          message: `Failed to get tier report: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    }
+
     case 'help':
     default:
       return {
@@ -607,6 +922,14 @@ export async function executeCommand(cmd: ParsedCommand, sessionId?: string): Pr
           '  set budget to $500            — Update daily spend cap',
           '  set gas cap to 50 gwei        — Update max gas price',
           '  block wallet 0x...            — Block a wallet address',
+          '',
+          'TIER MANAGEMENT (Agent-First):',
+          '  set min tier to 1             — Set minimum tier (1=ERC-8004, 2=ERC-4337, 3=Smart Contract)',
+          '  prioritize agent 0x... to 1   — Override agent tier',
+          '  pause tier 2 for 1 hour       — Temporarily pause tier',
+          '  resume tier 2                 — Resume paused tier',
+          '  queue stats                   — Show queue analytics',
+          '  tier report                   — Show tier distribution',
           '',
           'FUNDING:',
           '  topup 1000                    — Get instructions to add funds',
