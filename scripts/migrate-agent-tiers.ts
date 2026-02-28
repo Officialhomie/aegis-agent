@@ -10,6 +10,11 @@
  * - Tier 3 (FALLBACK): Other smart contracts
  * - Tier 0 (REJECTED): EOAs - never persisted
  *
+ * Run in order (after schema has agent tier columns).
+ * IMPORTANT: Run from the app root (directory that has package.json, prisma/, and .env).
+ *   1. npm run db:migrate -- --name add_agent_tiers   # if columns not yet in DB
+ *   2. npm run db:migrate-agent-tiers                 # or: npx tsx scripts/migrate-agent-tiers.ts
+ *
  * Usage:
  *   npx tsx scripts/migrate-agent-tiers.ts
  *   npx tsx scripts/migrate-agent-tiers.ts --dry-run
@@ -17,11 +22,12 @@
  */
 
 import 'dotenv/config';
-import { PrismaClient, AgentType } from '@prisma/client';
+import { AgentType } from '@prisma/client';
+import { getPrisma } from '../src/lib/db';
 import { validateAccount } from '../src/lib/agent/validation/account-validator';
 import type { Address } from 'viem';
 
-const prisma = new PrismaClient();
+const prisma = getPrisma();
 
 interface MigrationStats {
   totalAddresses: number;
@@ -149,7 +155,7 @@ async function migrateData(
   const sponsorshipRecords = await prisma.sponsorshipRecord.findMany({
     select: {
       id: true,
-      smartAccountAddress: true,
+      userAddress: true,
       agentTier: true,
     },
   });
@@ -160,7 +166,7 @@ async function migrateData(
   const approvedAgents = await prisma.approvedAgent.findMany({
     select: {
       id: true,
-      walletAddress: true,
+      agentAddress: true,
       agentTier: true,
     },
   });
@@ -170,13 +176,13 @@ async function migrateData(
   // Step 3: Collect unique addresses
   const uniqueAddresses = new Set<Address>();
   sponsorshipRecords.forEach((record) => {
-    if (record.smartAccountAddress) {
-      uniqueAddresses.add(record.smartAccountAddress as Address);
+    if (record.userAddress) {
+      uniqueAddresses.add(record.userAddress as Address);
     }
   });
   approvedAgents.forEach((agent) => {
-    if (agent.walletAddress) {
-      uniqueAddresses.add(agent.walletAddress as Address);
+    if (agent.agentAddress) {
+      uniqueAddresses.add(agent.agentAddress as Address);
     }
   });
 
@@ -230,9 +236,9 @@ async function migrateData(
   // Step 5: Update SponsorshipRecord entries
   console.log('[Migration] Step 5: Updating SponsorshipRecord entries...');
   for (const record of sponsorshipRecords) {
-    if (!record.smartAccountAddress) continue;
+    if (!record.userAddress) continue;
 
-    const tierData = addressTierMap.get(record.smartAccountAddress as Address);
+    const tierData = addressTierMap.get(record.userAddress as Address);
     if (!tierData) continue;
 
     try {
@@ -248,7 +254,7 @@ async function migrateData(
       stats.sponsorshipRecordsUpdated++;
     } catch (error) {
       stats.errors.push({
-        address: record.smartAccountAddress,
+        address: record.userAddress,
         error: `SponsorshipRecord update failed: ${error instanceof Error ? error.message : String(error)}`,
       });
     }
@@ -258,9 +264,9 @@ async function migrateData(
   // Step 6: Update ApprovedAgent entries
   console.log('[Migration] Step 6: Updating ApprovedAgent entries...');
   for (const agent of approvedAgents) {
-    if (!agent.walletAddress) continue;
+    if (!agent.agentAddress) continue;
 
-    const tierData = addressTierMap.get(agent.walletAddress as Address);
+    const tierData = addressTierMap.get(agent.agentAddress as Address);
     if (!tierData) continue;
 
     try {
@@ -275,7 +281,7 @@ async function migrateData(
       stats.approvedAgentsUpdated++;
     } catch (error) {
       stats.errors.push({
-        address: agent.walletAddress,
+        address: agent.agentAddress,
         error: `ApprovedAgent update failed: ${error instanceof Error ? error.message : String(error)}`,
       });
     }
