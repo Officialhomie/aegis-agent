@@ -21,7 +21,14 @@ export type CommandName =
   | 'topup'
   | 'passport'
   | 'campaign'
-  | 'campaign_status';
+  | 'campaign_status'
+  // Agent-first tier management commands
+  | 'set_min_tier'
+  | 'prioritize_agent'
+  | 'pause_tier'
+  | 'resume_tier'
+  | 'queue_stats'
+  | 'tier_report';
 
 /** Incoming request from OpenClaw (POST /api/openclaw) */
 export interface OpenClawRequest {
