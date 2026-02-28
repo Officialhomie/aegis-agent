@@ -27,6 +27,7 @@
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
+    "db:migrate-agent-tiers": "tsx scripts/migrate-agent-tiers.ts",
     "db:studio": "prisma studio",
     "db:seed": "prisma db seed",
     "register:moltbook": "tsx scripts/register-moltbook.ts",
