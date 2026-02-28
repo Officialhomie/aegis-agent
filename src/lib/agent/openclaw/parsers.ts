@@ -161,3 +161,41 @@ export function extractReason(input: string): string | undefined {
 
   return undefined;
 }
+
+/**
+ * Parse tier number from input
+ * Examples: "tier 1", "tier 2", "set min tier to 1"
+ * Returns tier number (1, 2, or 3) or null if invalid
+ */
+export function parseTier(input: string): number | null {
+  const lower = input.toLowerCase();
+
+  // Match "tier 1", "tier 2", "tier 3"
+  const tierMatch = lower.match(/tier\s*(\d+)/);
+  if (tierMatch) {
+    const tier = parseInt(tierMatch[1]);
+    if (tier >= 1 && tier <= 3) {
+      return tier;
+    }
+  }
+
+  // Match standalone number after "to" or "at" (e.g., "set min tier to 1")
+  const toMatch = lower.match(/(?:to|at)\s*(\d+)/);
+  if (toMatch) {
+    const tier = parseInt(toMatch[1]);
+    if (tier >= 1 && tier <= 3) {
+      return tier;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Parse agent address from input
+ * Examples: "boost agent 0xabc", "prioritize 0x123"
+ * Returns address or empty string
+ */
+export function parseAgentAddress(input: string): string {
+  return extractAddress(input);
+}
