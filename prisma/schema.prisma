@@ -693,3 +693,64 @@ enum AgentType {
   EOA                  // Tier 0: REJECTED (no contract bytecode)
   UNKNOWN              // Validation failed or pending
 }
+
+// ============================================================================
+// OpenClaw Audit Trail
+// Every OpenClaw command is logged for security and compliance
+// ============================================================================
+
+model OpenClawAudit {
+  id            String   @id @default(cuid())
+  sessionId     String
+  protocolId    String
+  userPhoneHash String?  // Hashed phone number, never raw PII
+  commandName   String
+  commandArgs   Json
+  rawInput      String
+  confidence    Float    @default(1.0)
+  success       Boolean
+  errorMessage  String?
+  executionMs   Int
+  createdAt     DateTime @default(now())
+
+  @@index([sessionId])
+  @@index([protocolId, createdAt])
+  @@index([commandName])
+}
+
+// ============================================================================
+// Heartbeat & Liveness Monitoring
+// Scheduled heartbeat transactions for agent liveness tracking
+// ============================================================================
+
+model HeartbeatSchedule {
+  id           String    @id @default(cuid())
+  protocolId   String
+  agentAddress String
+  intervalMs   Int       @default(900000) // 15 minutes default
+  isActive     Boolean   @default(true)
+  lastBeatAt   DateTime?
+  nextBeatAt   DateTime?
+  failureCount Int       @default(0)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  records HeartbeatRecord[]
+
+  @@unique([protocolId, agentAddress])
+  @@index([isActive, nextBeatAt])
+}
+
+model HeartbeatRecord {
+  id           String   @id @default(cuid())
+  scheduleId   String
+  txHash       String?
+  success      Boolean
+  latencyMs    Int?
+  errorMessage String?
+  createdAt    DateTime @default(now())
+
+  schedule HeartbeatSchedule @relation(fields: [scheduleId], references: [id])
+
+  @@index([scheduleId, createdAt])
+}
