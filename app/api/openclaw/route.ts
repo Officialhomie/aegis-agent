@@ -75,7 +75,7 @@ export async function POST(request: Request) {
   // For async commands (cycle), acknowledge immediately and let the cycle
   // report back via callbackUrl when done.
   if (cmd.name === 'cycle' && callbackUrl) {
-    const result = await executeCommand(cmd);
+    const result = await executeCommand(cmd, sessionId);
     await appendActionLog('USER_CMD', `cycle triggered from session ${sessionId}`);
     return NextResponse.json({
       ok: true,
@@ -85,7 +85,7 @@ export async function POST(request: Request) {
     });
   }
 
-  const result = await executeCommand(cmd);
+  const result = await executeCommand(cmd, sessionId);
   await appendActionLog(
     'USER_CMD',
     `[${sessionId}] ${command} -> ${result.message.slice(0, 100)}`
@@ -105,7 +105,7 @@ export async function GET() {
     version: '1.0.0',
     description: 'Autonomous Gas Sponsorship Agent for Base blockchain',
     protocol: 'openclaw-http/1.0',
-    commands: ['status', 'cycle', 'sponsor', 'report', 'pause', 'resume', 'help'],
+    commands: ['status', 'cycle', 'sponsor', 'report', 'pause', 'resume', 'help', 'campaign', 'campaign_status'],
     endpoints: {
       command: 'POST /api/openclaw',
       manifest: 'GET /api/openclaw',

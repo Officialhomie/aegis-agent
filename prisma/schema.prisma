@@ -167,6 +167,12 @@ model ProtocolSponsor {
   totalGuaranteedUsd  Float @default(0)  // Total locked in active guarantees
   guaranteeReserveUsd Float @default(0)  // Buffer for refunds (50% of guarantees)
 
+  // Agent-first execution guarantees (tier policies)
+  minAgentTier       Int     @default(1)        // Minimum tier required (1-3)
+  requireERC8004     Boolean @default(false)     // Only sponsor ERC-8004 agents
+  requireERC4337     Boolean @default(false)     // Require at least ERC-4337
+  tierPausedUntil    Json?                       // { tier1: null, tier2: Date, tier3: Date }
+
   // Relations
   approvedAgents   ApprovedAgent[]
   deposits         DepositTransaction[]
@@ -212,10 +218,17 @@ model ApprovedAgent {
   isActive       Boolean         @default(true)
   protocol       ProtocolSponsor @relation(fields: [protocolId], references: [protocolId])
 
+  // Agent-first execution guarantees
+  agentTier      Int             @default(3)
+  agentType      AgentType       @default(UNKNOWN)
+  tierOverride   Boolean         @default(false)  // Manual tier override flag
+  lastValidated  DateTime?                         // Last tier validation timestamp
+
   @@unique([protocolId, agentAddress])
   @@index([protocolId])
   @@index([agentAddress])
   @@index([isActive])
+  @@index([agentTier])
 }
 
 model SponsorshipRecord {
@@ -230,9 +243,35 @@ model SponsorshipRecord {
   ipfsCid          String?
   createdAt        DateTime @default(now())
 
+  // Agent-first execution guarantees
+  agentTier        Int       @default(3)         // 1, 2, 3 (0 = rejected, never persisted)
+  agentType        AgentType @default(UNKNOWN)
+  isERC8004        Boolean   @default(false)
+  isERC4337        Boolean   @default(false)
+
   @@index([userAddress])
   @@index([protocolId])
   @@index([decisionHash])
+  @@index([agentTier, createdAt])  // For tier-based queue prioritization
+}
+
+model QueueItem {
+  id               String    @id @default(cuid())
+  requestId        String    @unique
+  protocolId       String
+  agentAddress     String
+  agentTier        Int       // 1, 2, 3 (0 = rejected, never queued)
+  agentType        AgentType
+  priority         Int       @default(100)  // Higher = more important
+  status           String    @default("pending")  // pending, processing, completed, failed
+
+  createdAt        DateTime  @default(now())
+  processingStartedAt DateTime?
+  completedAt      DateTime?
+
+  @@index([status, agentTier, priority, createdAt])  // Multi-column for optimal dequeue
+  @@index([protocolId, status])
+  @@index([agentAddress])
 }
 
 // ============================================================================
@@ -640,4 +679,78 @@ enum RefundStatus {
   APPROVED
   REFUNDED
   REJECTED
+}
+
+// ============================================================================
+// Agent-First Execution Guarantees
+// Tier-based prioritization for ERC-8004 agents
+// ============================================================================
+
+enum AgentType {
+  ERC8004_AGENT        // Tier 1: ERC-8004 registered agent (Identity Registry)
+  ERC4337_ACCOUNT      // Tier 2: ERC-4337 smart account (validateUserOp)
+  SMART_CONTRACT       // Tier 3: Other smart contract (bytecode check)
+  EOA                  // Tier 0: REJECTED (no contract bytecode)
+  UNKNOWN              // Validation failed or pending
+}
+
+// ============================================================================
+// OpenClaw Audit Trail
+// Every OpenClaw command is logged for security and compliance
+// ============================================================================
+
+model OpenClawAudit {
+  id            String   @id @default(cuid())
+  sessionId     String
+  protocolId    String
+  userPhoneHash String?  // Hashed phone number, never raw PII
+  commandName   String
+  commandArgs   Json
+  rawInput      String
+  confidence    Float    @default(1.0)
+  success       Boolean
+  errorMessage  String?
+  executionMs   Int
+  createdAt     DateTime @default(now())
+
+  @@index([sessionId])
+  @@index([protocolId, createdAt])
+  @@index([commandName])
+}
+
+// ============================================================================
+// Heartbeat & Liveness Monitoring
+// Scheduled heartbeat transactions for agent liveness tracking
+// ============================================================================
+
+model HeartbeatSchedule {
+  id           String    @id @default(cuid())
+  protocolId   String
+  agentAddress String
+  intervalMs   Int       @default(900000) // 15 minutes default
+  isActive     Boolean   @default(true)
+  lastBeatAt   DateTime?
+  nextBeatAt   DateTime?
+  failureCount Int       @default(0)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  records HeartbeatRecord[]
+
+  @@unique([protocolId, agentAddress])
+  @@index([isActive, nextBeatAt])
+}
+
+model HeartbeatRecord {
+  id           String   @id @default(cuid())
+  scheduleId   String
+  txHash       String?
+  success      Boolean
+  latencyMs    Int?
+  errorMessage String?
+  createdAt    DateTime @default(now())
+
+  schedule HeartbeatSchedule @relation(fields: [scheduleId], references: [id])
+
+  @@index([scheduleId, createdAt])
 }

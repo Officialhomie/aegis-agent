@@ -78,6 +78,7 @@ export {
   observeProtocolBudgets,
   observeAgentReserves,
   observeGasPrice,
+  observeContractInteractions,
   getOnchainTxCount,
   getProtocolBudget,
   getProtocolBudgets,

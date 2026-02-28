@@ -218,6 +218,29 @@ export async function runSponsorshipCycle(
           if (state.executionResult?.success) {
             const { updateReservesAfterSponsorship } = await import('./execute/post-sponsorship');
             await updateReservesAfterSponsorship(state.executionResult, config.currentGasPriceGwei);
+            const params = decision.parameters as { protocolId?: string; targetContract?: string } | null;
+            if (params?.protocolId) {
+              const { getActiveCampaignForProtocol, recordSponsorshipInCampaign } = await import('./campaigns');
+              const campaign = await getActiveCampaignForProtocol(params.protocolId);
+              if (campaign) {
+                const res = state.executionResult as { transactionHash?: string; sponsorshipHash?: string; simulationResult?: { actualGasUsed?: string } };
+                const txHash = res.transactionHash ?? '';
+                const userOpHash = res.sponsorshipHash ?? '';
+                const gasUsedStr = res.simulationResult?.actualGasUsed;
+                const gasUsed = gasUsedStr ? BigInt(gasUsedStr) : BigInt(0);
+                const updated = await recordSponsorshipInCampaign({
+                  campaignId: campaign.id,
+                  txHash,
+                  userOpHash,
+                  gasUsed,
+                  costUSD: 0.25,
+                  targetContract: params.targetContract,
+                });
+                if (updated?.status === 'completed') {
+                  logger.info('[Aegis] Campaign completed', { campaignId: campaign.id, protocolId: params.protocolId });
+                }
+              }
+            }
           }
         } else {
           state.executionResult = await execute(decision, config.executionMode);

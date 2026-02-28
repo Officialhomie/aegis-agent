@@ -34,6 +34,8 @@ import {
   parseNumber,
   parsePeriod,
   extractReason,
+  parseTier,
+  parseAgentAddress,
 } from './parsers';
 import { getAnalyticsSummary, formatAnalyticsMessage } from './analytics';
 import {
@@ -42,6 +44,8 @@ import {
 } from '../../protocol/runtime-overrides';
 import { getProtocolIdFromSession } from './session-manager';
 import { getGasPassport, formatPassportText } from '../../passport';
+import { getPrisma } from '../../db';
+import { CONTRACTS } from '../contracts/addresses';
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Parser
@@ -68,6 +72,22 @@ export function parseCommand(input: string): ParsedCommand {
     lower === 'trigger'
   ) {
     return { name: 'cycle', args: {}, rawInput: input };
+  }
+
+  if (
+    (lower.includes('sponsor the next') || lower.includes('sponsor next')) &&
+    (lower.includes('transaction') || lower.includes('tx') || /\d+/.test(lower)) &&
+    (lower.includes('base') || lower.includes('mainnet')) &&
+    (lower.includes('uniswap') || lower.includes('uniswap v4') || lower.includes('uniswap v3'))
+  ) {
+    const limit = parseNumber(input, 10);
+    const protocol = lower.includes('v4') ? 'uniswap-v4' : 'uniswap-v4';
+    const chain = lower.includes('base') ? 'base' : 'base';
+    return { name: 'campaign', args: { protocol, chain, limit: limit.toString() }, rawInput: input };
+  }
+
+  if (lower.includes('campaign status') || lower.includes('campaign progress') || lower === 'campaign_status') {
+    return { name: 'campaign_status', args: {}, rawInput: input };
   }
 
   if (lower.startsWith('sponsor ')) {
@@ -158,6 +178,53 @@ export function parseCommand(input: string): ParsedCommand {
     return { name: 'passport', args: { wallet }, rawInput: input };
   }
 
+  // Agent-first tier management commands
+  if (lower.includes('set min tier') || lower.includes('minimum tier')) {
+    const tier = parseTier(input);
+    return { name: 'set_min_tier', args: { tier: tier?.toString() ?? '1' }, rawInput: input };
+  }
+
+  if (
+    lower.includes('prioritize') ||
+    lower.includes('boost agent') ||
+    lower.includes('override tier')
+  ) {
+    const address = parseAgentAddress(input);
+    const tier = parseTier(input);
+    return {
+      name: 'prioritize_agent',
+      args: { address, tier: tier?.toString() ?? '1' },
+      rawInput: input,
+    };
+  }
+
+  if (lower.includes('pause tier')) {
+    const tier = parseTier(input);
+    const durationMs = parseDuration(input);
+    return {
+      name: 'pause_tier',
+      args: { tier: tier?.toString() ?? '3', durationMs: durationMs.toString() },
+      rawInput: input,
+    };
+  }
+
+  if (lower.includes('resume tier')) {
+    const tier = parseTier(input);
+    return { name: 'resume_tier', args: { tier: tier?.toString() ?? '3' }, rawInput: input };
+  }
+
+  if (lower.includes('queue stats') || lower.includes('show queue') || lower.includes('queue status')) {
+    return { name: 'queue_stats', args: {}, rawInput: input };
+  }
+
+  if (
+    lower.includes('tier report') ||
+    lower.includes('tier distribution') ||
+    lower.includes('tier status')
+  ) {
+    return { name: 'tier_report', args: {}, rawInput: input };
+  }
+
   return { name: 'help', args: {}, rawInput: input };
 }
 
@@ -165,7 +232,7 @@ export function parseCommand(input: string): ParsedCommand {
 // Executor
 // ──────────────────────────────────────────────────────────────────────────────
 
-export async function executeCommand(cmd: ParsedCommand): Promise<CommandResult> {
+export async function executeCommand(cmd: ParsedCommand, sessionId?: string): Promise<CommandResult> {
   logger.info('[OpenClaw] Executing command', { name: cmd.name });
 
   switch (cmd.name) {
@@ -254,8 +321,7 @@ export async function executeCommand(cmd: ParsedCommand): Promise<CommandResult>
         const durationMs = parseInt(cmd.args.durationMs ?? '0');
         const until = new Date(Date.now() + durationMs);
 
-        // Get protocol ID from session (passed in cmd.sessionId)
-        const sessionId = (cmd as any).sessionId;
+        // Get protocol ID from session (passed by API route)
         if (!sessionId) {
           return { success: false, message: 'Session ID required for this command' };
         }
@@ -294,7 +360,6 @@ export async function executeCommand(cmd: ParsedCommand): Promise<CommandResult>
           return { success: false, message: 'Budget must be between $0.01 and $10,000' };
         }
 
-        const sessionId = (cmd as any).sessionId;
         if (!sessionId) {
           return { success: false, message: 'Session ID required for this command' };
         }
@@ -325,7 +390,6 @@ export async function executeCommand(cmd: ParsedCommand): Promise<CommandResult>
         const limit = parseInt(cmd.args.limit ?? '10');
         const period = cmd.args.period ?? 'week';
 
-        const sessionId = (cmd as any).sessionId;
         if (!sessionId) {
           return { success: false, message: 'Session ID required for this command' };
         }
@@ -356,7 +420,6 @@ export async function executeCommand(cmd: ParsedCommand): Promise<CommandResult>
           return { success: false, message: 'Invalid wallet address' };
         }
 
-        const sessionId = (cmd as any).sessionId;
         if (!sessionId) {
           return { success: false, message: 'Session ID required for this command' };
         }
@@ -392,7 +455,6 @@ export async function executeCommand(cmd: ParsedCommand): Promise<CommandResult>
           return { success: false, message: 'Gas price must be between 0.1 and 1000 gwei' };
         }
 
-        const sessionId = (cmd as any).sessionId;
         if (!sessionId) {
           return { success: false, message: 'Session ID required for this command' };
         }
@@ -469,6 +531,371 @@ export async function executeCommand(cmd: ParsedCommand): Promise<CommandResult>
       }
     }
 
+    case 'campaign': {
+      try {
+        const protocol = cmd.args.protocol ?? 'uniswap-v4';
+        const chain = cmd.args.chain ?? 'base';
+        const limit = cmd.args.limit ?? '10';
+        const db = getPrisma();
+        const protocolRecord = await db.protocolSponsor.findUnique({
+          where: { protocolId: protocol },
+        });
+        if (!protocolRecord) {
+          return {
+            success: false,
+            message: `Protocol "${protocol}" not found. Run: npx tsx scripts/setup-uniswap-v4-protocol.ts`,
+          };
+        }
+        if ((protocolRecord.whitelistedContracts?.length ?? 0) === 0) {
+          return {
+            success: false,
+            message: `Protocol "${protocol}" has no whitelisted contracts. Run setup script.`,
+          };
+        }
+        const chainId = chain === 'base' ? 8453 : 84532;
+        const chainName = chain === 'base' ? 'base' : 'baseSepolia';
+        const v4 = CONTRACTS.base?.uniswapV4;
+        const targetContracts = v4
+          ? [v4.poolManager, v4.positionManager, v4.universalRouter, v4.quoter, v4.stateView, v4.permit2]
+          : [];
+        if (targetContracts.length === 0) {
+          return { success: false, message: 'No target contracts configured for base.' };
+        }
+        const { createCampaign } = await import('../campaigns');
+        const campaign = await createCampaign({
+          protocolId: protocol,
+          chainId,
+          chainName,
+          targetContracts,
+          maxSponsorships: parseInt(limit, 10) || 10,
+        });
+        const { spawn } = await import('child_process');
+        const path = await import('path');
+        const scriptPath = path.join(process.cwd(), 'scripts', 'run-targeted-campaign.ts');
+        const child = spawn(
+          'npx',
+          ['tsx', scriptPath, '--campaign-id', campaign.id],
+          { detached: true, stdio: 'ignore', cwd: process.cwd(), env: process.env }
+        );
+        child.unref();
+        return {
+          success: true,
+          message: `Campaign started: sponsor next ${limit} transactions on ${chain} for ${protocol}. Say "campaign status" for progress.`,
+        };
+      } catch (err) {
+        return {
+          success: false,
+          message: `Failed to start campaign: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    }
+
+    case 'campaign_status': {
+      try {
+        const protocolId = sessionId
+          ? await getProtocolIdFromSession(sessionId).catch(() => 'uniswap-v4')
+          : 'uniswap-v4';
+        const { getActiveCampaignForProtocol, getCampaignReport } = await import('../campaigns');
+        const active = await getActiveCampaignForProtocol(protocolId);
+        if (!active) {
+          return {
+            success: true,
+            message: 'No active campaign for your protocol. Start one with: "sponsor the next 10 transactions on base mainnet for uniswap v4"',
+          };
+        }
+        const report = await getCampaignReport(active.id);
+        if (!report) {
+          return { success: true, message: `Campaign ${active.id}: ${active.completedSponsorships}/${active.maxSponsorships} completed.` };
+        }
+        const lines = [
+          `Campaign ${report.campaign.id} (${report.campaign.protocol} on ${report.campaign.chain}):`,
+          `  Completed: ${report.campaign.completed}/${report.campaign.limit}`,
+          `  Status: ${report.campaign.status}`,
+          `  Total gas used: ${report.totals.totalGasUsed}`,
+          `  Total cost USD: $${report.totals.totalCostUSD.toFixed(4)}`,
+        ];
+        if (report.transactions.length > 0) {
+          lines.push('  Recent tx hashes:');
+          report.transactions.slice(-5).forEach((t) => lines.push(`    ${t.txHash}`));
+        }
+        if (report.campaign.completed === 0 && report.campaign.status === 'active') {
+          lines.push('  Tip: Discovery uses BLOCKSCOUT_API_URL (e.g. https://base.blockscout.com). If unset or unreachable, no candidates are found. Set it in .env and restart, or run the campaign script manually to see logs.');
+        }
+        return { success: true, message: lines.join('\n') };
+      } catch (err) {
+        return {
+          success: false,
+          message: `Failed to get campaign status: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    }
+
+    // Agent-first tier management commands
+    case 'set_min_tier': {
+      try {
+        const tier = parseInt(cmd.args.tier ?? '1');
+        if (tier < 1 || tier > 3) {
+          return { success: false, message: 'Invalid tier. Must be 1, 2, or 3.' };
+        }
+
+        if (!sessionId) {
+          return { success: false, message: 'Session ID required for this command' };
+        }
+
+        const protocolId = await getProtocolIdFromSession(sessionId);
+        const prisma = getPrisma();
+
+        await prisma.protocolSponsor.update({
+          where: { protocolId },
+          data: { minAgentTier: tier },
+        });
+
+        const tierLabel = tier === 1 ? 'ERC-8004 agents only' : tier === 2 ? 'ERC-4337+ accounts' : 'All smart contracts';
+        return {
+          success: true,
+          message: `Minimum tier set to ${tier} (${tierLabel})`,
+        };
+      } catch (err) {
+        return {
+          success: false,
+          message: `Failed to set minimum tier: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    }
+
+    case 'prioritize_agent': {
+      try {
+        const address = cmd.args.address;
+        const tier = parseInt(cmd.args.tier ?? '1');
+
+        if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address)) {
+          return { success: false, message: 'Invalid agent address' };
+        }
+
+        if (tier < 1 || tier > 3) {
+          return { success: false, message: 'Invalid tier. Must be 1, 2, or 3.' };
+        }
+
+        if (!sessionId) {
+          return { success: false, message: 'Session ID required for this command' };
+        }
+
+        const protocolId = await getProtocolIdFromSession(sessionId);
+        const prisma = getPrisma();
+
+        // Update or create ApprovedAgent with tier override
+        await prisma.approvedAgent.upsert({
+          where: {
+            protocolId_agentAddress: {
+              protocolId,
+              agentAddress: address,
+            },
+          },
+          create: {
+            protocolId,
+            agentAddress: address,
+            approvedBy: 'openclaw',
+            agentTier: tier,
+            tierOverride: true,
+          },
+          update: {
+            agentTier: tier,
+            tierOverride: true,
+            lastValidated: new Date(),
+          },
+        });
+
+        return {
+          success: true,
+          message: `Agent ${address.slice(0, 10)}... prioritized to tier ${tier}`,
+        };
+      } catch (err) {
+        return {
+          success: false,
+          message: `Failed to prioritize agent: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    }
+
+    case 'pause_tier': {
+      try {
+        const tier = parseInt(cmd.args.tier ?? '3');
+        const durationMs = parseInt(cmd.args.durationMs ?? '0');
+
+        if (tier < 1 || tier > 3) {
+          return { success: false, message: 'Invalid tier. Must be 1, 2, or 3.' };
+        }
+
+        if (!sessionId) {
+          return { success: false, message: 'Session ID required for this command' };
+        }
+
+        const protocolId = await getProtocolIdFromSession(sessionId);
+        const until = new Date(Date.now() + durationMs);
+        const prisma = getPrisma();
+
+        // Get current tierPausedUntil JSON
+        const protocol = await prisma.protocolSponsor.findUnique({
+          where: { protocolId },
+          select: { tierPausedUntil: true },
+        });
+
+        const pausedUntil = (protocol?.tierPausedUntil as Record<string, string | null>) ?? {};
+        pausedUntil[`tier${tier}`] = until.toISOString();
+
+        await prisma.protocolSponsor.update({
+          where: { protocolId },
+          data: { tierPausedUntil: pausedUntil },
+        });
+
+        const hours = Math.floor(durationMs / (1000 * 60 * 60));
+        const minutes = Math.floor((durationMs % (1000 * 60 * 60)) / (1000 * 60));
+        const timeStr = hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+
+        return {
+          success: true,
+          message: `Tier ${tier} paused for ${timeStr} (until ${until.toLocaleString()})`,
+        };
+      } catch (err) {
+        return {
+          success: false,
+          message: `Failed to pause tier: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    }
+
+    case 'resume_tier': {
+      try {
+        const tier = parseInt(cmd.args.tier ?? '3');
+
+        if (tier < 1 || tier > 3) {
+          return { success: false, message: 'Invalid tier. Must be 1, 2, or 3.' };
+        }
+
+        if (!sessionId) {
+          return { success: false, message: 'Session ID required for this command' };
+        }
+
+        const protocolId = await getProtocolIdFromSession(sessionId);
+        const prisma = getPrisma();
+
+        // Get current tierPausedUntil JSON
+        const protocol = await prisma.protocolSponsor.findUnique({
+          where: { protocolId },
+          select: { tierPausedUntil: true },
+        });
+
+        const pausedUntil = (protocol?.tierPausedUntil as Record<string, string | null>) ?? {};
+        pausedUntil[`tier${tier}`] = null;
+
+        await prisma.protocolSponsor.update({
+          where: { protocolId },
+          data: { tierPausedUntil: pausedUntil },
+        });
+
+        return {
+          success: true,
+          message: `Tier ${tier} resumed`,
+        };
+      } catch (err) {
+        return {
+          success: false,
+          message: `Failed to resume tier: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    }
+
+    case 'queue_stats': {
+      try {
+        const { printQueueReport } = await import('../queue/queue-analytics');
+
+        // Capture console output
+        const originalLog = console.log;
+        const lines: string[] = [];
+        console.log = (...args) => {
+          lines.push(args.join(' '));
+        };
+
+        await printQueueReport();
+
+        console.log = originalLog;
+
+        return {
+          success: true,
+          message: lines.join('\n'),
+        };
+      } catch (err) {
+        return {
+          success: false,
+          message: `Failed to get queue stats: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    }
+
+    case 'tier_report': {
+      try {
+        const prisma = getPrisma();
+
+        // Get tier distribution from SponsorshipRecord
+        const records = await prisma.sponsorshipRecord.groupBy({
+          by: ['agentTier'],
+          _count: true,
+        });
+
+        // Get tier distribution from QueueItem
+        const queueItems = await prisma.queueItem.groupBy({
+          by: ['agentTier', 'status'],
+          _count: true,
+        });
+
+        const tierCounts = {
+          tier1: { total: 0, pending: 0, processing: 0 },
+          tier2: { total: 0, pending: 0, processing: 0 },
+          tier3: { total: 0, pending: 0, processing: 0 },
+        };
+
+        records.forEach((r) => {
+          if (r.agentTier === 1) tierCounts.tier1.total = r._count;
+          else if (r.agentTier === 2) tierCounts.tier2.total = r._count;
+          else if (r.agentTier === 3) tierCounts.tier3.total = r._count;
+        });
+
+        queueItems.forEach((q) => {
+          const key = `tier${q.agentTier}` as 'tier1' | 'tier2' | 'tier3';
+          if (key in tierCounts) {
+            if (q.status === 'pending') tierCounts[key].pending = q._count;
+            else if (q.status === 'processing') tierCounts[key].processing = q._count;
+          }
+        });
+
+        const message = [
+          'Tier Distribution Report:',
+          '',
+          `Tier 1 (ERC-8004 Agents):`,
+          `  Sponsored: ${tierCounts.tier1.total}`,
+          `  Pending: ${tierCounts.tier1.pending}`,
+          `  Processing: ${tierCounts.tier1.processing}`,
+          '',
+          `Tier 2 (ERC-4337 Accounts):`,
+          `  Sponsored: ${tierCounts.tier2.total}`,
+          `  Pending: ${tierCounts.tier2.pending}`,
+          `  Processing: ${tierCounts.tier2.processing}`,
+          '',
+          `Tier 3 (Smart Contracts):`,
+          `  Sponsored: ${tierCounts.tier3.total}`,
+          `  Pending: ${tierCounts.tier3.pending}`,
+          `  Processing: ${tierCounts.tier3.processing}`,
+        ].join('\n');
+
+        return { success: true, message };
+      } catch (err) {
+        return {
+          success: false,
+          message: `Failed to get tier report: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    }
+
     case 'help':
     default:
       return {
@@ -484,6 +911,8 @@ export async function executeCommand(cmd: ParsedCommand): Promise<CommandResult>
           '',
           'EXECUTION:',
           '  cycle                         — Trigger one sponsorship cycle now',
+          '  sponsor the next N txs on base for uniswap v4 — Start targeted campaign',
+          '  campaign status               — Show active campaign progress',
           '  sponsor <0x...wallet> <proto> — Manually queue a sponsorship',
           '  pause                         — Pause the autonomous loop',
           '  pause for 2 hours             — Pause for a specific duration',
@@ -493,6 +922,14 @@ export async function executeCommand(cmd: ParsedCommand): Promise<CommandResult>
           '  set budget to $500            — Update daily spend cap',
           '  set gas cap to 50 gwei        — Update max gas price',
           '  block wallet 0x...            — Block a wallet address',
+          '',
+          'TIER MANAGEMENT (Agent-First):',
+          '  set min tier to 1             — Set minimum tier (1=ERC-8004, 2=ERC-4337, 3=Smart Contract)',
+          '  prioritize agent 0x... to 1   — Override agent tier',
+          '  pause tier 2 for 1 hour       — Temporarily pause tier',
+          '  resume tier 2                 — Resume paused tier',
+          '  queue stats                   — Show queue analytics',
+          '  tier report                   — Show tier distribution',
           '',
           'FUNDING:',
           '  topup 1000                    — Get instructions to add funds',
@@ -520,5 +957,7 @@ export function isCommandName(name: string): name is CommandName {
     'set_gas_cap',
     'topup',
     'passport',
+    'campaign',
+    'campaign_status',
   ].includes(name);
 }

@@ -37,6 +37,39 @@ Aegis is autonomous gas reliability infrastructure for agents on Base. It preven
 - **Memory**: Long-term learning with PostgreSQL + Pinecone vector search
 - **x402 Integration**: Payment rails for agent-as-a-service
 
+## Agent-First Execution Guarantees
+
+Aegis implements strict **agent-first prioritization** to ensure AI agents with on-chain identity receive preferential treatment:
+
+### Tier System
+| Tier | Type | Priority | Description |
+|------|------|----------|-------------|
+| **1** | ERC-8004 Agents | HIGHEST | Registered AI agents with on-chain identity (Identity Registry) |
+| **2** | ERC-4337 Accounts | STANDARD | Account abstraction smart wallets |
+| **3** | Smart Contracts | FALLBACK | Other smart contracts |
+| **0** | EOAs | **REJECTED** | Externally owned accounts - NEVER sponsored |
+
+### Key Features
+- **EOA Rejection**: Externally owned accounts are rejected at all entry points
+- **Tier-Based Queue**: Tier 1 requests always processed before Tier 2/3
+- **Gas Price Hardening**: MAX_GAS_PRICE_GWEI=2 (rejects UserOps >= 2 gwei)
+- **OpenClaw Commands**: Natural language tier management via WhatsApp/Telegram
+- **Real-Time Analytics**: Queue health monitoring and tier distribution tracking
+
+### Verification
+```bash
+# Verify agent-first compliance
+npx tsx scripts/verify-agent-first-compliance.ts
+
+# Check tier distribution
+npx tsx scripts/check-tier-distribution.ts
+
+# Test gas price validation
+npx tsx scripts/test-gas-price-validation.ts
+```
+
+See [docs/ops/agent-first-checklist.md](docs/ops/agent-first-checklist.md) for operational details.
+
 ## Tech Stack
 
 | Category | Technology |

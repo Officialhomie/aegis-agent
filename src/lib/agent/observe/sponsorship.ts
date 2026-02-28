@@ -5,7 +5,7 @@
  * ERC-8004 registered agents, failed transactions, protocol budgets, agent reserves, gas price.
  */
 
-import { createPublicClient, decodeEventLog, http, formatEther } from 'viem';
+import { createPublicClient, type PublicClient, decodeEventLog, http, formatEther } from 'viem';
 import { base, baseSepolia } from 'viem/chains';
 import { getPrisma } from '../../db';
 import {
@@ -26,6 +26,7 @@ import {
 } from '../cache';
 import { IDENTITY_REGISTRY_ABI } from '../identity/abis/identity-registry';
 import { getIdentityRegistryAddress } from '../identity/erc8004';
+import { validateAccount } from '../validation/account-validator';
 
 /**
  * Whether to use strict observation mode (fail on errors).
@@ -61,18 +62,28 @@ type BaseChainName = 'base' | 'baseSepolia';
 
 const BASE_RPC_TIMEOUT_MS = Number(process.env.BASE_RPC_TIMEOUT_MS) || 30_000;
 
+const clientCache = new Map<string, PublicClient>();
+
 function getBasePublicClient() {
+  const chainName = getDefaultChainName();
+  const cached = clientCache.get(chainName);
+  if (cached) return cached;
   const rpcUrl =
     process.env.BASE_RPC_URL ??
     process.env.RPC_URL_BASE ??
-    (getDefaultChainName() === 'base'
+    (chainName === 'base'
       ? process.env.RPC_URL_BASE
       : process.env.RPC_URL_BASE_SEPOLIA);
-  const chain = getDefaultChainName() === 'base' ? base : baseSepolia;
-  return createPublicClient({
+  const chain = chainName === 'base' ? base : baseSepolia;
+  const client = createPublicClient({
     chain,
-    transport: http(rpcUrl ?? 'https://mainnet.base.org', { timeout: BASE_RPC_TIMEOUT_MS }),
+    transport: http(rpcUrl ?? 'https://mainnet.base.org', {
+      timeout: BASE_RPC_TIMEOUT_MS,
+      batch: true,
+    }),
   });
+  clientCache.set(chainName, client as PublicClient);
+  return client;
 }
 
 /**
@@ -164,6 +175,18 @@ export async function observeERC8004RegisteredAgents(): Promise<Observation[]> {
       if (agentWalletAddress && wallet === agentWalletAddress.toLowerCase()) continue;
 
       try {
+        // Validate account and get tier data - Agent-first execution guarantee
+        const validation = await validateAccount(wallet as `0x${string}`, 'base');
+
+        // ENFORCE: Reject tier 0 (EOAs) - should never happen for ERC-8004 but enforce
+        if (!validation.isValid || validation.agentTier === 0) {
+          logger.warn('[Sponsorship] ERC-8004 wallet is EOA - rejecting', {
+            wallet,
+            agentId: agentId.toString(),
+          });
+          continue;
+        }
+
         const balance = await client.getBalance({ address: wallet as `0x${string}` });
         const eth = Number(formatEther(balance));
         if (eth >= LOW_GAS_THRESHOLD_ETH) continue;
@@ -180,8 +203,13 @@ export async function observeERC8004RegisteredAgents(): Promise<Observation[]> {
             historicalTxCount: Number(txCount),
             belowThreshold: true,
             erc8004AgentId: agentId.toString(),
+            // Agent-first execution guarantees
+            agentTier: validation.agentTier,
+            agentType: validation.agentType,
+            isERC8004: validation.isERC8004Registered ?? false,
+            isERC4337: validation.isERC4337Compatible ?? false,
           },
-          context: `ERC-8004 registered agent with low gas (${eth} ETH, agentId ${agentId.toString()})`,
+          context: `ERC-8004 registered agent with low gas (${eth} ETH, agentId ${agentId.toString()}, tier ${validation.agentTier})`,
         });
       } catch (error) {
         logger.warn('[Sponsorship] Failed to evaluate ERC-8004 agent wallet for sponsorship', {
@@ -332,14 +360,21 @@ export interface MultiChainBalance {
   USDC: number;
 }
 
+const BALANCE_CACHE_TTL_MS = 60_000;
+let balanceCache: { result: MultiChainBalance[]; expiry: number } | null = null;
+
 /**
  * Get agent wallet ETH and USDC balances for all supported chains (e.g. Base Sepolia and Base Mainnet).
  * Uses AGENT_WALLET_ADDRESS and per-chain USDC addresses (USDC_ADDRESS, USDC_ADDRESS_BASE_MAINNET).
+ * Results are cached for 60s to collapse repeated RPC calls.
  *
  * IMPORTANT: In STRICT_MODE, throws BalanceObservationError if ETH balance cannot be fetched.
  * USDC balance failures are logged but don't block (USDC is optional).
  */
 export async function getAgentWalletBalances(): Promise<MultiChainBalance[]> {
+  if (balanceCache && Date.now() < balanceCache.expiry) {
+    return balanceCache.result;
+  }
   const address = process.env.AGENT_WALLET_ADDRESS as `0x${string}` | undefined;
   const chainIdByName: Record<string, number> = { base: BASE_CHAIN_ID, baseSepolia: BASE_SEPOLIA_CHAIN_ID };
   if (!address || address === '0x0000000000000000000000000000000000000000') {
@@ -418,6 +453,7 @@ export async function getAgentWalletBalances(): Promise<MultiChainBalance[]> {
     );
   }
 
+  balanceCache = { result: results, expiry: Date.now() + BALANCE_CACHE_TTL_MS };
   return results;
 }
 
@@ -437,18 +473,25 @@ export async function getAgentWalletBalance(): Promise<{
   return { ETH: first.ETH, USDC: first.USDC, chainId: first.chainId };
 }
 
+const GAS_PRICE_CACHE_TTL_MS = 30_000;
+let gasPriceCache: { result: Observation[]; expiry: number } | null = null;
+
 /**
  * Observe current Base gas price.
+ * Results are cached for 30s to avoid redundant eth_gasPrice RPC calls.
  * IMPORTANT: In STRICT_MODE, throws GasPriceObservationError on failure.
  * Gas price is critical for sponsorship timing decisions.
  */
 export async function observeGasPrice(): Promise<Observation[]> {
+  if (gasPriceCache && Date.now() < gasPriceCache.expiry) {
+    return gasPriceCache.result;
+  }
   const client = getBasePublicClient();
   const chain = getDefaultChainName() === 'base' ? base : baseSepolia;
   try {
     const gasPrice = await client.getGasPrice();
     const gasPriceGwei = formatEther(gasPrice * BigInt(1e9));
-    return [
+    const result: Observation[] = [
       {
         id: `gas-base-${Date.now()}`,
         timestamp: new Date(),
@@ -462,6 +505,8 @@ export async function observeGasPrice(): Promise<Observation[]> {
         context: 'Current Base gas price for sponsorship timing',
       },
     ];
+    gasPriceCache = { result, expiry: Date.now() + GAS_PRICE_CACHE_TTL_MS };
+    return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logger.error('[Sponsorship] Failed to observe gas price', {
@@ -999,4 +1044,198 @@ export async function getObservationHealthStatus(): Promise<ObservationHealthSum
     warnings,
     observationCounts: counts,
   };
+}
+
+/**
+ * Observe recent transactions interacting with target contracts (e.g. Uniswap V4 PoolManager).
+ * Uses Blockscout API to fetch transactions to each contract, then returns observations
+ * for each unique sender that could be eligible for gas sponsorship (low balance or frequent user).
+ * Used by targeted campaign CLI to discover candidates for protocol-specific sponsorship.
+ *
+ * Blockscout (e.g. https://base.blockscout.com): no API key required for public Base instance;
+ * rate limit is 5 req/s without key. If RPC balance check fails (e.g. rate limit), candidates
+ * are still included with balanceETH: 0 so discovery is not lost.
+ */
+export async function observeContractInteractions(
+  targetContracts: string[],
+  chainName: BaseChainName = 'base'
+): Promise<Observation[]> {
+  const baseUrl = process.env.BLOCKSCOUT_API_URL?.trim();
+  if (!baseUrl) {
+    logger.debug('[Sponsorship] observeContractInteractions: BLOCKSCOUT_API_URL not set');
+    return [];
+  }
+  if (targetContracts.length === 0) return [];
+
+  const chain = chainName === 'base' ? base : baseSepolia;
+  const chainId = chain.id;
+  const seenSenders = new Map<string, { targetContract: string; txCount: number }>();
+  const limitPerContract = 5;
+
+  for (const contract of targetContracts.slice(0, 10)) {
+    if (!contract || !/^0x[a-fA-F0-9]{40}$/.test(contract)) continue;
+    try {
+      const url = `${baseUrl.replace(/\/$/, '')}/api?module=account&action=txlist&address=${contract}&sort=desc&offset=${limitPerContract}&filterby=to`;
+      const res = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(8000) });
+      if (!res.ok) {
+        logger.warn('[Sponsorship] observeContractInteractions Blockscout non-OK', { contract: contract.slice(0, 10) + '...', status: res.status });
+        continue;
+      }
+      const data = (await res.json()) as { status?: string; message?: string; result?: { from?: string }[] | string };
+      const rawResult = data?.result;
+      const txs = Array.isArray(rawResult) ? rawResult : [];
+      if (typeof rawResult === 'string' && rawResult.toLowerCase().includes('error')) {
+        logger.debug('[Sponsorship] observeContractInteractions Blockscout returned error string', { contract: contract.slice(0, 10) + '...', result: rawResult.slice(0, 80) });
+      }
+      for (const tx of txs) {
+        const from = (tx?.from ?? '').toLowerCase();
+        if (!from || !from.startsWith('0x') || from.length !== 42) continue;
+        const prev = seenSenders.get(from);
+        if (prev) {
+          prev.txCount += 1;
+        } else {
+          seenSenders.set(from, { targetContract: contract.toLowerCase(), txCount: 1 });
+        }
+      }
+    } catch (err) {
+      logger.warn('[Sponsorship] observeContractInteractions fetch failed', { contract, error: err });
+    }
+  }
+
+  if (seenSenders.size === 0) {
+    logger.debug('[Sponsorship] observeContractInteractions: no senders from Blockscout');
+    return [];
+  }
+
+  // CRITICAL: Filter out EOAs - only smart accounts are eligible for sponsorship
+  logger.info('[Sponsorship] Validating sender accounts (filtering EOAs)', { total: seenSenders.size });
+  const { filterSmartAccounts } = await import('../validation');
+  const senderAddresses = Array.from(seenSenders.keys()) as `0x${string}`[];
+  const { valid: smartAccountSenders, rejected: rejectedEOAs } = await filterSmartAccounts(senderAddresses, chainName);
+
+  if (rejectedEOAs.length > 0) {
+    logger.info('[Sponsorship] Rejected EOAs (not eligible for sponsorship)', {
+      count: rejectedEOAs.length,
+      examples: rejectedEOAs.slice(0, 3).map(r => ({ address: r.address.slice(0, 10) + '...', reason: r.reason })),
+    });
+  }
+
+  if (smartAccountSenders.length === 0) {
+    logger.warn('[Sponsorship] No smart accounts found - all senders were EOAs');
+    return [];
+  }
+
+  logger.info('[Sponsorship] Smart account validation complete', {
+    smartAccounts: smartAccountSenders.length,
+    rejectedEOAs: rejectedEOAs.length,
+  });
+
+  const client = getBasePublicClient();
+  const observations: Observation[] = [];
+  const lowGasThreshold = LOW_GAS_THRESHOLD_ETH;
+  let balanceFailures = 0;
+
+  // Only process validated smart accounts - add tier data
+  const tierStats = { tier1: 0, tier2: 0, tier3: 0 };
+
+  for (const sender of smartAccountSenders) {
+    const meta = seenSenders.get(sender.toLowerCase());
+    if (!meta) continue;
+
+    // Get tier data for agent-first execution guarantees
+    let validation;
+    try {
+      validation = await validateAccount(sender as `0x${string}`, chainName);
+      // Track tier distribution
+      if (validation.agentTier === 1) tierStats.tier1++;
+      else if (validation.agentTier === 2) tierStats.tier2++;
+      else if (validation.agentTier === 3) tierStats.tier3++;
+    } catch (err) {
+      logger.debug('[Sponsorship] Failed to validate account tier, defaulting to tier 3', {
+        sender: sender.slice(0, 10) + '...',
+        error: err instanceof Error ? err.message : String(err),
+      });
+      // Default to tier 3 on validation error
+      validation = {
+        isValid: true,
+        accountType: 'smart_account' as const,
+        reason: 'Smart contract (tier validation failed)',
+        agentTier: 3,
+        agentType: 'UNKNOWN' as const,
+      };
+      tierStats.tier3++;
+    }
+
+    try {
+      const balance = await client.getBalance({ address: sender as `0x${string}` });
+      const eth = Number(formatEther(balance));
+      observations.push({
+        id: `contract-interaction-${sender}-${Date.now()}`,
+        timestamp: new Date(),
+        source: 'api',
+        chainId,
+        data: {
+          agentWallet: sender,
+          targetContract: meta.targetContract,
+          contractTxCount: meta.txCount,
+          balanceETH: eth,
+          belowThreshold: eth < lowGasThreshold,
+          // Agent-first execution guarantees
+          agentTier: validation.agentTier,
+          agentType: validation.agentType,
+          isERC8004: validation.isERC8004Registered ?? false,
+          isERC4337: validation.isERC4337Compatible ?? false,
+        },
+        context: `Contract interaction (${meta.targetContract.slice(0, 10)}..., ${meta.txCount} txs, tier ${validation.agentTier})`,
+      });
+    } catch (err) {
+      balanceFailures += 1;
+      // Still add candidate so we don't drop them when RPC is rate-limited or flaky; policy may still allow
+      observations.push({
+        id: `contract-interaction-${sender}-${Date.now()}`,
+        timestamp: new Date(),
+        source: 'api',
+        chainId,
+        data: {
+          agentWallet: sender,
+          targetContract: meta.targetContract,
+          contractTxCount: meta.txCount,
+          balanceETH: 0,
+          belowThreshold: true,
+          // Agent-first execution guarantees
+          agentTier: validation.agentTier,
+          agentType: validation.agentType,
+          isERC8004: validation.isERC8004Registered ?? false,
+          isERC4337: validation.isERC4337Compatible ?? false,
+        },
+        context: `Contract interaction (${meta.targetContract.slice(0, 10)}..., ${meta.txCount} txs, balance unknown, tier ${validation.agentTier})`,
+      });
+      logger.debug('[Sponsorship] observeContractInteractions balance check failed, including candidate anyway', {
+        sender: sender.slice(0, 10) + '...',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  // Log tier distribution
+  logger.info('[Sponsorship] Protocol discovery tier distribution', {
+    tier1: tierStats.tier1,
+    tier2: tierStats.tier2,
+    tier3: tierStats.tier3,
+    total: observations.length,
+  });
+
+  if (balanceFailures > 0) {
+    logger.warn('[Sponsorship] observeContractInteractions: RPC balance check failed for some senders, candidates still included', {
+      totalSenders: seenSenders.size,
+      balanceFailures,
+      observationsReturned: observations.length,
+    });
+  }
+  logger.debug('[Sponsorship] observeContractInteractions', {
+    targetContracts: targetContracts.length,
+    uniqueSenders: seenSenders.size,
+    observationsReturned: observations.length,
+  });
+  return observations;
 }

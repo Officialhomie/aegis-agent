@@ -10,6 +10,7 @@ import { CriticalConfigMissingError } from './errors';
 import { logger } from './logger';
 
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+const IS_RAILWAY = Boolean(process.env.RAILWAY_ENVIRONMENT ?? process.env.RAILWAY_SERVICE_ID);
 const FAIL_ON_MISSING_CONFIG = process.env.FAIL_ON_MISSING_CONFIG === 'true' || IS_PRODUCTION;
 
 export interface StartupValidationResult {
@@ -117,6 +118,14 @@ export function validateStartupConfig(): StartupValidationResult {
 
   const networkId = process.env.AGENT_NETWORK_ID ?? 'base-sepolia';
   const isMainnet = networkId === 'base';
+
+  // Production/Railway: require REDIS_URL so state is shared (no in-memory fallback)
+  if (IS_PRODUCTION || IS_RAILWAY) {
+    const redisUrl = process.env.REDIS_URL?.trim();
+    if (!redisUrl || !redisUrl.startsWith('redis')) {
+      errors.push('REDIS_URL: Redis connection required in production (set to ${{ Redis.REDIS_URL }} or literal URL)');
+    }
+  }
 
   // Additional mainnet-specific checks
   if (isMainnet) {

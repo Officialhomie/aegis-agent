@@ -20,12 +20,19 @@ export async function GET() {
       getReserveHealth(),
     ]);
 
-    return NextResponse.json({
-      sponsorshipsToday,
-      activeProtocols: protocolCount,
-      reserveHealth: reserves,
-      timestamp: new Date().toISOString(),
-    });
+    return NextResponse.json(
+      {
+        sponsorshipsToday,
+        activeProtocols: protocolCount,
+        reserveHealth: reserves,
+        timestamp: new Date().toISOString(),
+      },
+      {
+        headers: {
+          'Cache-Control': 'public, max-age=30, stale-while-revalidate=60',
+        },
+      }
+    );
   } catch (e) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : 'Failed to load stats' },

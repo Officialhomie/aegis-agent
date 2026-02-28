@@ -25,6 +25,7 @@
 *.pem
 *.md
 !README.md
+!**/SKILL.md
 
 # debug
 npm-debug.log*

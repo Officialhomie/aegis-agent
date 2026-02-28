@@ -3,10 +3,13 @@
  * 
  * Validates decisions against safety rules before execution.
  * Acts as a guardrail between LLM reasoning and actual blockchain execution.
+ * When SKILLS_ENFORCED=true, skill verdict (reject/escalate) is enforced for SPONSOR_TRANSACTION.
  */
 
 import { logger } from '../../logger';
+import { incrementCounter } from '../../monitoring/metrics';
 import { validateRules } from './rules';
+import { validateWithSkills } from './skill-based-rules';
 import type { Decision } from '../reason/schemas';
 import type { AgentConfig } from '../index';
 
@@ -18,7 +21,7 @@ export interface PolicyValidationResult {
 }
 
 /**
- * Validate a decision against all policy rules
+ * Validate a decision against all policy rules and (when enforced) skill verdicts.
  */
 export async function validatePolicy(
   decision: Decision,
@@ -47,6 +50,26 @@ export async function validatePolicy(
       }
     }
 
+    if (process.env.SKILLS_ENFORCED === 'true' && decision.action === 'SPONSOR_TRANSACTION') {
+      const skillResult = await validateWithSkills(decision, {
+        currentGasPriceGwei: config.currentGasPriceGwei,
+      });
+      for (const s of skillResult.appliedSkills) {
+        if (!result.appliedRules.includes(s)) result.appliedRules.push(s);
+      }
+      for (const w of skillResult.warnings) {
+        result.warnings.push(`[Skills] ${w}`);
+      }
+      if (!skillResult.approved) {
+        result.passed = false;
+        result.errors.push(`[Skills] ${skillResult.decision}: ${skillResult.reasoning}`);
+        incrementCounter('aegis_skills_enforced_reject_total', 1, {
+          decision: skillResult.decision,
+          protocol: decision.parameters?.protocolId ?? 'unknown',
+        });
+      }
+    }
+
     logger.info('[Policy] Validation result', {
       passed: result.passed,
       errorCount: result.errors.length,
@@ -68,3 +91,8 @@ export async function validatePolicy(
 export { validateRules, type PolicyRule } from './rules';
 export { validateSponsorshipPolicy, sponsorshipPolicyRules } from './sponsorship-rules';
 export { reservePolicyRules } from './reserve-rules';
+export {
+  validateWithSkills,
+  type ValidateWithSkillsOptions,
+  type ValidateWithSkillsResult,
+} from './skill-based-rules';

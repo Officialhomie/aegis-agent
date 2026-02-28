@@ -10,6 +10,7 @@ import { getStateStore } from '../state-store';
 import { observeBotchanRequests } from '../observe/botchan';
 import { postToFeed } from '../social/botchan';
 import { enqueueRequest, getRequestStatus } from '../queue/sponsorship-queue';
+import { validateAccount } from '../validation/account-validator';
 import type { Skill, SkillContext, SkillResult } from './index';
 
 /** State key for tracking processed requests */
@@ -140,6 +141,23 @@ async function processRequest(
   }
 
   try {
+    // Validate account and get tier data - Agent-first execution guarantee
+    const validation = await validateAccount(request.targetWallet as `0x${string}`, 'base');
+
+    // ENFORCE: Reject EOAs (tier 0)
+    if (!validation.isValid || validation.agentTier === 0) {
+      logger.warn('[BotchanListener] Rejected EOA sponsorship request', {
+        requester: request.requesterAgent,
+        targetWallet: request.targetWallet,
+        reason: validation.reason,
+      });
+      return {
+        requestId: `rejected-eoa-${Date.now()}`,
+        approved: false,
+        reason: `EOA rejected - Agent-first policy requires smart accounts only (${validation.reason})`,
+      };
+    }
+
     // Add to sponsorship queue for async processing (pass signature fields when present for consumer verification)
     const { requestId, position } = await enqueueRequest({
       protocolId: request.protocol,
@@ -149,6 +167,12 @@ async function processRequest(
       estimatedCostUSD: 0.10, // Default estimate, will be calculated during processing
       ...(request.signature != null && { signature: request.signature }),
       ...(request.signatureTimestamp != null && { signatureTimestamp: request.signatureTimestamp }),
+      // Agent-first execution guarantees
+      agentTier: validation.agentTier,
+      agentType: validation.agentType,
+      isERC8004: validation.isERC8004Registered ?? false,
+      isERC4337: validation.isERC4337Compatible ?? false,
+      priority: validation.agentTier === 1 ? 200 : validation.agentTier === 2 ? 150 : 100,
     });
 
     logger.info('[BotchanListener] Request added to queue', {

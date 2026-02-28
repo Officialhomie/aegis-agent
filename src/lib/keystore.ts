@@ -129,22 +129,24 @@ async function resolvePrivateKeyHex(): Promise<string> {
       const out = (result.stdout ?? '').trim();
       const err = (result.stderr ?? '').trim();
       if (result.status !== 0) {
-        logger.error('[Keystore] cast wallet private-key failed', {
+        logger.warn('[Keystore] cast wallet private-key failed, falling back to env', {
           status: result.status,
           stderr: err.slice(0, 200),
         });
-        throw new Error(`cast wallet private-key failed: ${err || 'unknown'}`);
+        // Fall through to env fallback instead of throwing
+      } else {
+        const hex = out.startsWith('0x') ? out : `0x${out}`;
+        if (!/^0x[a-fA-F0-9]{64}$/.test(hex)) {
+          logger.warn('[Keystore] Invalid private key format from cast, falling back to env');
+        } else {
+          cachedHex = hex;
+          return cachedHex;
+        }
       }
-      const hex = out.startsWith('0x') ? out : `0x${out}`;
-      if (!/^0x[a-fA-F0-9]{64}$/.test(hex)) {
-        throw new Error('Invalid private key format from cast');
-      }
-      cachedHex = hex;
-      return cachedHex;
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
-      logger.error('[Keystore] Failed to load from Foundry keystore', { error: message });
-      throw e;
+      logger.warn('[Keystore] Failed to load from Foundry keystore, falling back to env', { error: message });
+      // Fall through to env fallback instead of throwing
     }
   }
 
