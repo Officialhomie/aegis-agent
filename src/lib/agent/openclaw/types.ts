@@ -6,6 +6,7 @@
  */
 
 export type CommandName =
+  // Phase 1: Monitoring & Basic Control
   | 'status'
   | 'cycle'
   | 'sponsor'
@@ -13,6 +14,7 @@ export type CommandName =
   | 'pause'
   | 'resume'
   | 'help'
+  // Phase 2: Management & Policy
   | 'pause_timed'
   | 'set_budget'
   | 'analytics'
@@ -28,7 +30,47 @@ export type CommandName =
   | 'pause_tier'
   | 'resume_tier'
   | 'queue_stats'
-  | 'tier_report';
+  | 'tier_report'
+  // ============================================================================
+  // OpenClaw Expanded Commands (require OPENCLAW_EXPANDED=true)
+  // ============================================================================
+  // ApprovedAgent CRUD
+  | 'create_agent'
+  | 'update_agent'
+  | 'delete_agent'
+  | 'get_agent'
+  | 'list_agents'
+  // ProtocolSponsor CRUD
+  | 'create_protocol'
+  | 'update_protocol'
+  | 'disable_protocol'
+  | 'get_protocol'
+  | 'list_protocols'
+  // Budget Management
+  | 'topup_budget'
+  | 'set_daily_budget'
+  | 'show_budget'
+  // Execution Guarantees CRUD
+  | 'create_guarantee'
+  | 'cancel_guarantee'
+  | 'list_guarantees'
+  | 'get_guarantee'
+  // Delegation Management
+  | 'create_delegation'
+  | 'revoke_delegation'
+  | 'list_delegations'
+  | 'get_delegation'
+  // Heartbeat & Liveness
+  | 'start_heartbeat'
+  | 'stop_heartbeat'
+  | 'liveness_report'
+  // Reports & Audit
+  | 'export_sponsorships'
+  | 'audit_log'
+  | 'generate_report'
+  // Safety & Confirmation
+  | 'confirm'
+  | 'commands';
 
 /** Incoming request from OpenClaw (POST /api/openclaw) */
 export interface OpenClawRequest {
