@@ -9,6 +9,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { validateSponsorshipPolicy } from '@/src/lib/agent/policy/sponsorship-rules';
 import { observeGasPrice } from '@/src/lib/agent/observe';
+import { validateAccount } from '@/src/lib/agent/validation/account-validator';
 import type { AgentConfig } from '@/src/lib/agent';
 
 const CheckEligibilitySchema = z.object({
@@ -31,6 +32,20 @@ export async function POST(request: Request): Promise<Response> {
         { error: 'Invalid request', details: parsed.error.flatten() },
         { status: 400 }
       );
+    }
+
+    // Agent-first: validate account type and tier before running policy
+    const accountValidation = await validateAccount(parsed.data.agentWallet as `0x${string}`);
+    if (!accountValidation.isValid) {
+      return NextResponse.json({
+        eligible: false,
+        errors: [`Agent rejected: ${accountValidation.reason}`],
+        warnings: [],
+        appliedRules: ['account-validation'],
+        accountType: accountValidation.agentType,
+        agentTier: accountValidation.agentTier,
+        checkedAt: new Date().toISOString(),
+      });
     }
 
     const syntheticDecision = {
@@ -71,6 +86,8 @@ export async function POST(request: Request): Promise<Response> {
       errors: result.errors,
       warnings: result.warnings,
       appliedRules: result.appliedRules,
+      accountType: accountValidation.agentType,
+      agentTier: accountValidation.agentTier,
       checkedAt: new Date().toISOString(),
     });
   } catch (e) {
