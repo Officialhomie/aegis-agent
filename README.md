@@ -104,8 +104,7 @@ npm install
 cp .env.example .env
 # Edit .env with your API keys
 
-# Generate Prisma client
-npm run db:generate
+# Prisma client is generated automatically on npm install (postinstall). If you pull schema changes without reinstalling, run: npm run db:generate
 
 # Push database schema
 npm run db:push

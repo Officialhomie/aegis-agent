@@ -41,6 +41,19 @@ vi.mock('../../src/lib/agent/security/abuse-detection', () => ({
   detectAbuse: vi.fn().mockResolvedValue({ isAbusive: false }),
 }));
 
+vi.mock('../../src/lib/protocol/onboarding', () => ({
+  canExecuteSponsorship: vi.fn().mockResolvedValue({ allowed: true, mode: 'SIMULATION' }),
+}));
+
+vi.mock('../../src/lib/protocol/runtime-overrides', () => ({
+  getActiveRuntimeOverride: vi.fn().mockResolvedValue(null),
+  isWalletBlocked: vi.fn().mockResolvedValue(false),
+}));
+
+vi.mock('../../src/lib/agent/identity/gas-passport', () => ({
+  getPassport: vi.fn().mockResolvedValue(null),
+}));
+
 describe('validateRules', () => {
   const baseConfig: AgentConfig = {
     confidenceThreshold: 0.75,

@@ -15,11 +15,11 @@ const AGENT_B = '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 const AGENT_C = '0xcccccccccccccccccccccccccccccccccccccccc';
 const PROTOCOL_ID = 'test-protocol';
 
-const mockProtocolFindUnique = vi.fn().mockResolvedValue({
-  protocolId: PROTOCOL_ID,
-  whitelistedContracts: [AGENT_A],
-});
-const mockApprovedAgentFindUnique = vi.fn();
+const mockProtocolFindUnique = vi.hoisted(() => vi.fn().mockResolvedValue({
+  protocolId: 'test-protocol',
+  whitelistedContracts: ['0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'],
+}));
+const mockApprovedAgentFindUnique = vi.hoisted(() => vi.fn());
 
 vi.mock('../../src/lib/agent/observe/sponsorship', () => ({
   getOnchainTxCount: vi.fn().mockResolvedValue(10),
@@ -53,6 +53,26 @@ vi.mock('@prisma/client', () => ({
     protocolSponsor = { findUnique: mockProtocolFindUnique };
     approvedAgent = { findUnique: mockApprovedAgentFindUnique };
   },
+}));
+
+vi.mock('../../src/lib/db', () => ({
+  getPrisma: vi.fn().mockReturnValue({
+    protocolSponsor: { findUnique: mockProtocolFindUnique },
+    approvedAgent: { findUnique: mockApprovedAgentFindUnique },
+  }),
+}));
+
+vi.mock('../../src/lib/protocol/onboarding', () => ({
+  canExecuteSponsorship: vi.fn().mockResolvedValue({ allowed: true, mode: 'SIMULATION' }),
+}));
+
+vi.mock('../../src/lib/protocol/runtime-overrides', () => ({
+  getActiveRuntimeOverride: vi.fn().mockResolvedValue(null),
+  isWalletBlocked: vi.fn().mockResolvedValue(false),
+}));
+
+vi.mock('../../src/lib/agent/identity/gas-passport', () => ({
+  getPassport: vi.fn().mockResolvedValue(null),
 }));
 
 function makeDecision(agentWallet: string, estimatedCostUSD: number = 0.5): Decision {

@@ -4,7 +4,7 @@
  * Handles SLA breaches, calculates refunds, and processes them.
  */
 
-import type { Prisma } from '@prisma/client';
+import type { GuaranteeBreach, Prisma } from '@prisma/client';
 import { getPrisma } from '../../db';
 import { logger } from '../../logger';
 import { BreachType, ExecutionGuarantee, GuaranteeBreachRecord, ServiceTier } from './types';
@@ -201,7 +201,7 @@ export async function getPendingBreaches(options: {
     skip: offset,
   });
 
-  return breaches.map((b) => ({
+  return breaches.map((b: GuaranteeBreach) => ({
     ...b,
     breachType: b.breachType as BreachType,
     breachDetails: b.breachDetails as Record<string, unknown>,
@@ -228,7 +228,7 @@ export async function getGuaranteeBreaches(
     skip: offset,
   });
 
-  return breaches.map((b) => ({
+  return breaches.map((b: GuaranteeBreach) => ({
     ...b,
     breachType: b.breachType as BreachType,
     breachDetails: b.breachDetails as Record<string, unknown>,

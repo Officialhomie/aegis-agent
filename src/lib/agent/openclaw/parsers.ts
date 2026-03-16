@@ -32,8 +32,8 @@ export function parseDuration(input: string): number {
     return parseInt(dayMatch[1]) * 24 * 60 * 60 * 1000;
   }
 
-  // Default: 1 hour if no match
-  return 60 * 60 * 1000;
+  // Return 0 for unparseable input — no duration matched
+  return 0;
 }
 
 /**

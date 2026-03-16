@@ -11,9 +11,9 @@ import {
 } from '../../src/lib/agent/execute/paymaster';
 import type { Decision } from '../../src/lib/agent/reason/schemas';
 
-const mockProtocolSponsorFindUnique = vi.fn();
-const mockProtocolSponsorUpdate = vi.fn();
-const mockSponsorshipRecordCreate = vi.fn().mockResolvedValue(undefined);
+const mockProtocolSponsorFindUnique = vi.hoisted(() => vi.fn());
+const mockProtocolSponsorUpdate = vi.hoisted(() => vi.fn());
+const mockSponsorshipRecordCreate = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 
 vi.mock('../../src/lib/db', () => ({
   getPrisma: () => ({

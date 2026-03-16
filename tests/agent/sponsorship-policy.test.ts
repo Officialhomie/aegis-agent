@@ -32,10 +32,30 @@ vi.mock('../../src/lib/agent/security/abuse-detection', () => ({
   detectAbuse: vi.fn().mockResolvedValue({ isAbusive: false }),
 }));
 
-const mockProtocolFindUnique = vi.fn().mockResolvedValue({
+vi.mock('../../src/lib/protocol/onboarding', () => ({
+  canExecuteSponsorship: vi.fn().mockResolvedValue({ allowed: true, mode: 'SIMULATION' }),
+}));
+
+vi.mock('../../src/lib/protocol/runtime-overrides', () => ({
+  getActiveRuntimeOverride: vi.fn().mockResolvedValue(null),
+  isWalletBlocked: vi.fn().mockResolvedValue(false),
+}));
+
+vi.mock('../../src/lib/agent/identity/gas-passport', () => ({
+  getPassport: vi.fn().mockResolvedValue(null),
+}));
+
+vi.mock('../../src/lib/db', () => ({
+  getPrisma: vi.fn().mockReturnValue({
+    protocolSponsor: { findUnique: mockProtocolFindUnique },
+    approvedAgent: { findUnique: vi.fn().mockResolvedValue(null) },
+  }),
+}));
+
+const mockProtocolFindUnique = vi.hoisted(() => vi.fn().mockResolvedValue({
   protocolId: 'test-protocol',
   whitelistedContracts: ['0x1234567890123456789012345678901234567890'],
-});
+}));
 
 vi.mock('@prisma/client', () => ({
   PrismaClient: class MockPrismaClient {

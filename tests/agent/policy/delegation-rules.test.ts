@@ -8,8 +8,10 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Set env before imports
-process.env.DELEGATION_ENABLED = 'true';
+// Set env before imports — must use vi.hoisted() so it runs before module evaluation
+vi.hoisted(() => {
+  process.env.DELEGATION_ENABLED = 'true';
+});
 
 // Mock dependencies before importing
 vi.mock('../../../src/lib/db', () => ({

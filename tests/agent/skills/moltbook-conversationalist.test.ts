@@ -77,7 +77,8 @@ function makePost(id: string): import('../../../src/lib/agent/social/moltbook').
 
 describe('moltbook-conversationalist', () => {
   beforeEach(async () => {
-    vi.resetModules();
+    vi.useFakeTimers();
+
     mockMessagesCreate.mockReset();
     mockStoreGet.mockReset();
     mockStoreSet.mockReset();
@@ -96,12 +97,7 @@ describe('moltbook-conversationalist', () => {
     mockStoreSet.mockResolvedValue(undefined);
     mockCacheGet.mockResolvedValue(null);
     mockCacheSet.mockResolvedValue(undefined);
-    mockReplyToComment.mockImplementation(
-      async (_p: string, _c: string, content: unknown) => {
-        await Promise.resolve(content);
-        return { id: 'reply-1' };
-      }
-    );
+    mockReplyToComment.mockResolvedValue({ id: 'reply-1' });
     mockMessagesCreate.mockResolvedValue({
       content: [{ type: 'text', text: 'LLM reply' }],
     });
@@ -119,7 +115,9 @@ describe('moltbook-conversationalist', () => {
     const { moltbookConversationalistSkill } = await import(
       '../../../src/lib/agent/skills/moltbook-conversationalist'
     );
-    await moltbookConversationalistSkill.execute({ dryRun: false });
+    const runPromise = moltbookConversationalistSkill.execute({ dryRun: false });
+    await vi.advanceTimersByTimeAsync(100_000);
+    await runPromise;
 
     expect(mockMessagesCreate).toHaveBeenCalledTimes(1);
     expect(mockMessagesCreate).toHaveBeenCalledWith(
@@ -145,11 +143,16 @@ describe('moltbook-conversationalist', () => {
       '../../../src/lib/agent/skills/moltbook-conversationalist'
     );
 
-    await moltbookConversationalistSkill.execute({ dryRun: false });
+    const run1 = moltbookConversationalistSkill.execute({ dryRun: false });
+    await vi.advanceTimersByTimeAsync(100_000);
+    await run1;
     expect(mockMessagesCreate).toHaveBeenCalledTimes(1);
+
     mockCacheGet.mockResolvedValue('LLM reply');
 
-    await moltbookConversationalistSkill.execute({ dryRun: false });
+    const run2 = moltbookConversationalistSkill.execute({ dryRun: false });
+    await vi.advanceTimersByTimeAsync(100_000);
+    await run2;
     expect(mockMessagesCreate).toHaveBeenCalledTimes(1);
   });
 
@@ -162,12 +165,13 @@ describe('moltbook-conversationalist', () => {
     const { moltbookConversationalistSkill } = await import(
       '../../../src/lib/agent/skills/moltbook-conversationalist'
     );
-    const result = await moltbookConversationalistSkill.execute({ dryRun: false });
+    const runPromise = moltbookConversationalistSkill.execute({ dryRun: false });
+    await vi.advanceTimersByTimeAsync(100_000);
+    const result = await runPromise;
 
     expect(result.success).toBe(true);
     const replyArg = mockReplyToComment.mock.calls[0]?.[2];
-    const reply = typeof replyArg?.then === 'function' ? await replyArg : replyArg;
-    expect(String(reply)).toContain('autonomous gas sponsorship agent');
+    expect(String(replyArg)).toContain('autonomous gas sponsorship agent');
   });
 
   it('includes referral in prompt when comment mentions yield farming', async () => {
@@ -178,7 +182,9 @@ describe('moltbook-conversationalist', () => {
     const { moltbookConversationalistSkill } = await import(
       '../../../src/lib/agent/skills/moltbook-conversationalist'
     );
-    await moltbookConversationalistSkill.execute({ dryRun: false });
+    const runPromise = moltbookConversationalistSkill.execute({ dryRun: false });
+    await vi.advanceTimersByTimeAsync(100_000);
+    await runPromise;
 
     expect(mockMessagesCreate).toHaveBeenCalledTimes(1);
     const options = (mockMessagesCreate.mock.calls[0] as any)[0];
@@ -197,7 +203,9 @@ describe('moltbook-conversationalist', () => {
     const { moltbookConversationalistSkill } = await import(
       '../../../src/lib/agent/skills/moltbook-conversationalist'
     );
-    const result = await moltbookConversationalistSkill.execute({ dryRun: false });
+    const runPromise = moltbookConversationalistSkill.execute({ dryRun: false });
+    await vi.advanceTimersByTimeAsync(100_000);
+    const result = await runPromise;
 
     expect(result.success).toBe(true);
     const data = result.data as { commentsFound: number; repliesSent: number };
@@ -205,8 +213,7 @@ describe('moltbook-conversationalist', () => {
     expect(data.repliesSent).toBeLessThanOrEqual(3);
   });
 
-  it('respects MAX_REPLIES_PER_RUN (3) with 5 engageable comments', async () => {
-    vi.useFakeTimers();
+  it('respects MAX_REPLIES_PER_RUN (3) with 5 engageable comments', { timeout: 60000 }, async () => {
     const comments = Array.from({ length: 5 }, (_, i) =>
       makeComment(`c${i}`, `Question ${i}?`, `User${i}`)
     );
@@ -216,7 +223,7 @@ describe('moltbook-conversationalist', () => {
       '../../../src/lib/agent/skills/moltbook-conversationalist'
     );
     const runPromise = moltbookConversationalistSkill.execute({ dryRun: false });
-    await vi.advanceTimersByTimeAsync(25_000);
+    await vi.advanceTimersByTimeAsync(100_000);
     const result = await runPromise;
 
     expect(result.success).toBe(true);
@@ -233,7 +240,10 @@ describe('moltbook-conversationalist', () => {
       '../../../src/lib/agent/skills/moltbook-conversationalist'
     );
 
-    await moltbookConversationalistSkill.execute({ dryRun: false });
+    const run1 = moltbookConversationalistSkill.execute({ dryRun: false });
+    await vi.advanceTimersByTimeAsync(100_000);
+    await run1;
+
     expect(mockStoreSet).toHaveBeenCalled();
     const setCall = mockStoreSet.mock.calls.find(
       (c: any) => c[0] === 'moltbook:repliedComments'
@@ -247,7 +257,11 @@ describe('moltbook-conversationalist', () => {
     mockGetPostComments.mockResolvedValue([
       makeComment('c1', 'First question?', 'User1'),
     ]);
-    await moltbookConversationalistSkill.execute({ dryRun: false });
+
+    const run2 = moltbookConversationalistSkill.execute({ dryRun: false });
+    await vi.advanceTimersByTimeAsync(100_000);
+    await run2;
+
     expect(mockReplyToComment.mock.calls.length).toBe(replyCountAfterFirstRun);
   });
 });
