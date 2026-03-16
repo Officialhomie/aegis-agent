@@ -6,6 +6,11 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// Set env vars before module imports so DELEGATION_ENABLED=true is read at module load
+vi.hoisted(() => {
+  process.env.DELEGATION_ENABLED = 'true';
+});
+
 // Mock the database before importing the service
 vi.mock('../../../src/lib/db', () => ({
   getPrisma: vi.fn(),
@@ -21,7 +26,7 @@ vi.mock('../../../src/lib/logger', () => ({
 }));
 
 vi.mock('../../../src/lib/delegation/eip712', () => ({
-  verifyDelegationSignature: vi.fn().mockResolvedValue(true),
+  verifyDelegationSignature: vi.fn().mockResolvedValue({ valid: true }),
   hashPermissions: vi.fn().mockReturnValue('0x' + 'ab'.repeat(32)),
 }));
 
@@ -64,7 +69,7 @@ describe('createDelegation', () => {
     delegator: '0x1234567890123456789012345678901234567890',
     agent: '0x0987654321098765432109876543210987654321',
     signature: '0x' + 'ab'.repeat(65),
-    signatureNonce: '1',
+    nonce: '1',
     permissions: {
       contracts: [],
       functions: [],
@@ -75,8 +80,8 @@ describe('createDelegation', () => {
       maxTxPerHour: 10,
     },
     gasBudgetWei: '1000000000000000000',
-    validFromMs: Date.now(),
-    validUntilMs: Date.now() + 86400000,
+    validFrom: new Date().toISOString(),
+    validUntil: new Date(Date.now() + 86400000).toISOString(),
   };
 
   it('creates delegation successfully', async () => {
@@ -91,8 +96,8 @@ describe('createDelegation', () => {
       gasBudgetWei: BigInt(validRequest.gasBudgetWei),
       gasBudgetSpent: BigInt(0),
       status: 'ACTIVE',
-      validFrom: new Date(validRequest.validFromMs),
-      validUntil: new Date(validRequest.validUntilMs),
+      validFrom: new Date(validRequest.validFrom),
+      validUntil: new Date(validRequest.validUntil),
       revokedAt: null,
       revokedReason: null,
       onChainTxHash: null,
@@ -119,7 +124,7 @@ describe('createDelegation', () => {
     const result = await createDelegation(validRequest);
 
     expect(result.success).toBe(false);
-    expect(result.error).toContain('already exists');
+    expect(result.error).toContain('Nonce already used');
   });
 });
 
@@ -186,7 +191,7 @@ describe('revokeDelegation', () => {
     );
 
     expect(result.success).toBe(false);
-    expect(result.error).toContain('Only delegator');
+    expect(result.error).toContain('Only the delegator');
   });
 
   it('fails when delegation already revoked', async () => {
@@ -284,8 +289,8 @@ describe('validateDelegationForTransaction', () => {
     mockPrisma.delegation.findUnique.mockResolvedValue(mockDelegation);
     mockPrisma.delegationUsage.count.mockResolvedValue(0);
 
-    const result = await validateDelegationForTransaction('test-delegation-id', {
-      agentAddress: '0x2222222222222222222222222222222222222222',
+    const result = await validateDelegationForTransaction({
+      delegationId: 'test-delegation-id',
       targetContract: '0x3333333333333333333333333333333333333333',
       valueWei: BigInt(0),
       estimatedGasWei: BigInt(100000000000000), // 0.0001 ETH
@@ -297,8 +302,8 @@ describe('validateDelegationForTransaction', () => {
   it('returns invalid when delegation not found', async () => {
     mockPrisma.delegation.findUnique.mockResolvedValue(null);
 
-    const result = await validateDelegationForTransaction('nonexistent-id', {
-      agentAddress: '0x2222222222222222222222222222222222222222',
+    const result = await validateDelegationForTransaction({
+      delegationId: 'nonexistent-id',
       targetContract: '0x3333333333333333333333333333333333333333',
       valueWei: BigInt(0),
       estimatedGasWei: BigInt(100000000000000),
@@ -331,15 +336,15 @@ describe('validateDelegationForTransaction', () => {
 
     mockPrisma.delegation.findUnique.mockResolvedValue(mockDelegation);
 
-    const result = await validateDelegationForTransaction('test-delegation-id', {
-      agentAddress: '0x2222222222222222222222222222222222222222',
+    const result = await validateDelegationForTransaction({
+      delegationId: 'test-delegation-id',
       targetContract: '0x3333333333333333333333333333333333333333', // Different contract
       valueWei: BigInt(0),
       estimatedGasWei: BigInt(100000000000000),
     });
 
     expect(result.valid).toBe(false);
-    expect(result.error).toContain('not in scope');
+    expect(result.error).toContain('delegation scope');
   });
 });
 

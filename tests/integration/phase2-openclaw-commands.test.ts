@@ -58,10 +58,11 @@ vi.mock('@/src/lib/logger', () => ({
 // Mock session manager
 vi.mock('@/src/lib/agent/openclaw/session-manager', () => ({
   getProtocolIdFromSession: vi.fn().mockResolvedValue('test-protocol'),
-  createOpenClawSession: vi.fn().mockResolvedValue({
-    sessionId: 'test-session',
-    protocolId: 'test-protocol',
-  }),
+  createOpenClawSession: vi.fn().mockImplementation(async (sessionId: string, protocolId: string) => ({
+    sessionId,
+    protocolId,
+  })),
+  isSessionValid: vi.fn().mockResolvedValue(true),
 }));
 
 // Mock state store
@@ -277,10 +278,9 @@ describe('Phase 2: Command Execution', () => {
         name: 'pause_timed' as const,
         args: { durationMs: (2 * 60 * 60 * 1000).toString() },
         rawInput: 'pause for 2 hours',
-        sessionId: 'test-session',
       };
 
-      const result = await executeCommand(cmd as any);
+      const result = await executeCommand(cmd as any, 'test-session');
 
       expect(result.success).toBe(true);
       expect(result.message).toContain('paused');
@@ -327,10 +327,9 @@ describe('Phase 2: Command Execution', () => {
         name: 'set_budget' as const,
         args: { amountUSD: '500' },
         rawInput: 'set budget to $500',
-        sessionId: 'test-session',
       };
 
-      const result = await executeCommand(cmd as any);
+      const result = await executeCommand(cmd as any, 'test-session');
 
       expect(result.success).toBe(true);
       expect(result.message).toContain('$500');
@@ -345,10 +344,9 @@ describe('Phase 2: Command Execution', () => {
         name: 'analytics' as const,
         args: { limit: '10', period: 'week' },
         rawInput: 'show top 10 users this week',
-        sessionId: 'test-session',
       };
 
-      const result = await executeCommand(cmd as any);
+      const result = await executeCommand(cmd as any, 'test-session');
 
       expect(result.success).toBe(true);
       expect(result.message).toContain('Analytics Summary');
@@ -382,10 +380,9 @@ describe('Phase 2: Command Execution', () => {
           reason: 'spam',
         },
         rawInput: 'block wallet 0x...',
-        sessionId: 'test-session',
       };
 
-      const result = await executeCommand(cmd as any);
+      const result = await executeCommand(cmd as any, 'test-session');
 
       expect(result.success).toBe(true);
       expect(result.message).toContain('blocked');
@@ -416,10 +413,9 @@ describe('Phase 2: Command Execution', () => {
         name: 'set_gas_cap' as const,
         args: { maxGwei: '50' },
         rawInput: 'set gas cap to 50 gwei',
-        sessionId: 'test-session',
       };
 
-      const result = await executeCommand(cmd as any);
+      const result = await executeCommand(cmd as any, 'test-session');
 
       expect(result.success).toBe(true);
       expect(result.message).toContain('50 gwei');

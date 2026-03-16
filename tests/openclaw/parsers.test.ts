@@ -102,9 +102,9 @@ describe('parseDuration', () => {
     expect(parseDuration('for 30 min')).toBe(30 * 60 * 1000);
   });
 
-  it('returns default (1h) for no duration', () => {
-    // parseDuration defaults to 1 hour when no duration found
-    expect(parseDuration('no duration here')).toBe(60 * 60 * 1000);
+  it('returns 0 for no duration', () => {
+    // parseDuration returns 0 when no duration pattern is found (safe default)
+    expect(parseDuration('no duration here')).toBe(0);
   });
 });
 

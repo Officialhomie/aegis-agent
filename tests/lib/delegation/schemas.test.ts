@@ -75,14 +75,14 @@ describe('CreateDelegationRequestSchema', () => {
       delegator: '0x1234567890123456789012345678901234567890',
       agent: '0x0987654321098765432109876543210987654321',
       signature: '0x' + 'ab'.repeat(65),
-      signatureNonce: '1',
+      nonce: '1',
       permissions: {
         contracts: [],
         functions: [],
       },
       gasBudgetWei: '1000000000000000000',
-      validFromMs: Date.now(),
-      validUntilMs: Date.now() + 86400000,
+      validFrom: new Date().toISOString(),
+      validUntil: new Date(Date.now() + 86400000).toISOString(),
     };
 
     const result = CreateDelegationRequestSchema.safeParse(input);
@@ -94,11 +94,11 @@ describe('CreateDelegationRequestSchema', () => {
       delegator: '0x1234567890123456789012345678901234567890',
       agent: '0x0987654321098765432109876543210987654321',
       signature: '0x' + 'ab'.repeat(65),
-      signatureNonce: '1',
+      nonce: '1',
       permissions: {},
       gasBudgetWei: '1000000000000000000',
-      validFromMs: Date.now() - 86400000,
-      validUntilMs: Date.now() - 3600000, // Already expired
+      validFrom: new Date(Date.now() - 86400000).toISOString(),
+      validUntil: new Date(Date.now() - 3600000).toISOString(), // Already expired
     };
 
     const result = CreateDelegationRequestSchema.safeParse(input);
@@ -111,11 +111,11 @@ describe('CreateDelegationRequestSchema', () => {
       delegator: sameAddress,
       agent: sameAddress,
       signature: '0x' + 'ab'.repeat(65),
-      signatureNonce: '1',
+      nonce: '1',
       permissions: {},
       gasBudgetWei: '1000000000000000000',
-      validFromMs: Date.now(),
-      validUntilMs: Date.now() + 86400000,
+      validFrom: new Date().toISOString(),
+      validUntil: new Date(Date.now() + 86400000).toISOString(),
     };
 
     const result = CreateDelegationRequestSchema.safeParse(input);

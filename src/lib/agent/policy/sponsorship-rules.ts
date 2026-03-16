@@ -171,6 +171,7 @@ export const sponsorshipPolicyRules: PolicyRule[] = [
         };
       }
       const passportQualifies =
+        passport != null &&
         passport.sponsorCount >= PASSPORT_PREFERENTIAL_MIN_SPONSORSHIPS &&
         passport.successRateBps >= PASSPORT_PREFERENTIAL_MIN_SUCCESS_BPS;
       const passed =

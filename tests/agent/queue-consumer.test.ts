@@ -60,6 +60,21 @@ vi.mock('../../src/lib/agent/observe/botchan', () => ({
   observeBotchanRequests: () => mockObserveBotchanRequests(),
 }));
 
+vi.mock('../../src/lib/agent/validation/account-validator', () => ({
+  validateAccount: vi.fn().mockResolvedValue({
+    isValid: true,
+    agentTier: 2,
+    agentType: 'ERC4337_ACCOUNT',
+    isERC8004Registered: false,
+    isERC4337Compatible: true,
+    reason: 'ERC-4337 smart account',
+  }),
+}));
+
+vi.mock('../../src/lib/agent/social/botchan', () => ({
+  postToFeed: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock('../../src/lib/logger', () => ({
   logger: {
     info: vi.fn(),

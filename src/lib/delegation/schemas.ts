@@ -69,7 +69,13 @@ export const CreateDelegationRequestSchema = z.object({
   // EIP-712 signature
   signature: z.string().min(130).max(132), // 65 bytes hex with 0x prefix
   nonce: BigIntStringSchema,
-});
+}).refine(
+  (data) => new Date(data.validUntil) > new Date(),
+  { message: 'validUntil must be in the future', path: ['validUntil'] }
+).refine(
+  (data) => data.delegator.toLowerCase() !== data.agent.toLowerCase(),
+  { message: 'delegator and agent must be different addresses', path: ['agent'] }
+);
 
 export type CreateDelegationRequest = z.infer<typeof CreateDelegationRequestSchema>;
 
@@ -89,7 +95,7 @@ export const ListDelegationsQuerySchema = z.object({
   delegator: AddressSchema.optional(),
   agent: AddressSchema.optional(),
   status: z.enum(['ACTIVE', 'REVOKED', 'EXPIRED', 'EXHAUSTED', 'ALL']).optional().default('ACTIVE'),
-  limit: z.coerce.number().int().min(1).max(100).optional().default(50),
+  limit: z.coerce.number().int().min(1).optional().default(50).transform((v) => Math.min(v, 100)),
   offset: z.coerce.number().int().min(0).optional().default(0),
 });
 
