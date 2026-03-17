@@ -20,6 +20,7 @@ import { execute } from './execute';
 import { storeMemory, retrieveRelevantMemories } from './memory';
 import { getDefaultCircuitBreaker } from './execute/circuit-breaker';
 import { signDecision, sponsorTransaction } from './execute/paymaster';
+import { logPolicyDecisionOnchain, logReputationUpdateOnchain } from './execute/attestation-logger';
 import { postSponsorshipProof } from './social/farcaster';
 import { postSponsorshipToBotchan, postReserveSwapToBotchan } from './social/botchan';
 import {
@@ -195,6 +196,15 @@ export async function runSponsorshipCycle(
 
     if (!policyResult.passed) {
       logger.warn('[Aegis] Decision rejected by policy', { errors: policyResult.errors });
+      const rejectionReason = policyResult.errors.map((e: string) => e).join('; ').slice(0, 256);
+      const signed = await signDecision(decision);
+      logPolicyDecisionOnchain({
+        agentAddress: (decision.parameters as { agentWallet?: string } | null)?.agentWallet ?? '0x0000000000000000000000000000000000000000',
+        action: decision.action,
+        approved: false,
+        decisionHash: signed.decisionHash,
+        reason: rejectionReason,
+      }).catch((err) => logger.debug('[Aegis] Attestation log failed', { error: String(err) }));
       await storeMemory({
         type: 'DECISION',
         decision,
@@ -202,6 +212,18 @@ export async function runSponsorshipCycle(
         policyErrors: policyResult.errors,
       });
       return state;
+    }
+
+    // Log policy approval onchain
+    {
+      const signed = await signDecision(decision);
+      logPolicyDecisionOnchain({
+        agentAddress: (decision.parameters as { agentWallet?: string } | null)?.agentWallet ?? '0x0000000000000000000000000000000000000000',
+        action: decision.action,
+        approved: true,
+        decisionHash: signed.decisionHash,
+        reason: 'All policy rules passed',
+      }).catch((err) => logger.debug('[Aegis] Attestation log failed', { error: String(err) }));
     }
 
     if (decision.confidence >= config.confidenceThreshold) {
@@ -218,6 +240,16 @@ export async function runSponsorshipCycle(
           if (state.executionResult?.success) {
             const { updateReservesAfterSponsorship } = await import('./execute/post-sponsorship');
             await updateReservesAfterSponsorship(state.executionResult, config.currentGasPriceGwei);
+            // Log reputation update onchain after successful sponsorship
+            const sponsorParams = decision.parameters as { agentWallet?: string; protocolId?: string } | null;
+            if (sponsorParams?.agentWallet) {
+              logReputationUpdateOnchain({
+                agentAddress: sponsorParams.agentWallet,
+                sponsorCount: 1,
+                successRateBps: 10000,
+                passportData: JSON.stringify({ protocolId: sponsorParams.protocolId, timestamp: Date.now() }),
+              }).catch((err) => logger.debug('[Aegis] Reputation attestation failed', { error: String(err) }));
+            }
             const params = decision.parameters as { protocolId?: string; targetContract?: string } | null;
             if (params?.protocolId) {
               const { getActiveCampaignForProtocol, recordSponsorshipInCampaign } = await import('./campaigns');
