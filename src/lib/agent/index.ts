@@ -21,6 +21,8 @@ import { storeMemory, retrieveRelevantMemories } from './memory';
 import { getDefaultCircuitBreaker } from './execute/circuit-breaker';
 import { signDecision, sponsorTransaction } from './execute/paymaster';
 import { logPolicyDecisionOnchain, logReputationUpdateOnchain } from './execute/attestation-logger';
+import { attestGasPassport } from './identity/eas-attestation';
+import { getPassport } from './identity/gas-passport';
 import { postSponsorshipProof } from './social/farcaster';
 import { postSponsorshipToBotchan, postReserveSwapToBotchan } from './social/botchan';
 import {
@@ -249,6 +251,32 @@ export async function runSponsorshipCycle(
                 successRateBps: 10000,
                 passportData: JSON.stringify({ protocolId: sponsorParams.protocolId, timestamp: Date.now() }),
               }).catch((err) => logger.debug('[Aegis] Reputation attestation failed', { error: String(err) }));
+            }
+            // EAS Gas Passport attestation every 5th successful sponsorship
+            if (process.env.EAS_GAS_PASSPORT_SCHEMA_UID) {
+              const storeModule = await import('./state-store');
+              const stateStore = await storeModule.getStateStore();
+              const easKey = 'sponsorship:eas:counter';
+              const easData = await stateStore.get(easKey);
+              const easCount = easData ? parseInt(easData, 10) + 1 : 1;
+              await stateStore.set(easKey, easCount.toString());
+              if (easCount % 5 === 0) {
+                const agentWallet = process.env.AGENT_WALLET_ADDRESS ?? '';
+                if (agentWallet) {
+                  const passport = await getPassport(agentWallet).catch(() => null);
+                  if (passport) {
+                    attestGasPassport({
+                      agentAddress: agentWallet,
+                      sponsorCount: passport.sponsorCount,
+                      successRateBps: passport.successRateBps,
+                      protocolCount: passport.protocolCount,
+                      passportData: JSON.stringify({ ...passport, easCount }),
+                    }).then((r) => {
+                      if (r.success) logger.info('[Aegis] EAS Gas Passport attested', { txHash: r.txHash, attestationUID: r.attestationUID, easCount });
+                    }).catch((err) => logger.debug('[Aegis] EAS attestation failed', { error: String(err) }));
+                  }
+                }
+              }
             }
             const params = decision.parameters as { protocolId?: string; targetContract?: string } | null;
             if (params?.protocolId) {
