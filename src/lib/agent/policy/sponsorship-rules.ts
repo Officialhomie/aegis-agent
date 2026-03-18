@@ -8,6 +8,11 @@
 import { getConfigNumber } from '../../config';
 import { logger } from '../../logger';
 import { getStateStore } from '../state-store';
+import {
+  checkDailyCap,
+  checkGlobalRate,
+  checkProtocolRate,
+} from './rate-limit-utils';
 import { getOnchainTxCount, getProtocolBudget, getAgentWalletBalance } from '../observe/sponsorship';
 import { detectAbuse } from '../security/abuse-detection';
 import { getPassport } from '../identity/gas-passport';
@@ -107,7 +112,7 @@ export const sponsorshipPolicyRules: PolicyRule[] = [
         };
       } catch (error) {
         logger.error('[Policy] Failed to check pause override', { error, protocolId });
-        return { ruleName: 'runtime-pause-check', passed: true, message: 'Check skipped (error)', severity: 'ERROR' };
+        return { ruleName: 'runtime-pause-check', passed: false, message: 'Check failed - failing closed (error)', severity: 'ERROR' };
       }
     },
   },
@@ -144,7 +149,7 @@ export const sponsorshipPolicyRules: PolicyRule[] = [
         };
       } catch (error) {
         logger.error('[Policy] Failed to check blocked wallet', { error, protocolId, walletAddress });
-        return { ruleName: 'runtime-blocked-wallet-check', passed: true, message: 'Check skipped (error)', severity: 'ERROR' };
+        return { ruleName: 'runtime-blocked-wallet-check', passed: false, message: 'Check failed - failing closed (error)', severity: 'ERROR' };
       }
     },
   },
@@ -328,34 +333,13 @@ export const sponsorshipPolicyRules: PolicyRule[] = [
       if (!isSponsorshipDecision(decision)) {
         return { ruleName: 'daily-cap-per-agent', passed: true, message: 'N/A', severity: 'ERROR' };
       }
-      const agent = decision.parameters.agentWallet.toLowerCase();
-      const store = await getStateStore();
-      const dayKey = `aegis:sponsorship:agent:${agent}:day`;
-      const raw = await store.get(dayKey);
-      let list: number[] = [];
-      if (raw) {
-        try {
-          const parsed = JSON.parse(raw) as unknown;
-          list = Array.isArray(parsed) ? (parsed as number[]) : [];
-          if (list.some((x) => typeof x !== 'number')) list = [];
-        } catch (error) {
-          logger.warn('[Sponsorship] Invalid sponsorship list format in cache', { error, key: dayKey });
-        }
-      }
-      const now = Date.now();
-      const oneDayMs = 24 * 60 * 60 * 1000;
-      const trimmed = list.filter((t) => now - t < oneDayMs);
-      const passed = trimmed.length < MAX_SPONSORSHIPS_PER_USER_DAY;
-      if (passed) {
-        trimmed.push(now);
-        await store.set(dayKey, JSON.stringify(trimmed), { px: oneDayMs });
-      }
+      const { passed, current, limit } = await checkDailyCap(decision.parameters.agentWallet);
       return {
         ruleName: 'daily-cap-per-agent',
         passed,
         message: passed
-          ? `User daily count OK (${trimmed.length}/${MAX_SPONSORSHIPS_PER_USER_DAY})`
-          : `User daily limit exceeded (${trimmed.length}/${MAX_SPONSORSHIPS_PER_USER_DAY})`,
+          ? `User daily count OK (${current}/${limit})`
+          : `User daily limit exceeded (${current}/${limit})`,
         severity: 'ERROR',
       };
     },
@@ -365,33 +349,13 @@ export const sponsorshipPolicyRules: PolicyRule[] = [
     description: 'Max 10 sponsorships per minute globally',
     severity: 'ERROR',
     validate: async (): Promise<RuleResult> => {
-      const store = await getStateStore();
-      const key = 'aegis:sponsorship:global:minute';
-      const raw = await store.get(key);
-      let list: number[] = [];
-      if (raw) {
-        try {
-          const parsed = JSON.parse(raw) as unknown;
-          list = Array.isArray(parsed) ? (parsed as number[]) : [];
-          if (list.some((x) => typeof x !== 'number')) list = [];
-        } catch (error) {
-          logger.warn('[Sponsorship] Invalid sponsorship list format in cache', { error, key });
-        }
-      }
-      const now = Date.now();
-      const oneMinuteMs = 60 * 1000;
-      const trimmed = list.filter((t) => now - t < oneMinuteMs);
-      const passed = trimmed.length < MAX_SPONSORSHIPS_PER_MINUTE;
-      if (passed) {
-        trimmed.push(now);
-        await store.set(key, JSON.stringify(trimmed), { px: oneMinuteMs });
-      }
+      const { passed, current, limit } = await checkGlobalRate();
       return {
         ruleName: 'global-rate-limit',
         passed,
         message: passed
-          ? `Global rate OK (${trimmed.length}/${MAX_SPONSORSHIPS_PER_MINUTE})`
-          : `Global rate limit exceeded (${trimmed.length}/${MAX_SPONSORSHIPS_PER_MINUTE})`,
+          ? `Global rate OK (${current}/${limit})`
+          : `Global rate limit exceeded (${current}/${limit})`,
         severity: 'ERROR',
       };
     },
@@ -404,33 +368,13 @@ export const sponsorshipPolicyRules: PolicyRule[] = [
       if (!isSponsorshipDecision(decision)) {
         return { ruleName: 'per-protocol-rate-limit', passed: true, message: 'N/A', severity: 'ERROR' };
       }
-      const store = await getStateStore();
-      const key = `aegis:sponsorship:protocol:${decision.parameters.protocolId}:minute`;
-      const raw = await store.get(key);
-      let list: number[] = [];
-      if (raw) {
-        try {
-          const parsed = JSON.parse(raw) as unknown;
-          list = Array.isArray(parsed) ? (parsed as number[]) : [];
-          if (list.some((x) => typeof x !== 'number')) list = [];
-        } catch (error) {
-          logger.warn('[Sponsorship] Invalid sponsorship list format in cache', { error, key });
-        }
-      }
-      const now = Date.now();
-      const oneMinuteMs = 60 * 1000;
-      const trimmed = list.filter((t) => now - t < oneMinuteMs);
-      const passed = trimmed.length < MAX_SPONSORSHIPS_PER_PROTOCOL_MINUTE;
-      if (passed) {
-        trimmed.push(now);
-        await store.set(key, JSON.stringify(trimmed), { px: oneMinuteMs });
-      }
+      const { passed, current, limit } = await checkProtocolRate(decision.parameters.protocolId);
       return {
         ruleName: 'per-protocol-rate-limit',
         passed,
         message: passed
-          ? `Protocol rate OK (${trimmed.length}/${MAX_SPONSORSHIPS_PER_PROTOCOL_MINUTE})`
-          : `Protocol rate limit exceeded (${trimmed.length}/${MAX_SPONSORSHIPS_PER_PROTOCOL_MINUTE})`,
+          ? `Protocol rate OK (${current}/${limit})`
+          : `Protocol rate limit exceeded (${current}/${limit})`,
         severity: 'ERROR',
       };
     },
@@ -469,12 +413,17 @@ export const sponsorshipPolicyRules: PolicyRule[] = [
         const protocol = await db.protocolSponsor.findUnique({
           where: { protocolId: decision.parameters.protocolId },
         });
-        if (!protocol || !protocol.whitelistedContracts?.length) {
-          return { ruleName: 'contract-whitelist-check', passed: true, message: 'No whitelist configured', severity: 'ERROR' };
-        }
         const targetContract = decision.parameters.targetContract;
         if (!targetContract) {
           return { ruleName: 'contract-whitelist-check', passed: true, message: 'No target contract in decision', severity: 'ERROR' };
+        }
+        if (!protocol || !protocol.whitelistedContracts?.length) {
+          return {
+            ruleName: 'contract-whitelist-check',
+            passed: false,
+            message: 'No whitelist configured - protocol must configure allowed contracts',
+            severity: 'ERROR',
+          };
         }
         const normalized = targetContract.toLowerCase();
         const allowed = protocol.whitelistedContracts.some((c) => c.toLowerCase() === normalized);
