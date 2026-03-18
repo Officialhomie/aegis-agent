@@ -30,3 +30,6 @@ forge create contracts/AegisAttestationLogger.sol:AegisAttestationLogger \
   --rpc-url "$RPC" \
   --account deployer-onetruehomie \
   --constructor-args="$AGENT"
+
+echo ""
+echo "Add to .env: ATTESTATION_LOGGER_ADDRESS=<deployed address from output above>"
