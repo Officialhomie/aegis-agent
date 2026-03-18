@@ -131,6 +131,12 @@ interface GuaranteeSummary {
   recentBreaches: number;
 }
 
+interface GuaranteeListItem {
+  status?: string;
+  financial?: { lockedAmount?: number };
+  sla?: { complianceRate?: number; slaBreached?: number };
+}
+
 export default function DashboardPage() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [activity, setActivity] = useState<ActivityRecord[]>([]);
@@ -189,12 +195,12 @@ export default function DashboardPage() {
       const data = await res.json();
       if (res.ok && data.success) {
         const all = data.guarantees ?? [];
-        const active = all.filter((g: any) => g.status === 'ACTIVE');
-        const totalLocked = all.reduce((sum: number, g: any) => sum + (g.financial?.lockedAmount ?? 0), 0);
+        const active = all.filter((g: GuaranteeListItem) => g.status === 'ACTIVE');
+        const totalLocked = all.reduce((sum: number, g: GuaranteeListItem) => sum + (g.financial?.lockedAmount ?? 0), 0);
         const avgCompliance = all.length > 0
-          ? all.reduce((sum: number, g: any) => sum + (g.sla?.complianceRate ?? 100), 0) / all.length
+          ? all.reduce((sum: number, g: GuaranteeListItem) => sum + (g.sla?.complianceRate ?? 100), 0) / all.length
           : 100;
-        const recentBreaches = all.reduce((sum: number, g: any) => sum + (g.sla?.slaBreached ?? 0), 0);
+        const recentBreaches = all.reduce((sum: number, g: GuaranteeListItem) => sum + (g.sla?.slaBreached ?? 0), 0);
 
         setGuarantees({
           total: all.length,

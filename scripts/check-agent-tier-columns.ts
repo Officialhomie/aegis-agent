@@ -19,8 +19,8 @@ async function checkTable() {
     } else {
       console.log('No records found yet');
     }
-  } catch (error: any) {
-    if (error.code === 'P2022') {
+  } catch (error: unknown) {
+    if (error && typeof error === 'object' && 'code' in error && (error as { code: string }).code === 'P2022') {
       console.error('✗ Agent tier columns do NOT exist in database');
       console.error('Need to run: npm run db:migrate -- --name add_agent_tiers');
       process.exit(1);
