@@ -34,7 +34,7 @@ export async function checkSybilAttack(agentWallet: string): Promise<AbuseResult
     }
     return { isAbusive: false };
   } catch {
-    return { isAbusive: false };
+    return { isAbusive: true, reason: 'Abuse check failed - failing closed for safety' };
   }
 }
 
@@ -83,7 +83,7 @@ export async function checkDustSpam(agentWallet: string): Promise<AbuseResult> {
     }
     return { isAbusive: false };
   } catch {
-    return { isAbusive: false };
+    return { isAbusive: true, reason: 'Abuse check failed - failing closed for safety' };
   }
 }
 

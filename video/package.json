@@ -1,0 +1,28 @@
+{
+  "name": "video",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "preview": "npx remotion studio",
+    "render": "npx remotion render AegisDemo --output=out/aegis-demo.mp4",
+    "render:square": "npx remotion render AegisDemo-Square --output=out/aegis-demo-square.mp4",
+    "render:gif": "npx remotion render AegisDemo --output=out/aegis-demo.gif --image-format=png"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@remotion/cli": "^4.0.436",
+    "@remotion/renderer": "^4.0.436",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "remotion": "^4.0.436"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "typescript": "^5.9.3"
+  }
+}

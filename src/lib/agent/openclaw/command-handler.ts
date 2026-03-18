@@ -450,9 +450,13 @@ export async function executeCommand(cmd: ParsedCommand, sessionId?: string): Pr
     case 'set_gas_cap': {
       try {
         const maxGwei = parseFloat(cmd.args.maxGwei ?? '0');
+        const maxGasCapGwei = Number(process.env.MAX_GAS_CAP_GWEI ?? '50');
 
-        if (maxGwei <= 0 || maxGwei > 1000) {
-          return { success: false, message: 'Gas price must be between 0.1 and 1000 gwei' };
+        if (maxGwei <= 0 || maxGwei > maxGasCapGwei) {
+          return {
+            success: false,
+            message: `Gas price must be between 0.1 and ${maxGasCapGwei} gwei for Base`,
+          };
         }
 
         if (!sessionId) {

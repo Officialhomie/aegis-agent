@@ -51,6 +51,8 @@ export const CONTRACTS = {
       // IMPORTANT: Update after deploying to mainnet or set ACTIVITY_LOGGER_ADDRESS env var
       // Deployment command: pnpm deploy:activity-logger
       activityLogger: process.env.ACTIVITY_LOGGER_ADDRESS ?? null,
+      // AegisAttestationLogger - policy decisions, heartbeats, discovery, reputation
+      attestationLogger: process.env.ATTESTATION_LOGGER_ADDRESS ?? null,
     },
   },
 } as const;

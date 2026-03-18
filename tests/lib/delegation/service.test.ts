@@ -52,6 +52,7 @@ const mockPrisma = {
     findFirst: vi.fn(),
     findMany: vi.fn(),
   },
+  $executeRaw: vi.fn(),
   delegationUsage: {
     create: vi.fn(),
     count: vi.fn(),
@@ -350,32 +351,16 @@ describe('validateDelegationForTransaction', () => {
 
 describe('deductDelegationBudget', () => {
   it('deducts budget successfully', async () => {
-    const mockDelegation = {
-      id: 'test-delegation-id',
-      gasBudgetWei: BigInt('1000000000000000000'),
-      gasBudgetSpent: BigInt('0'),
-    };
-
-    mockPrisma.delegation.findUnique.mockResolvedValue(mockDelegation);
-    mockPrisma.delegation.update.mockResolvedValue({
-      ...mockDelegation,
-      gasBudgetSpent: BigInt('100000000000000'),
-    });
+    mockPrisma.$executeRaw.mockResolvedValue(1);
 
     const result = await deductDelegationBudget('test-delegation-id', BigInt('100000000000000'));
 
     expect(result.success).toBe(true);
-    expect(mockPrisma.delegation.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { id: 'test-delegation-id' },
-        data: expect.objectContaining({
-          gasBudgetSpent: BigInt('100000000000000'),
-        }),
-      })
-    );
+    expect(mockPrisma.$executeRaw).toHaveBeenCalled();
   });
 
   it('fails when delegation not found', async () => {
+    mockPrisma.$executeRaw.mockResolvedValue(0);
     mockPrisma.delegation.findUnique.mockResolvedValue(null);
 
     const result = await deductDelegationBudget('nonexistent-id', BigInt('100000000000000'));
@@ -391,6 +376,7 @@ describe('deductDelegationBudget', () => {
       gasBudgetSpent: BigInt('50000000000000'),
     };
 
+    mockPrisma.$executeRaw.mockResolvedValue(0);
     mockPrisma.delegation.findUnique.mockResolvedValue(mockDelegation);
 
     const result = await deductDelegationBudget(

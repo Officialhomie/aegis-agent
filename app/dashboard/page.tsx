@@ -19,6 +19,8 @@ import {
   ChevronRight,
   CheckCircle,
   AlertTriangle,
+  Server,
+  Globe,
 } from 'lucide-react';
 import { Header } from '@/components/layout/header';
 import { Button } from '@/components/ui/button';
@@ -90,6 +92,20 @@ interface VerifyResult {
   error?: string;
 }
 
+interface HealthComponent {
+  name: string;
+  status: 'healthy' | 'degraded' | 'unhealthy';
+  latencyMs?: number;
+  message?: string;
+  details?: Record<string, unknown>;
+}
+
+interface HealthData {
+  status: string;
+  timestamp: string;
+  components: HealthComponent[];
+}
+
 interface CostSavings {
   neynar: {
     month: string;
@@ -115,11 +131,18 @@ interface GuaranteeSummary {
   recentBreaches: number;
 }
 
+interface GuaranteeListItem {
+  status?: string;
+  financial?: { lockedAmount?: number };
+  sla?: { complianceRate?: number; slaBreached?: number };
+}
+
 export default function DashboardPage() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [activity, setActivity] = useState<ActivityRecord[]>([]);
   const [costSavings, setCostSavings] = useState<CostSavings | null>(null);
   const [guarantees, setGuarantees] = useState<GuaranteeSummary | null>(null);
+  const [health, setHealth] = useState<HealthData | null>(null);
   const [verifyHash, setVerifyHash] = useState('');
   const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
   const [loading, setLoading] = useState(true);
@@ -156,18 +179,28 @@ export default function DashboardPage() {
     }
   }, []);
 
+  const fetchHealth = useCallback(async () => {
+    try {
+      const res = await fetch('/api/health/deep');
+      const data = await res.json();
+      if (res.ok) setHealth(data);
+    } catch {
+      // Silently fail
+    }
+  }, []);
+
   const fetchGuarantees = useCallback(async () => {
     try {
       const res = await fetch('/api/v1/guarantees');
       const data = await res.json();
       if (res.ok && data.success) {
         const all = data.guarantees ?? [];
-        const active = all.filter((g: any) => g.status === 'ACTIVE');
-        const totalLocked = all.reduce((sum: number, g: any) => sum + (g.financial?.lockedAmount ?? 0), 0);
+        const active = all.filter((g: GuaranteeListItem) => g.status === 'ACTIVE');
+        const totalLocked = all.reduce((sum: number, g: GuaranteeListItem) => sum + (g.financial?.lockedAmount ?? 0), 0);
         const avgCompliance = all.length > 0
-          ? all.reduce((sum: number, g: any) => sum + (g.sla?.complianceRate ?? 100), 0) / all.length
+          ? all.reduce((sum: number, g: GuaranteeListItem) => sum + (g.sla?.complianceRate ?? 100), 0) / all.length
           : 100;
-        const recentBreaches = all.reduce((sum: number, g: any) => sum + (g.sla?.slaBreached ?? 0), 0);
+        const recentBreaches = all.reduce((sum: number, g: GuaranteeListItem) => sum + (g.sla?.slaBreached ?? 0), 0);
 
         setGuarantees({
           total: all.length,
@@ -185,15 +218,21 @@ export default function DashboardPage() {
   useEffect(() => {
     const loadData = async () => {
       setLoading(true);
-      await Promise.all([fetchStats(), fetchActivity(), fetchCostSavings(), fetchGuarantees()]);
+      await Promise.all([fetchStats(), fetchActivity(), fetchCostSavings(), fetchGuarantees(), fetchHealth()]);
       setLoading(false);
     };
     loadData();
-  }, [fetchStats, fetchActivity, fetchCostSavings, fetchGuarantees]);
+
+    // Auto-refresh every 30 seconds
+    const interval = setInterval(() => {
+      Promise.all([fetchStats(), fetchActivity(), fetchCostSavings(), fetchHealth()]);
+    }, 30_000);
+    return () => clearInterval(interval);
+  }, [fetchStats, fetchActivity, fetchCostSavings, fetchGuarantees, fetchHealth]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
-    await Promise.all([fetchStats(), fetchActivity(), fetchCostSavings(), fetchGuarantees()]);
+    await Promise.all([fetchStats(), fetchActivity(), fetchCostSavings(), fetchGuarantees(), fetchHealth()]);
     setRefreshing(false);
   };
 
@@ -266,6 +305,95 @@ export default function DashboardPage() {
             color="default"
           />
         </div>
+
+        {/* System Health */}
+        <Card className="mb-8">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Server className="h-5 w-5 text-cyan-400" />
+              System Health
+              {health && (
+                <Badge variant={health.status === 'healthy' ? 'success' : 'warning'}>
+                  {health.status}
+                </Badge>
+              )}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {loading ? (
+              <div className="grid sm:grid-cols-3 lg:grid-cols-6 gap-3">
+                {[1, 2, 3, 4, 5, 6].map((i) => (
+                  <Skeleton key={i} className="h-16" />
+                ))}
+              </div>
+            ) : health ? (
+              <div className="grid sm:grid-cols-3 lg:grid-cols-6 gap-3">
+                {health.components.map((comp) => (
+                  <div key={comp.name} className="bg-elevated rounded-lg p-3 text-center">
+                    <div className={`w-2.5 h-2.5 rounded-full mx-auto mb-2 ${
+                      comp.status === 'healthy' ? 'bg-success' :
+                      comp.status === 'degraded' ? 'bg-warning' : 'bg-error'
+                    }`} />
+                    <div className="text-xs font-medium text-text-primary capitalize">
+                      {comp.name.replace('_', ' ')}
+                    </div>
+                    {comp.latencyMs != null && (
+                      <div className="text-xs text-text-muted mt-1">{comp.latencyMs}ms</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-text-muted text-sm">Health data unavailable</p>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Onchain Proof */}
+        <Card className="mb-8">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Globe className="h-5 w-5 text-coral-400" />
+              Onchain Sponsorship Proofs
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-text-muted text-sm mb-4">
+              Verified sponsorship logs on Base mainnet via AegisActivityLogger
+            </p>
+            <div className="space-y-2">
+              {activity.filter(r => r.txHash).slice(0, 5).map((record) => (
+                <div key={record.id} className="flex items-center justify-between bg-elevated rounded-lg p-3">
+                  <div className="flex items-center gap-3">
+                    <Badge variant="success">Confirmed</Badge>
+                    <span className="text-sm text-text-secondary">{record.protocolId}</span>
+                    <span className="text-xs text-text-muted font-mono">
+                      {record.txHash ? `${record.txHash.slice(0, 10)}...${record.txHash.slice(-6)}` : ''}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-mono text-text-primary">
+                      {formatUSD(record.estimatedCostUSD)}
+                    </span>
+                    {record.txHash && (
+                      <a
+                        href={`https://basescan.org/tx/${record.txHash}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-cyan-400 hover:text-cyan-300"
+                      >
+                        <ExternalLink className="h-4 w-4" />
+                      </a>
+                    )}
+                  </div>
+                </div>
+              ))}
+              {activity.filter(r => r.txHash).length === 0 && (
+                <p className="text-text-muted text-sm text-center py-4">No onchain proofs yet</p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
 
         {/* Cost Optimization (Phase 1) */}
         <Card className="mb-8">

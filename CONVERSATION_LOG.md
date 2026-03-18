@@ -142,7 +142,68 @@ Victor authored the core architecture, business logic, smart contracts, database
 | Mar 16 | Phase 1: All 39 test failures fixed (975 pass) |
 | Mar 16 | Phase 2: Deployed to https://clawgas.vercel.app |
 | Mar 16 | Phase 3: AegisDelegationRegistry deployed to Base Sepolia |
+| Mar 17 | Phase 4: ERC-8004 identity registered on Base mainnet |
+| Mar 17 | Phase 5: AegisAttestationLogger contract + Foundry tests (11 pass) |
+| Mar 17 | Phase 5: Wired on-chain policy decision logging (approvals + rejections) |
+| Mar 17 | Phase 5: Wired on-chain heartbeat (liveness proofs every 15 min) |
+| Mar 17 | Phase 5: Wired reputation attestations after sponsorship |
+| Mar 17 | Phase 5: EAS Gas Passport attestation integration |
+| Mar 17 | Phase 5: Multi-agent discovery + sponsorship script |
+| Mar 17 | Phase 5: Remotion video project with 5-scene demo |
 | Mar 22 | Hackathon deadline |
+
+---
+
+## Phase 4: ERC-8004 Registration (Mar 17)
+
+Aegis was registered as a participant in The Synthesis hackathon and received an on-chain ERC-8004 identity on Base mainnet.
+
+- **Participant ID:** `5f32203d1dfa463ba19a56e1d9080ae7`
+- **Team ID:** `79b1bc27243a49c5bf4bc8faef632039`
+- **On-chain TX:** Confirmed on BaseScan
+
+---
+
+## Phase 5: Hackathon Sprint (Mar 17)
+
+Strategic pivot: after analyzing the judging criteria, we decided to maximize on-chain footprint and verifiable output. The judges evaluate shipped artifacts, on-chain activity, and documentation quality -- not just code.
+
+### Decision: Build AegisAttestationLogger
+
+**Problem:** The existing AegisActivityLogger only logs sponsorships. Policy rejections, heartbeats, and agent discovery events had no on-chain footprint.
+
+**Solution:** New contract `AegisAttestationLogger.sol` with 4 event types:
+- `PolicyDecision` -- logs every approval AND rejection with reason
+- `Heartbeat` -- posts liveness proof with gas price and active protocol count
+- `AgentDiscovery` -- records when Aegis discovers new smart accounts
+- `ReputationUpdate` -- logs reputation changes after sponsorship
+
+**Why it matters for judges:** Shows Aegis doesn't just act -- it documents *why* it acts. Rejections are logged too, proving the safety-first approach is real, not marketing.
+
+Claude Code wrote the contract, 11 Foundry tests (all passing), and the TypeScript integration (`src/lib/agent/execute/attestation-logger.ts`).
+
+### Decision: Wire Everything On-Chain
+
+Rather than keeping attestations in the database, we wired the agent orchestrator to post on-chain for:
+1. **Policy decisions** (in `src/lib/agent/index.ts` after `validatePolicy()`) -- both approvals and rejections
+2. **Heartbeats** (in `src/lib/agent/multi-mode-agent.ts` every 15 min) -- gas price + protocol count
+3. **Reputation updates** (in `src/lib/agent/index.ts` after successful sponsorship)
+
+**Trade-off:** More gas cost per cycle, but dramatically more on-chain artifacts for judges to verify.
+
+### Decision: EAS Integration
+
+EAS (Ethereum Attestation Service) on Base creates portable, verifiable attestations of the Gas Passport data. This means any protocol can check an agent's sponsorship track record without trusting Aegis's database.
+
+Schema: `(address agent, uint256 sponsorCount, uint256 successRateBps, uint256 protocolCount, bytes32 reputationHash)`
+
+### Decision: Multi-Agent Discovery
+
+Created `scripts/discover-and-sponsor-agents.ts` that scans the ERC-8004 Identity Registry for recently registered agents and sponsors eligible ones. This demonstrates the "agents that cooperate" theme -- Aegis proactively helps other agents on Base.
+
+### Decision: Remotion Video
+
+Built a programmatic video using Remotion (React-based video framework) with 5 scenes: Hook, Problem, Architecture (ORPEM loop), Live Proof (real tx hashes), and Impact (stats + differentiators). The narration script is at `video/NARRATION_SCRIPT.md`.
 
 ---
 
@@ -156,3 +217,7 @@ Victor authored the core architecture, business logic, smart contracts, database
 - **Alchemy** — RPC provider for Base and Base Sepolia
 - **Pimlico** — bundler for ERC-4337 UserOperations
 - **Pinecone** — vector database for agent memory
+- **Coinbase Developer Platform** — bundler for ERC-4337 UserOperations on Base
+- **Neynar** — Farcaster social posting and proof of sponsorship
+- **EAS** (Ethereum Attestation Service) — portable reputation attestations on Base
+- **Remotion** — React-based programmatic video generation for demo

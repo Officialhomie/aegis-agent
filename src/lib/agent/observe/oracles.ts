@@ -290,6 +290,32 @@ export async function getPrice(
   return null;
 }
 
+const DEFAULT_ETH_PRICE_USD = 2500;
+
+/**
+ * Get ETH price in USD for cost calculation.
+ * Uses Chainlink first, then CoinGecko, then ETH_PRICE_USD env.
+ * Set ETH_PRICE_ORACLE_ENABLED=false to skip oracle and use env only.
+ */
+export async function getEthPriceUSD(): Promise<number> {
+  if (process.env.ETH_PRICE_ORACLE_ENABLED === 'false') {
+    return Number(process.env.ETH_PRICE_USD ?? DEFAULT_ETH_PRICE_USD);
+  }
+  const result = await getPrice('ETH/USD');
+  if (result != null) {
+    return Number(result.price);
+  }
+  const envPrice = process.env.ETH_PRICE_USD;
+  if (envPrice != null && envPrice.trim() !== '') {
+    const parsed = Number(envPrice);
+    if (!Number.isNaN(parsed) && parsed > 0) return parsed;
+  }
+  logger.warn('[Oracle] ETH price unavailable from oracle and env - using default', {
+    default: DEFAULT_ETH_PRICE_USD,
+  });
+  return DEFAULT_ETH_PRICE_USD;
+}
+
 /**
  * Observe oracle prices and return Observation array for the agent
  */

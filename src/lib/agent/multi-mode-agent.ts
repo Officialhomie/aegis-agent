@@ -13,6 +13,7 @@ import { storeMemory } from './memory';
 import { getCircuitBreaker } from './execute';
 import { runFullHeartbeat } from './social/heartbeat';
 import { maybePostFarcasterUpdate } from './transparency/farcaster-updates';
+import { executeOnchainHeartbeat } from './heartbeat/onchain-heartbeat';
 import { checkAndUpdateEmergencyMode } from './emergency';
 import { registerDefaultSkills } from './skills';
 import { getStateStore } from './state-store';
@@ -91,6 +92,9 @@ export class MultiModeAgent {
       );
       maybePostFarcasterUpdate().catch((err) =>
         logger.warn('[MultiMode] Farcaster update error', { error: err })
+      );
+      executeOnchainHeartbeat().catch((err) =>
+        logger.warn('[MultiMode] Onchain heartbeat error', { error: err })
       );
     }, SOCIAL_TRANSPARENCY_INTERVAL_MS);
     this.timers.set('social-transparency', socialTimer);

@@ -2,12 +2,14 @@
  * OpenClaw Session Manager
  *
  * Maps OpenClaw sessions (WhatsApp/Telegram/Signal) to authenticated protocols.
- * Sessions are stored in memory with 24-hour TTL.
+ * Sessions are stored via getStateStore (Redis when REDIS_URL set, else in-memory).
+ * Multi-node deployment requires Redis for session persistence across instances.
  */
 
 import { logger } from '@/src/lib/logger';
+import { getStateStore } from '../state-store';
 
-interface OpenClawSession {
+export interface OpenClawSession {
   sessionId: string;
   protocolId: string;
   apiKeyHash: string;
@@ -16,10 +18,34 @@ interface OpenClawSession {
   expiresAt: Date;
 }
 
-// In-memory session store (TODO: Replace with Redis in production)
-const sessionStore = new Map<string, OpenClawSession>();
-
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const SESSION_KEY_PREFIX = 'openclaw:session:';
+
+function sessionKey(sessionId: string): string {
+  return `${SESSION_KEY_PREFIX}${sessionId}`;
+}
+
+function parseSession(raw: string | null): OpenClawSession | null {
+  if (!raw?.trim()) return null;
+  try {
+    const parsed = JSON.parse(raw) as {
+      sessionId: string;
+      protocolId: string;
+      apiKeyHash: string;
+      createdAt: string;
+      lastAccessedAt: string;
+      expiresAt: string;
+    };
+    return {
+      ...parsed,
+      createdAt: new Date(parsed.createdAt),
+      lastAccessedAt: new Date(parsed.lastAccessedAt),
+      expiresAt: new Date(parsed.expiresAt),
+    };
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Create a new OpenClaw session
@@ -41,7 +67,14 @@ export async function createOpenClawSession(
     expiresAt,
   };
 
-  sessionStore.set(sessionId, session);
+  const store = await getStateStore();
+  const value = JSON.stringify({
+    ...session,
+    createdAt: session.createdAt.toISOString(),
+    lastAccessedAt: session.lastAccessedAt.toISOString(),
+    expiresAt: session.expiresAt.toISOString(),
+  });
+  await store.set(sessionKey(sessionId), value, { px: SESSION_TTL_MS });
 
   logger.info('[OpenClaw] Session created', {
     sessionId,
@@ -56,23 +89,30 @@ export async function createOpenClawSession(
  * Get protocol ID from session
  * Throws error if session not found or expired
  */
-export async function getProtocolIdFromSession(
-  sessionId: string
-): Promise<string> {
-  const session = sessionStore.get(sessionId);
+export async function getProtocolIdFromSession(sessionId: string): Promise<string> {
+  const store = await getStateStore();
+  const raw = await store.get(sessionKey(sessionId));
+  const session = parseSession(raw);
 
   if (!session) {
     throw new Error(`Session not found: ${sessionId}`);
   }
 
-  // Check expiration
   if (new Date() > session.expiresAt) {
-    sessionStore.delete(sessionId);
     throw new Error(`Session expired: ${sessionId}`);
   }
 
-  // Update last accessed time
   session.lastAccessedAt = new Date();
+  await store.set(
+    sessionKey(sessionId),
+    JSON.stringify({
+      ...session,
+      createdAt: session.createdAt.toISOString(),
+      lastAccessedAt: session.lastAccessedAt.toISOString(),
+      expiresAt: session.expiresAt.toISOString(),
+    }),
+    { px: SESSION_TTL_MS }
+  );
 
   logger.debug('[OpenClaw] Session accessed', {
     sessionId,
@@ -85,18 +125,12 @@ export async function getProtocolIdFromSession(
 /**
  * Get full session details
  */
-export async function getSession(
-  sessionId: string
-): Promise<OpenClawSession | null> {
-  const session = sessionStore.get(sessionId);
+export async function getSession(sessionId: string): Promise<OpenClawSession | null> {
+  const store = await getStateStore();
+  const raw = await store.get(sessionKey(sessionId));
+  const session = parseSession(raw);
 
-  if (!session) {
-    return null;
-  }
-
-  // Check expiration
-  if (new Date() > session.expiresAt) {
-    sessionStore.delete(sessionId);
+  if (!session || new Date() > session.expiresAt) {
     return null;
   }
 
@@ -107,7 +141,7 @@ export async function getSession(
  * Extend session TTL (refresh on activity)
  */
 export async function refreshSession(sessionId: string): Promise<void> {
-  const session = sessionStore.get(sessionId);
+  const session = await getSession(sessionId);
 
   if (!session) {
     throw new Error(`Session not found: ${sessionId}`);
@@ -116,6 +150,18 @@ export async function refreshSession(sessionId: string): Promise<void> {
   const now = new Date();
   session.lastAccessedAt = now;
   session.expiresAt = new Date(now.getTime() + SESSION_TTL_MS);
+
+  const store = await getStateStore();
+  await store.set(
+    sessionKey(sessionId),
+    JSON.stringify({
+      ...session,
+      createdAt: session.createdAt.toISOString(),
+      lastAccessedAt: session.lastAccessedAt.toISOString(),
+      expiresAt: session.expiresAt.toISOString(),
+    }),
+    { px: SESSION_TTL_MS }
+  );
 
   logger.debug('[OpenClaw] Session refreshed', {
     sessionId,
@@ -127,73 +173,32 @@ export async function refreshSession(sessionId: string): Promise<void> {
  * Destroy a session
  */
 export async function destroySession(sessionId: string): Promise<void> {
-  const deleted = sessionStore.delete(sessionId);
-
-  if (deleted) {
-    logger.info('[OpenClaw] Session destroyed', { sessionId });
-  }
+  const store = await getStateStore();
+  await store.set(sessionKey(sessionId), '', { px: 1 });
+  logger.info('[OpenClaw] Session destroyed', { sessionId });
 }
 
 /**
  * Check if session exists and is valid
  */
 export async function isSessionValid(sessionId: string): Promise<boolean> {
-  const session = sessionStore.get(sessionId);
-
-  if (!session) {
-    return false;
-  }
-
-  if (new Date() > session.expiresAt) {
-    sessionStore.delete(sessionId);
-    return false;
-  }
-
-  return true;
+  const session = await getSession(sessionId);
+  return session != null;
 }
 
 /**
  * Cleanup expired sessions (run periodically)
+ * Note: With Redis, keys expire automatically via TTL. This is a no-op for Redis.
+ * For in-memory store, we cannot iterate keys - cleanup happens on get.
  */
 export async function cleanupExpiredSessions(): Promise<number> {
-  const now = new Date();
-  let cleaned = 0;
-
-  for (const [sessionId, session] of sessionStore.entries()) {
-    if (now > session.expiresAt) {
-      sessionStore.delete(sessionId);
-      cleaned++;
-    }
-  }
-
-  if (cleaned > 0) {
-    logger.info('[OpenClaw] Cleaned up expired sessions', { count: cleaned });
-  }
-
-  return cleaned;
+  return 0;
 }
 
 /**
  * Get all active sessions (for debugging)
+ * Note: StateStore does not support listing keys. Returns empty array.
  */
 export async function getActiveSessions(): Promise<OpenClawSession[]> {
-  const now = new Date();
-  const active: OpenClawSession[] = [];
-
-  for (const session of sessionStore.values()) {
-    if (now <= session.expiresAt) {
-      active.push(session);
-    }
-  }
-
-  return active;
-}
-
-// Cleanup task: Run every hour
-if (typeof setInterval !== 'undefined') {
-  setInterval(() => {
-    cleanupExpiredSessions().catch((err) => {
-      logger.error('[OpenClaw] Session cleanup failed', { error: err });
-    });
-  }, 60 * 60 * 1000); // 1 hour
+  return [];
 }

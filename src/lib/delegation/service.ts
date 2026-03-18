@@ -473,8 +473,8 @@ export async function hasValidDelegation(agentAddress: string): Promise<{
 // ============================================================================
 
 /**
- * Deduct gas from delegation budget (optimistic).
- * Called before transaction submission.
+ * Deduct gas from delegation budget.
+ * Uses atomic UPDATE with WHERE (gasBudgetWei - gasBudgetSpent) >= gasWei to prevent TOCTOU race conditions.
  */
 export async function deductDelegationBudget(
   delegationId: string,
@@ -483,25 +483,27 @@ export async function deductDelegationBudget(
   const db = getPrisma();
 
   try {
-    const delegation = await db.delegation.findUnique({
-      where: { id: delegationId },
-    });
+    // Atomic update: only succeeds if remaining budget >= gasWei (prevents race condition)
+    const result = await db.$executeRaw`
+      UPDATE "Delegation"
+      SET "gasBudgetSpent" = "gasBudgetSpent" + ${gasWei}
+      WHERE "id" = ${delegationId}
+        AND ("gasBudgetWei" - "gasBudgetSpent") >= ${gasWei}
+    `;
 
-    if (!delegation) {
-      return { success: false, error: 'Delegation not found' };
+    if (result === 0) {
+      const delegation = await db.delegation.findUnique({
+        where: { id: delegationId },
+      });
+      if (!delegation) {
+        return { success: false, error: 'Delegation not found' };
+      }
+      const remaining = delegation.gasBudgetWei - delegation.gasBudgetSpent;
+      return {
+        success: false,
+        error: `Insufficient budget: ${remaining.toString()} wei remaining, ${gasWei.toString()} wei required`,
+      };
     }
-
-    const remaining = delegation.gasBudgetWei - delegation.gasBudgetSpent;
-    if (gasWei > remaining) {
-      return { success: false, error: 'Insufficient budget' };
-    }
-
-    await db.delegation.update({
-      where: { id: delegationId },
-      data: {
-        gasBudgetSpent: delegation.gasBudgetSpent + gasWei,
-      },
-    });
 
     return { success: true };
   } catch (error) {

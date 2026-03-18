@@ -12,15 +12,15 @@ import {
 import type { Decision } from '../../src/lib/agent/reason/schemas';
 
 const mockProtocolSponsorFindUnique = vi.hoisted(() => vi.fn());
-const mockProtocolSponsorUpdate = vi.hoisted(() => vi.fn());
+const mockExecuteRaw = vi.hoisted(() => vi.fn());
 const mockSponsorshipRecordCreate = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 
 vi.mock('../../src/lib/db', () => ({
   getPrisma: () => ({
     protocolSponsor: {
       findUnique: mockProtocolSponsorFindUnique,
-      update: mockProtocolSponsorUpdate,
     },
+    $executeRaw: mockExecuteRaw,
     sponsorshipRecord: { create: mockSponsorshipRecordCreate },
   }),
 }));
@@ -34,6 +34,14 @@ vi.mock('../../src/lib/agent/state-store', () => ({
 
 vi.mock('../../src/lib/ipfs', () => ({
   uploadDecisionToIPFS: vi.fn().mockResolvedValue({ success: false, reason: 'not_configured', error: 'No IPFS' }),
+}));
+
+vi.mock('../../src/lib/agent/execute/nonce-manager', () => ({
+  getNonce: vi.fn().mockResolvedValue(BigInt(0)),
+}));
+
+vi.mock('../../src/lib/agent/observe/oracles', () => ({
+  getEthPriceUSD: vi.fn().mockResolvedValue(2500),
 }));
 
 
@@ -154,23 +162,38 @@ describe('executePaymasterSponsorship', () => {
 describe('deductProtocolBudget', () => {
   beforeEach(() => {
     mockProtocolSponsorFindUnique.mockReset();
-    mockProtocolSponsorUpdate.mockReset();
+    mockExecuteRaw.mockReset();
   });
 
-  it('returns success: true when database update succeeds', async () => {
-    mockProtocolSponsorFindUnique.mockResolvedValue({ balanceUSD: 100 });
-    mockProtocolSponsorUpdate.mockResolvedValue(undefined);
+  it('returns success: true when atomic update succeeds', async () => {
+    mockExecuteRaw.mockResolvedValue(1);
+    mockProtocolSponsorFindUnique.mockResolvedValue({ balanceUSD: 90 });
     const result = await deductProtocolBudget('test-protocol', 10);
     expect(result.success).toBe(true);
     expect(result.error).toBeUndefined();
+    expect(mockExecuteRaw).toHaveBeenCalled();
   });
 
-  it('returns success: false when database update fails', async () => {
-    mockProtocolSponsorFindUnique.mockResolvedValue({ balanceUSD: 100 });
-    mockProtocolSponsorUpdate.mockRejectedValueOnce(new Error('Connection refused'));
+  it('returns success: false when atomic update affects 0 rows (insufficient budget)', async () => {
+    mockExecuteRaw.mockResolvedValue(0);
+    mockProtocolSponsorFindUnique.mockResolvedValue({ balanceUSD: 5 });
     const result = await deductProtocolBudget('test-protocol', 10);
     expect(result.success).toBe(false);
-    expect(result.error).toBeDefined();
+    expect(result.error).toContain('Insufficient budget');
+  });
+
+  it('returns success: false when protocol not found', async () => {
+    mockExecuteRaw.mockResolvedValue(0);
+    mockProtocolSponsorFindUnique.mockResolvedValue(null);
+    const result = await deductProtocolBudget('test-protocol', 10);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('not found');
+  });
+
+  it('returns success: false when database throws', async () => {
+    mockExecuteRaw.mockRejectedValueOnce(new Error('Connection refused'));
+    const result = await deductProtocolBudget('test-protocol', 10);
+    expect(result.success).toBe(false);
     expect(result.error).toContain('Connection refused');
   });
 });
