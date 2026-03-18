@@ -395,7 +395,7 @@ describe('Phase 2: Command Execution', () => {
 
       const cmd = {
         name: 'set_gas_cap' as const,
-        args: { maxGwei: '5000' }, // Exceeds 1000 limit
+        args: { maxGwei: '5000' }, // Exceeds 50 gwei limit for Base
         rawInput: 'set gas cap to 5000 gwei',
         sessionId: 'test-session',
       };
@@ -403,7 +403,7 @@ describe('Phase 2: Command Execution', () => {
       const result = await executeCommand(cmd as any);
 
       expect(result.success).toBe(false);
-      expect(result.message).toContain('1000 gwei');
+      expect(result.message).toContain('50 gwei');
     });
 
     it('should update gas cap successfully', async () => {
