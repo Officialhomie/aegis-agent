@@ -32,6 +32,7 @@
     "db:studio": "prisma studio",
     "db:seed": "prisma db seed",
     "register:moltbook": "tsx scripts/register-moltbook.ts",
+    "register:eas-schema": "tsx scripts/register-eas-schema.ts",
     "agent:report": "tsx scripts/agent-activity-report.ts",
     "env:merge": "tsx scripts/merge-env.ts",
     "check:redis": "tsx scripts/check-redis.ts",
