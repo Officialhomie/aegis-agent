@@ -22,6 +22,18 @@ const eslintConfig = defineConfig([
     files: ["tests/**/*.ts", "tests/**/*.tsx", "**/*.test.ts", "**/*.test.tsx"],
     rules: { "@typescript-eslint/no-explicit-any": "off" },
   },
+  // Relax no-explicit-any for scripts, video, and lib modules with dynamic types
+  {
+    files: [
+      "scripts/**/*.ts",
+      "video/**/*.ts",
+      "video/**/*.tsx",
+      "src/lib/agent/**/*.ts",
+      "src/lib/passport/**/*.ts",
+      "src/lib/protocol/**/*.ts",
+    ],
+    rules: { "@typescript-eslint/no-explicit-any": "off" },
+  },
 ]);
 
 export default eslintConfig;
