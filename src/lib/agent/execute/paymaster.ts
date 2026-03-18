@@ -25,16 +25,19 @@ import {
   type UserOpSubmissionResult,
   type BundlerHealthStatus,
 } from './bundler-client';
+import { getNonce } from './nonce-manager';
 import type { Decision } from '../reason/schemas';
 import type { SponsorParams } from '../reason/schemas';
 import type { ExecutionResult } from './index';
 import { updateCachedProtocolBudget, getCachedProtocolWhitelist } from '../../cache';
+import { getEthPriceUSD } from '../observe/oracles';
 import { buildExecuteCalldata, getActivityLoggerPingData } from './userop-calldata';
 import {
   deductDelegationBudget,
   rollbackDelegationBudget,
   recordDelegationUsage,
 } from '../../delegation';
+import { recordSponsorshipForRateLimits } from '../policy/rate-limit-utils';
 import {
   findActiveGuarantee,
   recordGuaranteeUsage,
@@ -212,6 +215,7 @@ export async function logSponsorshipOnchain(params: {
 
 /**
  * Deduct protocol budget from ProtocolSponsor (balanceUSD, totalSpent, sponsorshipCount).
+ * Uses atomic UPDATE with WHERE balanceUSD >= amountUSD to prevent TOCTOU race conditions.
  */
 export async function deductProtocolBudget(
   protocolId: string,
@@ -220,30 +224,37 @@ export async function deductProtocolBudget(
   try {
     const db = getPrisma();
 
-    // Get current budget first (needed for cache update)
-    const current = await db.protocolSponsor.findUnique({
+    // Atomic update: only succeeds if balanceUSD >= amountUSD (prevents race condition)
+    const result = await db.$executeRaw`
+      UPDATE "ProtocolSponsor"
+      SET "balanceUSD" = "balanceUSD" - ${amountUSD},
+          "totalSpent" = "totalSpent" + ${amountUSD},
+          "sponsorshipCount" = "sponsorshipCount" + 1
+      WHERE "protocolId" = ${protocolId}
+        AND "balanceUSD" >= ${amountUSD}
+    `;
+
+    if (result === 0) {
+      const existing = await db.protocolSponsor.findUnique({
+        where: { protocolId },
+        select: { balanceUSD: true },
+      });
+      if (!existing) {
+        return { success: false, error: `Protocol ${protocolId} not found` };
+      }
+      return {
+        success: false,
+        error: `Insufficient budget: ${existing.balanceUSD} USD available, ${amountUSD} USD required`,
+      };
+    }
+
+    const updated = await db.protocolSponsor.findUnique({
       where: { protocolId },
       select: { balanceUSD: true },
     });
-
-    if (!current) {
-      return { success: false, error: `Protocol ${protocolId} not found` };
-    }
-
-    const newBalanceUSD = current.balanceUSD - amountUSD;
-
-    // Update database
-    await db.protocolSponsor.update({
-      where: { protocolId },
-      data: {
-        balanceUSD: newBalanceUSD,
-        totalSpent: { increment: amountUSD },
-        sponsorshipCount: { increment: 1 },
-      },
-    });
+    const newBalanceUSD = updated?.balanceUSD ?? 0;
 
     // Update cache (write-through strategy)
-    // Fire-and-forget - don't block on cache update
     updateCachedProtocolBudget(protocolId, newBalanceUSD, amountUSD).catch((err) => {
       logger.warn('[Paymaster] Cache update failed (non-critical)', {
         protocolId,
@@ -670,25 +681,7 @@ export async function sponsorTransaction(
     };
   }
 
-  // Step 1: Log sponsorship on-chain (immutable record)
-  const logResult = await logSponsorshipOnchain({
-    agentWallet: params.agentWallet,
-    protocolId: params.protocolId,
-    decisionHash: signed.decisionHash,
-    estimatedCostUSD: params.estimatedCostUSD,
-    metadata: JSON.stringify({ reasoning: decision.reasoning.slice(0, 200) }),
-  });
-
-  if (!logResult.success) {
-    return {
-      success: false,
-      error: logResult.error,
-      decisionHash: signed.decisionHash,
-      signature: signed.signature,
-    };
-  }
-
-  // Step 2: Upload decision to IPFS (non-blocking, for audit trail)
+  // Step 1: Upload decision to IPFS (non-blocking, for audit trail)
   let ipfsCid: string | undefined;
   const ipfsResult = await uploadDecisionToIPFS(signed.decisionJSON);
   if ('cid' in ipfsResult) {
@@ -735,7 +728,24 @@ export async function sponsorTransaction(
     ? buildExecuteCalldata({ targetContract, value: BigInt(0), data: innerData })
     : undefined;
 
-  // Step 4: Execute paymaster sponsorship via bundler
+  // Step 4: Get nonce from EntryPoint (prevents nonce collisions for same sender)
+  let nonce: bigint | undefined;
+  try {
+    nonce = await getNonce(params.agentWallet as `0x${string}`);
+  } catch (err) {
+    logger.error('[Paymaster] Failed to get nonce from EntryPoint', {
+      error: err instanceof Error ? err.message : String(err),
+      agentWallet: params.agentWallet,
+    });
+    return {
+      success: false,
+      error: `Nonce lookup failed: ${err instanceof Error ? err.message : String(err)}`,
+      decisionHash: signed.decisionHash,
+      signature: signed.signature,
+    };
+  }
+
+  // Step 5: Execute paymaster sponsorship via bundler
   // IMPORTANT: Budget deduction happens AFTER this succeeds
   // Extract execution mode from decision (set by protocol-onboarding-status policy rule)
   const executionMode = (decision as any)._executionMode as 'LIVE' | 'SIMULATION' | undefined;
@@ -743,22 +753,44 @@ export async function sponsorTransaction(
     agentWallet: params.agentWallet,
     maxGasLimit,
     callData,
+    nonce,
     mode: executionMode,
   });
 
   // Determine actual cost (use actual gas if available, otherwise estimate)
   const actualCostUSD = paymasterResult.actualGasUsed
-    ? calculateActualCostUSD(BigInt(paymasterResult.actualGasUsed))
+    ? await calculateActualCostUSD(BigInt(paymasterResult.actualGasUsed))
     : params.estimatedCostUSD;
 
-  // Step 5: ONLY deduct budget if bundler submission succeeded
+  // Step 5: ONLY log onchain and deduct budget if bundler submission succeeded
+  let onchainLogTxHash: string | undefined;
   if (paymasterResult.paymasterReady) {
+    // Log sponsorship on-chain (only after successful execution - prevents orphaned logs)
+    const logResult = await logSponsorshipOnchain({
+      agentWallet: params.agentWallet,
+      protocolId: params.protocolId,
+      decisionHash: signed.decisionHash,
+      estimatedCostUSD: params.estimatedCostUSD,
+      metadata: JSON.stringify({
+        reasoning: decision.reasoning.slice(0, 200),
+        userOpHash: paymasterResult.userOpHash,
+        txHash: paymasterResult.transactionHash,
+      }),
+    });
+    onchainLogTxHash = logResult.txHash;
+    if (!logResult.success) {
+      logger.warn('[Paymaster] On-chain log failed after successful sponsorship', {
+        error: logResult.error,
+        userOpHash: paymasterResult.userOpHash,
+      });
+    }
+
     const budgetResult = await deductProtocolBudget(params.protocolId, actualCostUSD);
     if (!budgetResult.success) {
       logger.error('[Paymaster] Budget deduction failed after successful bundler submission', {
         protocolId: params.protocolId,
         gasCostUsd: actualCostUSD,
-        txHash: logResult.txHash,
+        txHash: onchainLogTxHash,
         userOpHash: paymasterResult.userOpHash,
         severity: 'CRITICAL',
         actionNeeded: 'Manual reconciliation required - sponsorship succeeded but budget not updated',
@@ -799,13 +831,21 @@ export async function sponsorTransaction(
         txHash: paymasterResult.transactionHash,
       });
     }
+
+    // Step 5c: Record sponsorship for rate limits (only after successful execution)
+    recordSponsorshipForRateLimits(params.agentWallet, params.protocolId).catch((err) => {
+      logger.warn('[Paymaster] Rate limit record failed (non-critical)', {
+        error: err instanceof Error ? err.message : String(err),
+        agentWallet: params.agentWallet,
+        protocolId: params.protocolId,
+      });
+    });
   } else {
     logger.warn('[Paymaster] Bundler submission failed - budget NOT deducted', {
       protocolId: params.protocolId,
       estimatedCostUSD: params.estimatedCostUSD,
-      txHash: logResult.txHash,
       error: paymasterResult.error,
-      note: 'On-chain log exists but sponsorship not executed - protocol budget preserved',
+      note: 'No on-chain log - sponsorship not executed',
     });
 
     // Rollback delegation budget if it was deducted optimistically
@@ -836,21 +876,21 @@ export async function sponsorTransaction(
         decisionHash: signed.decisionHash,
         estimatedCostUSD: params.estimatedCostUSD,
         actualCostUSD: paymasterResult.paymasterReady ? actualCostUSD : null,
-        txHash: logResult.txHash ?? null,
+        txHash: onchainLogTxHash ?? paymasterResult.transactionHash ?? null,
         signature: signed.signature,
         ipfsCid: ipfsCid ?? undefined,
       },
     });
     logger.info('[Paymaster] Sponsorship record created', {
       decisionHash: signed.decisionHash,
-      txHash: logResult.txHash,
+      txHash: onchainLogTxHash ?? paymasterResult.transactionHash,
       bundlerSuccess: paymasterResult.paymasterReady,
     });
   } catch (error) {
     logger.error('[Paymaster] FAILED to create sponsorship record - audit trail incomplete', {
       error,
       decisionHash: signed.decisionHash,
-      txHash: logResult.txHash,
+      txHash: onchainLogTxHash,
       protocolId: params.protocolId,
       severity: 'HIGH',
       impact: 'Audit trail incomplete - sponsorship not recorded in database',
@@ -859,8 +899,8 @@ export async function sponsorTransaction(
 
   return {
     success: paymasterResult.paymasterReady,
-    transactionHash: paymasterResult.transactionHash ?? logResult.txHash,
-    sponsorshipHash: paymasterResult.userOpHash ?? logResult.txHash,
+    transactionHash: paymasterResult.transactionHash ?? onchainLogTxHash,
+    sponsorshipHash: paymasterResult.userOpHash ?? onchainLogTxHash,
     decisionHash: signed.decisionHash,
     signature: signed.signature,
     paymasterReady: paymasterResult.paymasterReady,
@@ -869,7 +909,7 @@ export async function sponsorTransaction(
       action: 'SPONSOR_TRANSACTION',
       agentWallet: params.agentWallet,
       protocolId: params.protocolId,
-      onChainTxHash: logResult.txHash,
+      onChainTxHash: onchainLogTxHash,
       bundlerTxHash: paymasterResult.transactionHash,
       userOpHash: paymasterResult.userOpHash,
       paymasterReady: paymasterResult.paymasterReady,
@@ -881,17 +921,13 @@ export async function sponsorTransaction(
 
 /**
  * Calculate actual cost in USD from gas used.
- * Uses current ETH price from environment or reasonable default.
+ * Uses ETH price from oracle (Chainlink/CoinGecko) with env fallback.
  */
-function calculateActualCostUSD(gasUsed: bigint): number {
-  // Get gas price (default 1 gwei = 10^9 wei)
+async function calculateActualCostUSD(gasUsed: bigint): Promise<number> {
   const gasPriceWei = BigInt(process.env.GAS_PRICE_WEI ?? '1000000000');
-  // Calculate total gas cost in wei
-  const gasCosstWei = gasUsed * gasPriceWei;
-  // Convert to ETH (18 decimals)
-  const gasCostETH = Number(gasCosstWei) / 1e18;
-  // Get ETH price from env or use reasonable estimate
-  const ethPriceUSD = Number(process.env.ETH_PRICE_USD ?? '2500');
+  const gasCostWei = gasUsed * gasPriceWei;
+  const gasCostETH = Number(gasCostWei) / 1e18;
+  const ethPriceUSD = await getEthPriceUSD();
   return gasCostETH * ethPriceUSD;
 }
 
@@ -1003,30 +1039,6 @@ export async function sponsorTransactionWithGuarantee(
     };
   }
 
-  // Log sponsorship on-chain
-  const logResult = await logSponsorshipOnchain({
-    agentWallet: params.agentWallet,
-    protocolId: params.protocolId,
-    decisionHash: signed.decisionHash,
-    estimatedCostUSD: params.estimatedCostUSD,
-    metadata: JSON.stringify({
-      reasoning: decision.reasoning.slice(0, 200),
-      guaranteeId: guarantee.id,
-      tier: guarantee.tier,
-    }),
-  });
-
-  if (!logResult.success) {
-    return {
-      success: false,
-      error: logResult.error,
-      decisionHash: signed.decisionHash,
-      signature: signed.signature,
-      guaranteeId: guarantee.id,
-      guaranteeUsed: true,
-    };
-  }
-
   // Upload to IPFS
   let ipfsCid: string | undefined;
   const ipfsResult = await uploadDecisionToIPFS(signed.decisionJSON);
@@ -1063,12 +1075,32 @@ export async function sponsorTransactionWithGuarantee(
     ? buildExecuteCalldata({ targetContract, value: BigInt(0), data: innerData })
     : undefined;
 
+  // Get nonce from EntryPoint
+  let nonce: bigint;
+  try {
+    nonce = await getNonce(params.agentWallet as `0x${string}`);
+  } catch (err) {
+    logger.error('[Paymaster] Failed to get nonce for guarantee sponsorship', {
+      error: err instanceof Error ? err.message : String(err),
+      agentWallet: params.agentWallet,
+    });
+    return {
+      success: false,
+      error: `Nonce lookup failed: ${err instanceof Error ? err.message : String(err)}`,
+      decisionHash: signed.decisionHash,
+      signature: signed.signature,
+      guaranteeId: guarantee.id,
+      guaranteeUsed: true,
+    };
+  }
+
   // Execute paymaster sponsorship
   const executionMode = (decision as any)._executionMode as 'LIVE' | 'SIMULATION' | undefined;
   const paymasterResult = await executePaymasterSponsorship({
     agentWallet: params.agentWallet,
     maxGasLimit,
     callData,
+    nonce,
     mode: executionMode,
   });
 
@@ -1077,7 +1109,7 @@ export async function sponsorTransactionWithGuarantee(
 
   // Calculate actual cost
   const actualCostUSD = paymasterResult.actualGasUsed
-    ? calculateActualCostUSD(BigInt(paymasterResult.actualGasUsed))
+    ? await calculateActualCostUSD(BigInt(paymasterResult.actualGasUsed))
     : params.estimatedCostUSD;
 
   // Check SLA compliance
@@ -1106,12 +1138,34 @@ export async function sponsorTransactionWithGuarantee(
     }
   }
 
-  // Record guarantee usage (not protocol budget - guarantee funds are already locked)
+  // Record guarantee usage and log on-chain (only after successful execution)
+  let guaranteeOnchainTxHash: string | undefined;
   if (paymasterResult.paymasterReady) {
+    const logResult = await logSponsorshipOnchain({
+      agentWallet: params.agentWallet,
+      protocolId: params.protocolId,
+      decisionHash: signed.decisionHash,
+      estimatedCostUSD: params.estimatedCostUSD,
+      metadata: JSON.stringify({
+        reasoning: decision.reasoning.slice(0, 200),
+        guaranteeId: guarantee.id,
+        tier: guarantee.tier,
+        userOpHash: paymasterResult.userOpHash,
+        txHash: paymasterResult.transactionHash,
+      }),
+    });
+    guaranteeOnchainTxHash = logResult.txHash;
+    if (!logResult.success) {
+      logger.warn('[Paymaster] On-chain log failed after guarantee sponsorship', {
+        error: logResult.error,
+        guaranteeId: guarantee.id,
+      });
+    }
+
     try {
       await recordGuaranteeUsage({
         guaranteeId: guarantee.id,
-        userOpHash: paymasterResult.userOpHash ?? logResult.txHash ?? signed.decisionHash,
+        userOpHash: paymasterResult.userOpHash ?? guaranteeOnchainTxHash ?? signed.decisionHash,
         txHash: paymasterResult.transactionHash,
         gasUsed: BigInt(paymasterResult.actualGasUsed ?? maxGasLimit),
         gasPriceWei: currentGasPrice,
@@ -1124,6 +1178,14 @@ export async function sponsorTransactionWithGuarantee(
         guaranteeId: guarantee.id,
         costUsd: actualCostUSD,
         slaCompliant,
+      });
+
+      recordSponsorshipForRateLimits(params.agentWallet, params.protocolId).catch((err) => {
+        logger.warn('[Paymaster] Rate limit record failed (non-critical)', {
+          error: err instanceof Error ? err.message : String(err),
+          agentWallet: params.agentWallet,
+          protocolId: params.protocolId,
+        });
       });
     } catch (err) {
       logger.error('[Paymaster] Failed to record guarantee usage', {
@@ -1144,7 +1206,7 @@ export async function sponsorTransactionWithGuarantee(
         decisionHash: signed.decisionHash,
         estimatedCostUSD: params.estimatedCostUSD,
         actualCostUSD: paymasterResult.paymasterReady ? actualCostUSD : null,
-        txHash: logResult.txHash ?? null,
+        txHash: guaranteeOnchainTxHash ?? paymasterResult.transactionHash ?? null,
         signature: signed.signature,
         ipfsCid: ipfsCid ?? undefined,
       },
@@ -1158,8 +1220,8 @@ export async function sponsorTransactionWithGuarantee(
 
   return {
     success: paymasterResult.paymasterReady,
-    transactionHash: paymasterResult.transactionHash ?? logResult.txHash,
-    sponsorshipHash: paymasterResult.userOpHash ?? logResult.txHash,
+    transactionHash: paymasterResult.transactionHash ?? guaranteeOnchainTxHash,
+    sponsorshipHash: paymasterResult.userOpHash ?? guaranteeOnchainTxHash,
     decisionHash: signed.decisionHash,
     signature: signed.signature,
     paymasterReady: paymasterResult.paymasterReady,
@@ -1171,7 +1233,7 @@ export async function sponsorTransactionWithGuarantee(
       action: 'SPONSOR_TRANSACTION',
       agentWallet: params.agentWallet,
       protocolId: params.protocolId,
-      onChainTxHash: logResult.txHash,
+      onChainTxHash: guaranteeOnchainTxHash,
       bundlerTxHash: paymasterResult.transactionHash,
       userOpHash: paymasterResult.userOpHash,
       paymasterReady: paymasterResult.paymasterReady,
