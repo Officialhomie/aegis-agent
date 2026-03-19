@@ -3,8 +3,12 @@ src = "contracts"
 out = "out"
 test = "contracts/test"
 libs = ["lib"]
-solc = "0.8.20"
+solc_version = "0.8.23"
 evm_version = "paris"
+remappings = [
+    "@account-abstraction/=lib/account-abstraction/contracts/",
+    "@openzeppelin/=lib/openzeppelin-contracts/",
+]
 
 [profile.default.fmt]
 line_length = 100
