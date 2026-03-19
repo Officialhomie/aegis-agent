@@ -22,6 +22,7 @@ import type { Decision } from '../reason/schemas';
 import type { SponsorParams } from '../reason/schemas';
 import type { AgentConfig } from '../index';
 import type { PolicyRule, RuleResult } from './rules';
+import { tierValidationRule, tierBudgetMultiplierRule } from './tier-rules';
 
 const RESERVE_THRESHOLD_ETH = getConfigNumber('RESERVE_THRESHOLD_ETH', 0.1, 0.01, 10);
 const MAX_SPONSORSHIPS_PER_USER_DAY = getConfigNumber('MAX_SPONSORSHIPS_PER_USER_DAY', 3, 1, 100);
@@ -42,8 +43,15 @@ function isSponsorshipDecision(decision: Decision): decision is Decision & { act
 
 /**
  * Sponsorship-specific policy rules (applied when action is SPONSOR_TRANSACTION).
+ *
+ * Execution order:
+ *   1. agent-tier-validation   — validates live tier from chain; attaches _validatedTier
+ *   2. tier-budget-multiplier  — attaches _tierBudgetMultiplier based on tier
+ *   3-n. remaining rules       — budget, rate limits, gas price, etc.
  */
 export const sponsorshipPolicyRules: PolicyRule[] = [
+  tierValidationRule,
+  tierBudgetMultiplierRule,
   {
     name: 'protocol-onboarding-status',
     description: 'Protocol must be in valid onboarding status (LIVE or simulation mode)',
