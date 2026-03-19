@@ -6,12 +6,10 @@
  * When BUNDLER_RPC_URL is set, executes paymaster sponsorship for the user's next UserOperation.
  */
 
-import { createPublicClient, createWalletClient, http, keccak256, toHex } from 'viem';
+import { createPublicClient, createWalletClient, http, keccak256, toHex, type Address, type Hex } from 'viem';
 import { recoverMessageAddress } from 'viem';
 import { getKeystoreAccount } from '../../keystore';
 import { base, baseSepolia } from 'viem/chains';
-import { createPaymasterClient, getPaymasterStubData } from 'viem/account-abstraction';
-import { getStateStore } from '../state-store';
 import { getPrisma } from '../../db';
 import { uploadDecisionToIPFS } from '../../ipfs';
 import { logger } from '../../logger';
@@ -25,6 +23,8 @@ import {
   type UserOpSubmissionResult,
   type BundlerHealthStatus,
 } from './bundler-client';
+import { signPaymasterApproval } from './paymaster-signer';
+import { reserveAgentBudget, commitReservation, releaseReservation } from '../budget';
 import { getNonce } from './nonce-manager';
 import type { Decision } from '../reason/schemas';
 import type { SponsorParams } from '../reason/schemas';
@@ -341,9 +341,6 @@ export interface SponsorshipExecutionResult extends ExecutionResult {
   ipfsCid?: string;
 }
 
-/** TTL for paymaster approval (1 hour) so user's next UserOp can be sponsored */
-const PAYMASTER_APPROVAL_TTL_MS = 60 * 60 * 1000;
-
 export interface PaymasterExecutionResult {
   paymasterReady: boolean;
   userOpHash?: string;
@@ -374,10 +371,14 @@ export async function preparePaymasterSponsorship(params: {
   /** Real calldata for the UserOp (execute(target, value, data)); if omitted, stub uses 0x (may be rejected by CDP). */
   callData?: `0x${string}`;
   nonce?: bigint;
+  /** Agent tier for ECDSA approval (1=ERC-8004, 2=ERC-4337, 3=smart contract). Defaults to 2. */
+  agentTier?: 1 | 2 | 3;
 }): Promise<{
   ready: boolean;
-  paymasterData?: `0x${string}`;
-  paymaster?: `0x${string}`;
+  paymasterData?: Hex;
+  paymaster?: Address;
+  paymasterVerificationGasLimit?: bigint;
+  paymasterPostOpGasLimit?: bigint;
   estimatedGas?: {
     callGasLimit: bigint;
     verificationGasLimit: bigint;
@@ -443,60 +444,42 @@ export async function preparePaymasterSponsorship(params: {
     });
   }
 
-  // Step 2: Request paymaster data with proper gas estimates
-  try {
-    const paymasterClient = createPaymasterClient({
-      transport: http(rpcUrl),
-    });
+  // Step 2: Sign paymaster approval with Aegis-owned AegisPaymaster.sol
+  // Defaults: 150_000 gas for validation, 75_000 for postOp (same as paymaster-signer defaults)
+  const PAYMASTER_VALIDATION_GAS = BigInt(150_000);
+  const PAYMASTER_POSTOP_GAS = BigInt(75_000);
 
-    const stub = await getPaymasterStubData(paymasterClient, {
-      chainId: chain.id,
-      entryPointAddress: entryPoint,
-      sender: params.agentWallet as `0x${string}`,
+  try {
+    const signed = await signPaymasterApproval({
+      sender: params.agentWallet as Address,
       nonce: params.nonce ?? BigInt(0),
       callData,
-      callGasLimit,
-      // CRITICAL: Pass non-zero gas limits to avoid simulation failures
-      verificationGasLimit,
-      preVerificationGas,
-      // Coinbase CDP requires EIP-1559 fee fields for pm_getPaymasterStubData
-      maxFeePerGas,
-      maxPriorityFeePerGas,
+      agentTier: params.agentTier ?? 2,
+      validationGasLimit: PAYMASTER_VALIDATION_GAS,
+      postOpGasLimit: PAYMASTER_POSTOP_GAS,
     });
 
-    if (!stub || (!('paymaster' in stub) && !('paymasterAndData' in stub))) {
-      return { ready: false, error: 'No paymaster stub data returned' };
-    }
+    // Split paymasterAndData into viem v0.7 UserOp fields:
+    //   [0:20]   paymaster address (40 hex chars)
+    //   [20:36]  validationGasLimit (32 hex chars) - skip
+    //   [36:52]  postOpGasLimit (32 hex chars) - skip
+    //   [52:162] custom data (220 hex chars)
+    const pad = signed.paymasterAndData;
+    const paymasterAddress = `0x${pad.slice(2, 42)}` as Address;
+    const paymasterCustomData = `0x${pad.slice(106)}` as Hex; // bytes 52-162
 
-    // Store approval for reference
-    const store = await getStateStore();
-    const key = `paymaster:approved:${params.agentWallet.toLowerCase()}`;
-    await store.set(
-      key,
-      JSON.stringify({
-        maxGasLimit: params.maxGasLimit,
-        approvedAt: Date.now(),
-        stubData: stub,
-        estimatedGas: {
-          callGasLimit: callGasLimit.toString(),
-          verificationGasLimit: verificationGasLimit.toString(),
-          preVerificationGas: preVerificationGas.toString(),
-        },
-      }),
-      { px: PAYMASTER_APPROVAL_TTL_MS }
-    );
-
-    logger.info('[Paymaster] Paymaster sponsorship prepared', {
+    logger.info('[Paymaster] Paymaster approval signed', {
       agentWallet: params.agentWallet,
-      maxGasLimit: params.maxGasLimit,
-      verificationGasLimit: verificationGasLimit.toString(),
-      preVerificationGas: preVerificationGas.toString(),
+      validUntil: signed.validUntil,
+      agentTier: params.agentTier ?? 2,
     });
 
     return {
       ready: true,
-      paymasterData: 'paymasterAndData' in stub ? stub.paymasterAndData : undefined,
-      paymaster: 'paymaster' in stub ? stub.paymaster : undefined,
+      paymaster: paymasterAddress,
+      paymasterData: paymasterCustomData,
+      paymasterVerificationGasLimit: PAYMASTER_VALIDATION_GAS,
+      paymasterPostOpGasLimit: PAYMASTER_POSTOP_GAS,
       estimatedGas: {
         callGasLimit,
         verificationGasLimit,
@@ -523,6 +506,7 @@ export async function executePaymasterSponsorship(params: {
   callData?: `0x${string}`;
   nonce?: bigint;
   mode?: 'LIVE' | 'SIMULATION';
+  agentTier?: 1 | 2 | 3;
 }): Promise<PaymasterExecutionResult> {
   const mode = params.mode ?? 'LIVE';
 
@@ -557,13 +541,14 @@ export async function executePaymasterSponsorship(params: {
 
   const callData = params.callData ?? ('0x' as `0x${string}`);
 
-  // Prepare paymaster data with same callData we will send (required for CDP simulation)
-  // This also estimates gas - CRITICAL for avoiding zero gas limit errors
+  // Prepare paymaster data: sign approval via Aegis-owned paymaster.
+  // This also estimates gas - CRITICAL for avoiding zero gas limit errors.
   const prepared = await preparePaymasterSponsorship({
     agentWallet: params.agentWallet,
     maxGasLimit: params.maxGasLimit,
     callData,
     nonce: params.nonce,
+    agentTier: params.agentTier,
   });
 
   if (!prepared.ready) {
@@ -592,9 +577,16 @@ export async function executePaymasterSponsorship(params: {
       maxFeePerGas,
       maxPriorityFeePerGas,
       signature: '0x' as `0x${string}`,
-      // Paymaster fields from prepared data
+      // Paymaster fields: Aegis-owned AegisPaymaster with backend-signed approval
       ...(prepared.paymaster && { paymaster: prepared.paymaster }),
       ...(prepared.paymasterData && { paymasterData: prepared.paymasterData }),
+      // v0.7 gas limits for the paymaster validation and postOp phases
+      ...(prepared.paymasterVerificationGasLimit !== undefined && {
+        paymasterVerificationGasLimit: prepared.paymasterVerificationGasLimit,
+      }),
+      ...(prepared.paymasterPostOpGasLimit !== undefined && {
+        paymasterPostOpGasLimit: prepared.paymasterPostOpGasLimit,
+      }),
     };
 
     logger.info('[Paymaster] Submitting sponsored UserOperation to bundler', {
@@ -745,9 +737,32 @@ export async function sponsorTransaction(
     };
   }
 
-  // Step 5: Execute paymaster sponsorship via bundler
-  // IMPORTANT: Budget deduction happens AFTER this succeeds
-  // Extract execution mode from decision (set by protocol-onboarding-status policy rule)
+  // Step 5: Reserve per-agent budget (atomic lock — prevents TOCTOU race)
+  const agentTier = ((decision as any)._validatedTier as 1 | 2 | 3 | undefined) ?? 2;
+  const reservation = await reserveAgentBudget(
+    params.protocolId,
+    params.agentWallet,
+    params.estimatedCostUSD,
+    agentTier
+  );
+  if (!reservation.reserved) {
+    logger.warn('[Paymaster] Per-agent budget reservation failed', {
+      protocolId: params.protocolId,
+      agentWallet: params.agentWallet,
+      agentTier,
+      error: reservation.error,
+    });
+    return {
+      success: false,
+      error: `Agent budget reservation failed: ${reservation.error}`,
+      decisionHash: signed.decisionHash,
+      signature: signed.signature,
+    };
+  }
+
+  // Step 5b: Execute paymaster sponsorship via bundler
+  // IMPORTANT: Protocol budget deduction happens AFTER this succeeds.
+  // Extract execution mode from decision (set by protocol-onboarding-status policy rule).
   const executionMode = (decision as any)._executionMode as 'LIVE' | 'SIMULATION' | undefined;
   const paymasterResult = await executePaymasterSponsorship({
     agentWallet: params.agentWallet,
@@ -755,6 +770,7 @@ export async function sponsorTransaction(
     callData,
     nonce,
     mode: executionMode,
+    agentTier,
   });
 
   // Determine actual cost (use actual gas if available, otherwise estimate)
@@ -762,9 +778,23 @@ export async function sponsorTransaction(
     ? await calculateActualCostUSD(BigInt(paymasterResult.actualGasUsed))
     : params.estimatedCostUSD;
 
-  // Step 5: ONLY log onchain and deduct budget if bundler submission succeeded
+  // Step 6: Commit or release the per-agent budget reservation
   let onchainLogTxHash: string | undefined;
   if (paymasterResult.paymasterReady) {
+    // Commit reservation with actual cost (UserOpSponsored event will also reconcile via event-listener)
+    if (reservation.reservationId) {
+      commitReservation(reservation.reservationId, {
+        amountUSD: 0, // actual cost updated below after calculateActualCostUSD
+        userOpHash: paymasterResult.userOpHash ?? '',
+        txHash: paymasterResult.transactionHash,
+      }).catch((err) => {
+        logger.warn('[Paymaster] commitReservation failed (non-critical)', {
+          reservationId: reservation.reservationId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
+
     // Log sponsorship on-chain (only after successful execution - prevents orphaned logs)
     const logResult = await logSponsorshipOnchain({
       agentWallet: params.agentWallet,
@@ -847,6 +877,16 @@ export async function sponsorTransaction(
       error: paymasterResult.error,
       note: 'No on-chain log - sponsorship not executed',
     });
+
+    // Release the per-agent budget reservation (no gas was consumed)
+    if (reservation.reservationId) {
+      releaseReservation(reservation.reservationId, 'bundler-submission-failed').catch((err) => {
+        logger.warn('[Paymaster] releaseReservation failed (non-critical)', {
+          reservationId: reservation.reservationId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
 
     // Rollback delegation budget if it was deducted optimistically
     if (params.delegationId) {
@@ -1094,6 +1134,31 @@ export async function sponsorTransactionWithGuarantee(
     };
   }
 
+  // Reserve per-agent budget before execution
+  const agentTier = ((decision as any)._validatedTier as 1 | 2 | 3 | undefined) ?? 2;
+  const reservation = await reserveAgentBudget(
+    params.protocolId,
+    params.agentWallet,
+    params.estimatedCostUSD,
+    agentTier
+  );
+  if (!reservation.reserved) {
+    logger.warn('[Paymaster] Per-agent budget reservation failed (guarantee path)', {
+      protocolId: params.protocolId,
+      agentWallet: params.agentWallet,
+      guaranteeId: guarantee.id,
+      error: reservation.error,
+    });
+    return {
+      success: false,
+      error: `Agent budget reservation failed: ${reservation.error}`,
+      decisionHash: signed.decisionHash,
+      signature: signed.signature,
+      guaranteeId: guarantee.id,
+      guaranteeUsed: true,
+    };
+  }
+
   // Execute paymaster sponsorship
   const executionMode = (decision as any)._executionMode as 'LIVE' | 'SIMULATION' | undefined;
   const paymasterResult = await executePaymasterSponsorship({
@@ -1102,6 +1167,7 @@ export async function sponsorTransactionWithGuarantee(
     callData,
     nonce,
     mode: executionMode,
+    agentTier,
   });
 
   const includedAt = paymasterResult.paymasterReady ? new Date() : undefined;
@@ -1141,6 +1207,20 @@ export async function sponsorTransactionWithGuarantee(
   // Record guarantee usage and log on-chain (only after successful execution)
   let guaranteeOnchainTxHash: string | undefined;
   if (paymasterResult.paymasterReady) {
+    // Commit per-agent budget reservation
+    if (reservation.reservationId) {
+      commitReservation(reservation.reservationId, {
+        amountUSD: 0,
+        userOpHash: paymasterResult.userOpHash ?? '',
+        txHash: paymasterResult.transactionHash,
+      }).catch((err) => {
+        logger.warn('[Paymaster] commitReservation failed (non-critical, guarantee path)', {
+          reservationId: reservation.reservationId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
+
     const logResult = await logSponsorshipOnchain({
       agentWallet: params.agentWallet,
       protocolId: params.protocolId,
@@ -1193,6 +1273,18 @@ export async function sponsorTransactionWithGuarantee(
         guaranteeId: guarantee.id,
         severity: 'HIGH',
       });
+    }
+  } else {
+    // Release the per-agent budget reservation (no gas was consumed)
+    if (reservation.reservationId) {
+      releaseReservation(reservation.reservationId, 'bundler-submission-failed-guarantee-path').catch(
+        (err) => {
+          logger.warn('[Paymaster] releaseReservation failed (non-critical, guarantee path)', {
+            reservationId: reservation.reservationId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      );
     }
   }
 
