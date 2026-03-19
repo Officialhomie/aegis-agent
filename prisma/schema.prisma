@@ -754,3 +754,43 @@ model HeartbeatRecord {
 
   @@index([scheduleId, createdAt])
 }
+
+// ============================================================================
+// Agent Spend Ledger
+// Per-agent atomic spend tracking for per-agent budget enforcement.
+// Replaces the TOCTOU Redis-based budget check in approved-agent-check.
+// Reservation lifecycle: RESERVED -> COMMITTED (confirmed) or RELEASED (failed).
+// ============================================================================
+
+enum SpendStatus {
+  RESERVED  // Optimistically locked; counts against daily budget but not yet confirmed
+  COMMITTED // UserOp confirmed onchain; spend is final
+  RELEASED  // Reservation cancelled; does not count against budget
+}
+
+model AgentSpendLedger {
+  id            String      @id @default(cuid())
+  protocolId    String
+  agentAddress  String      // Lowercase
+  date          String      // YYYY-MM-DD UTC (for fast daily rollup queries)
+
+  estimatedUSD  Float       // Estimated cost at time of reservation
+  actualUSD     Float?      // Actual gas cost (set on commit from postOp event)
+
+  status        SpendStatus @default(RESERVED)
+
+  userOpHash    String?     // ERC-4337 UserOp hash (set on commit)
+  txHash        String?     // Inclusion transaction hash (set on commit)
+  reservationId String      @unique // UUID, used as the external handle
+
+  agentTier     Int         // 1=ERC-8004, 2=ERC-4337, 3=other
+
+  createdAt     DateTime    @default(now())
+  committedAt   DateTime?
+  releasedAt    DateTime?
+
+  @@index([protocolId, agentAddress, date])
+  @@index([reservationId])
+  @@index([userOpHash])
+  @@index([status])
+}
