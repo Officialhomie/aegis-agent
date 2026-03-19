@@ -12,7 +12,14 @@ import type { AgentConfig } from '@/src/lib/agent';
 // Mock DB and sponsorship so policy rules (which call getProtocolBudget, findUnique) don't throw
 vi.mock('@/src/lib/db', () => ({
   getPrisma: () => ({
-    protocolSponsor: { findUnique: vi.fn().mockResolvedValue({ balanceUSD: 500 }) },
+    protocolSponsor: {
+      findUnique: vi.fn().mockResolvedValue({
+        balanceUSD: 500,
+        whitelistedContracts: ['0x1234567890123456789012345678901234567890'],
+        requireERC8004: false,
+        requireERC4337: false,
+      }),
+    },
     approvedAgent: { findUnique: vi.fn().mockResolvedValue(null) },
   }),
 }));
@@ -21,11 +28,41 @@ vi.mock('@/src/lib/agent/observe/sponsorship', () => ({
   getAgentWalletBalance: vi.fn().mockResolvedValue({ ETH: 1, USDC: 100, chainId: 8453 }),
   getOnchainTxCount: vi.fn().mockResolvedValue(10),
 }));
+vi.mock('@/src/lib/agent/observe/oracles', () => ({
+  getPrice: vi.fn().mockResolvedValue({ price: '2000' }),
+}));
+vi.mock('@/src/lib/agent/observe/chains', () => ({
+  getDefaultChainName: vi.fn().mockReturnValue('baseSepolia'),
+}));
+vi.mock('@/src/lib/protocol/onboarding', () => ({
+  canExecuteSponsorship: vi.fn().mockResolvedValue({ allowed: true, mode: 'SIMULATION' }),
+}));
+vi.mock('@/src/lib/protocol/runtime-overrides', () => ({
+  getActiveRuntimeOverride: vi.fn().mockResolvedValue(null),
+  isWalletBlocked: vi.fn().mockResolvedValue(false),
+}));
+vi.mock('@/src/lib/agent/security/abuse-detection', () => ({
+  detectAbuse: vi.fn().mockResolvedValue({ isAbusive: false }),
+}));
+vi.mock('@/src/lib/agent/identity/gas-passport', () => ({
+  getPassport: vi.fn().mockResolvedValue(null),
+}));
 vi.mock('@/src/lib/agent/state-store', () => ({
   getStateStore: vi.fn().mockResolvedValue({
     get: vi.fn().mockResolvedValue(null),
     set: vi.fn().mockResolvedValue(undefined),
     setNX: vi.fn().mockResolvedValue(true),
+    eval: vi.fn().mockResolvedValue(1), // 1 = allowed for rate limit check script
+  }),
+}));
+
+vi.mock('@/src/lib/agent/validation/account-validator', () => ({
+  validateAccount: vi.fn().mockResolvedValue({
+    agentTier: 2,
+    agentType: 'ERC4337_ACCOUNT',
+    isValid: true,
+    accountType: 'smart_account',
+    reason: 'ERC-4337 compatible',
   }),
 }));
 
