@@ -25,6 +25,18 @@ vi.mock('../../src/lib/agent/state-store', () => ({
   getStateStore: vi.fn().mockResolvedValue({
     get: vi.fn().mockResolvedValue(null),
     set: vi.fn().mockResolvedValue(undefined),
+    setNX: vi.fn().mockResolvedValue(true),
+    eval: vi.fn().mockResolvedValue(1), // 1 = allowed for rate limit check script
+  }),
+}));
+
+vi.mock('../../src/lib/agent/validation/account-validator', () => ({
+  validateAccount: vi.fn().mockResolvedValue({
+    agentTier: 2,
+    agentType: 'ERC4337_ACCOUNT',
+    isValid: true,
+    accountType: 'smart_account',
+    reason: 'ERC-4337 compatible',
   }),
 }));
 
@@ -55,6 +67,8 @@ vi.mock('../../src/lib/db', () => ({
 const mockProtocolFindUnique = vi.hoisted(() => vi.fn().mockResolvedValue({
   protocolId: 'test-protocol',
   whitelistedContracts: ['0x1234567890123456789012345678901234567890'],
+  requireERC8004: false,
+  requireERC4337: false,
 }));
 
 vi.mock('@prisma/client', () => ({
@@ -126,6 +140,8 @@ describe('validatePolicy for SPONSOR_TRANSACTION', () => {
   });
 
   it('contract-whitelist-check fails CLOSED when database throws', async () => {
+    // tierValidationRule runs first and also calls findUnique; contract-whitelist-check runs later
+    mockProtocolFindUnique.mockRejectedValueOnce(new Error('Connection refused'));
     mockProtocolFindUnique.mockRejectedValueOnce(new Error('Connection refused'));
     const decision: Decision = {
       action: 'SPONSOR_TRANSACTION',
