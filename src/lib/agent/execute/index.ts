@@ -1,15 +1,13 @@
 /**
  * Aegis Agent - Execution Layer
  *
- * Handles the actual execution of decisions using Coinbase AgentKit.
+ * Handles the actual execution of decisions.
  * The LLM never directly accesses this layer - all actions pass through policy first.
  */
 
 import { logger } from '../../logger';
 import { getPrisma } from '../../db';
-import { executeWithAgentKit } from './agentkit';
 import { sendAlert } from './alerts';
-import { getDefaultCircuitBreaker } from './circuit-breaker';
 import { sponsorTransaction } from './paymaster';
 import { executeReserveSwap } from './reserve-manager';
 import type { Decision } from '../reason/schemas';
@@ -227,11 +225,12 @@ export async function execute(
       if (!validation.valid) {
         return { success: false, error: validation.error };
       }
-      const breaker = getDefaultCircuitBreaker();
-      return await breaker.execute(() => executeWithAgentKit(decision, mode));
     }
 
-    return await executeWithAgentKit(decision, mode);
+    return {
+      success: false,
+      error: 'Action not supported in sovereign paymaster mode',
+    };
   } catch (error) {
     logger.error('[Execute] Execution error', { error: error instanceof Error ? error.message : String(error) });
     return {
@@ -241,7 +240,6 @@ export async function execute(
   }
 }
 
-export { executeWithAgentKit } from './agentkit';
 export { sendAlert } from './alerts';
 export { getCircuitBreaker, getDefaultCircuitBreaker, CircuitBreaker } from './circuit-breaker';
 export { EconomicCircuitBreaker, getEconomicBreaker, type RunwayEstimate } from './circuit-breaker/economic-breaker';
