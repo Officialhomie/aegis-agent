@@ -383,8 +383,8 @@ describe('delegation-value-check', () => {
 });
 
 describe('All delegation rules integrated', () => {
-  it('all 6 rules are defined', () => {
-    expect(delegationPolicyRules).toHaveLength(6);
+  it('all 7 rules are defined', () => {
+    expect(delegationPolicyRules).toHaveLength(7);
 
     const ruleNames = delegationPolicyRules.map((r) => r.name);
     expect(ruleNames).toContain('delegation-exists-check');
@@ -393,6 +393,7 @@ describe('All delegation rules integrated', () => {
     expect(ruleNames).toContain('delegation-expiry-check');
     expect(ruleNames).toContain('delegation-budget-check');
     expect(ruleNames).toContain('delegation-rate-limit-check');
+    expect(ruleNames).toContain('mdf-delegation-revocation-check');
   });
 
   it('all rules have ERROR severity', () => {
