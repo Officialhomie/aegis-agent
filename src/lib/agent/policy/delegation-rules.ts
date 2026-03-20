@@ -10,6 +10,8 @@
  * - delegation-rate-limit-check: Within maxTxPerDay/Hour
  */
 
+import { createPublicClient, http } from 'viem';
+import { base, baseSepolia } from 'viem/chains';
 import { logger } from '../../logger';
 import {
   validateDelegationForTransaction,
@@ -20,12 +22,45 @@ import {
   isDelegationTimeValid,
 } from '../../delegation';
 import { getPrisma } from '../../db';
+import { DELEGATION_MANAGER_ABI, resolveDelegationManagerAddress } from '../../mdf';
 import type { Decision } from '../reason/schemas';
 import type { SponsorParams } from '../reason/schemas';
 import type { AgentConfig } from '../index';
 import type { PolicyRule, RuleResult } from './rules';
 
 const DELEGATION_ENABLED = process.env.DELEGATION_ENABLED === 'true';
+const MDF_ENABLED = process.env.MDF_ENABLED === 'true';
+
+/**
+ * Check if a delegation record has been upgraded to MDF mode.
+ * Returns true when delegatorAccountType === 'DELEGATOR'.
+ * Caches the result on the decision object to avoid repeated DB calls
+ * across multiple rules in the same policy validation run.
+ */
+async function isMdfDelegation(
+  decision: Decision,
+  delegationId: string
+): Promise<boolean> {
+  if (!MDF_ENABLED) return false;
+
+  // Use cached result if already resolved for this decision
+  const cached = (decision as Record<string, unknown>)._mdfDelegationMode;
+  if (cached !== undefined) return cached === true;
+
+  try {
+    const db = getPrisma();
+    const record = await db.delegation.findUnique({
+      where: { id: delegationId },
+      select: { delegatorAccountType: true },
+    });
+    const result = record?.delegatorAccountType === 'DELEGATOR';
+    // Cache on decision object for subsequent rules in the same validation run
+    (decision as Record<string, unknown>)._mdfDelegationMode = result;
+    return result;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Type guard for delegation-enabled sponsorship decisions.
@@ -149,6 +184,16 @@ export const delegationPolicyRules: PolicyRule[] = [
         };
       }
 
+      // MDF path: AllowedTargetsEnforcer + AllowedMethodsEnforcer enforce scope on-chain
+      if (await isMdfDelegation(decision, decision.parameters.delegationId)) {
+        return {
+          ruleName: 'delegation-scope-check',
+          passed: true,
+          message: 'MDF: AllowedTargetsEnforcer + AllowedMethodsEnforcer enforce scope on-chain',
+          severity: 'ERROR',
+        };
+      }
+
       const params = decision.parameters;
 
       try {
@@ -224,6 +269,16 @@ export const delegationPolicyRules: PolicyRule[] = [
         };
       }
 
+      // MDF path: ValueLteEnforcer enforces ETH value cap on-chain
+      if (await isMdfDelegation(decision, decision.parameters.delegationId)) {
+        return {
+          ruleName: 'delegation-value-check',
+          passed: true,
+          message: 'MDF: ValueLteEnforcer enforces ETH value cap on-chain',
+          severity: 'ERROR',
+        };
+      }
+
       // For gas sponsorship, value is typically 0 (paying gas, not ETH value)
       // This rule is more relevant for actual transaction execution
       // For now, pass if we're just sponsoring gas
@@ -255,6 +310,16 @@ export const delegationPolicyRules: PolicyRule[] = [
           ruleName: 'delegation-expiry-check',
           passed: true,
           message: 'N/A - no delegationId in parameters',
+          severity: 'ERROR',
+        };
+      }
+
+      // MDF path: TimestampEnforcer enforces valid-after / valid-before on-chain
+      if (await isMdfDelegation(decision, decision.parameters.delegationId)) {
+        return {
+          ruleName: 'delegation-expiry-check',
+          passed: true,
+          message: 'MDF: TimestampEnforcer enforces time window on-chain',
           severity: 'ERROR',
         };
       }
@@ -328,6 +393,17 @@ export const delegationPolicyRules: PolicyRule[] = [
           ruleName: 'delegation-budget-check',
           passed: true,
           message: 'N/A - no delegationId in parameters',
+          severity: 'ERROR',
+        };
+      }
+
+      // MDF path: on-chain caveats (ERC20TransferAmountEnforcer or spend caps) handle budget.
+      // Gas cost is covered by the Aegis protocol budget (existing protocol-budget-check).
+      if (await isMdfDelegation(decision, decision.parameters.delegationId)) {
+        return {
+          ruleName: 'delegation-budget-check',
+          passed: true,
+          message: 'MDF: gas covered by Aegis protocol budget; on-chain caveats handle spend limits',
           severity: 'ERROR',
         };
       }
@@ -482,6 +558,94 @@ export const delegationPolicyRules: PolicyRule[] = [
           ruleName: 'delegation-rate-limit-check',
           passed: false,
           message: 'Error checking delegation rate limits (failing CLOSED)',
+          severity: 'ERROR',
+        };
+      }
+    },
+  },
+
+  {
+    name: 'mdf-delegation-revocation-check',
+    description: 'Verify MDF delegation has not been revoked on-chain via DelegationManager',
+    severity: 'ERROR',
+    validate: async (decision): Promise<RuleResult> => {
+      if (!DELEGATION_ENABLED || !MDF_ENABLED) {
+        return {
+          ruleName: 'mdf-delegation-revocation-check',
+          passed: true,
+          message: 'MDF feature disabled — skipping revocation check',
+          severity: 'ERROR',
+        };
+      }
+
+      if (!isDelegatedSponsorshipDecision(decision)) {
+        return {
+          ruleName: 'mdf-delegation-revocation-check',
+          passed: true,
+          message: 'N/A - no delegationId in parameters',
+          severity: 'ERROR',
+        };
+      }
+
+      // Only runs for MDF delegations
+      if (!(await isMdfDelegation(decision, decision.parameters.delegationId))) {
+        return {
+          ruleName: 'mdf-delegation-revocation-check',
+          passed: true,
+          message: 'N/A - AEGIS-mode delegation (no on-chain revocation check needed)',
+          severity: 'ERROR',
+        };
+      }
+
+      const params = decision.parameters;
+
+      try {
+        const db = getPrisma();
+        const delegation = await db.delegation.findUnique({
+          where: { id: params.delegationId },
+          select: { mdfDelegationHash: true, delegationManagerAddress: true },
+        });
+
+        if (!delegation?.mdfDelegationHash || !delegation?.delegationManagerAddress) {
+          return {
+            ruleName: 'mdf-delegation-revocation-check',
+            passed: false,
+            message: 'MDF delegation hash or manager address missing from record',
+            severity: 'ERROR',
+          };
+        }
+
+        const networkId = process.env.AGENT_NETWORK_ID ?? 'base-sepolia';
+        const chain = networkId === 'base' ? base : baseSepolia;
+        const rpcUrl =
+          process.env.BASE_RPC_URL ??
+          process.env.RPC_URL_BASE ??
+          process.env.RPC_URL_BASE_SEPOLIA ??
+          'https://sepolia.base.org';
+
+        const publicClient = createPublicClient({ chain, transport: http(rpcUrl) });
+
+        const isDisabled = await publicClient.readContract({
+          address: delegation.delegationManagerAddress as `0x${string}`,
+          abi: DELEGATION_MANAGER_ABI,
+          functionName: 'isDelegationDisabled',
+          args: [delegation.mdfDelegationHash as `0x${string}`],
+        });
+
+        return {
+          ruleName: 'mdf-delegation-revocation-check',
+          passed: !isDisabled,
+          message: isDisabled
+            ? `MDF delegation ${delegation.mdfDelegationHash.slice(0, 10)}... has been revoked on-chain`
+            : `MDF delegation ${delegation.mdfDelegationHash.slice(0, 10)}... is active on-chain`,
+          severity: 'ERROR',
+        };
+      } catch (error) {
+        logger.error('[Policy] MDF revocation check failed (failing CLOSED)', { error });
+        return {
+          ruleName: 'mdf-delegation-revocation-check',
+          passed: false,
+          message: 'MDF revocation check failed — RPC error (failing CLOSED)',
           severity: 'ERROR',
         };
       }
