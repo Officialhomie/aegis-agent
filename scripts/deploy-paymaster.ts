@@ -6,9 +6,9 @@
  *   signingKey  — address derived from AEGIS_PAYMASTER_SIGNING_KEY (the approval signer's public address)
  *
  * Required env vars:
- *   AEGIS_PAYMASTER_SIGNING_KEY_ADDRESS  — public address of the approval signer key
+ *   AEGIS_PAYMASTER_SIGNING_KEY or AEGIS_PAYMASTER_SIGNING_KEY_ADDRESS — private key (preferred) or public address
  *   RPC_URL_BASE_SEPOLIA or RPC_URL_BASE — RPC endpoint
- *   FOUNDRY_ACCOUNT or DEPLOYER_PRIVATE_KEY — deployer credentials
+ *   FOUNDRY_ACCOUNT or DEPLOYER_PRIVATE_KEY — deployer credentials (must have ETH to deploy)
  *
  * Optional:
  *   BASESCAN_API_KEY — enables Basescan verification
@@ -22,9 +22,21 @@
 import 'dotenv/config';
 import { execSync, spawnSync } from 'child_process';
 import { resolve } from 'path';
+import { privateKeyToAccount } from 'viem/accounts';
 
 const CONTRACT = 'contracts/AegisPaymaster.sol:AegisPaymaster';
 const ENTRY_POINT_V07 = '0x0000000071727De22E5E9d8BAf0edAc6f37da032';
+
+function getSigningKeyAddress(): string {
+  const addr = process.env.AEGIS_PAYMASTER_SIGNING_KEY_ADDRESS?.trim();
+  if (addr) return addr;
+  const pk = process.env.AEGIS_PAYMASTER_SIGNING_KEY?.trim();
+  if (pk) {
+    const account = privateKeyToAccount(pk as `0x${string}`);
+    return account.address;
+  }
+  return '';
+}
 
 function main() {
   const networkId = process.env.AGENT_NETWORK_ID ?? 'base-sepolia';
@@ -37,14 +49,14 @@ function main() {
     process.env.DEPLOYER_PRIVATE_KEY ??
     process.env.EXECUTE_WALLET_PRIVATE_KEY ??
     process.env.AGENT_PRIVATE_KEY;
-  const signingKeyAddress = process.env.AEGIS_PAYMASTER_SIGNING_KEY_ADDRESS;
+  const signingKeyAddress = getSigningKeyAddress();
 
   if (!rpcUrl || !signingKeyAddress) {
     console.error('Missing required env. Set:');
     if (!rpcUrl) console.error('  - RPC_URL_BASE_SEPOLIA (or RPC_URL_BASE for mainnet)');
     if (!signingKeyAddress)
       console.error(
-        '  - AEGIS_PAYMASTER_SIGNING_KEY_ADDRESS (public address of the approval signer)'
+        '  - AEGIS_PAYMASTER_SIGNING_KEY (private key) or AEGIS_PAYMASTER_SIGNING_KEY_ADDRESS (public address)'
       );
     process.exit(1);
   }
