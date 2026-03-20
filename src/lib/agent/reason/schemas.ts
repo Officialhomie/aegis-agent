@@ -186,8 +186,8 @@ type DecisionBaseFields = {
 };
 
 /**
- * Internal execution actions (used by reserve-manager/agentkit only; not emitted by LLM).
- * Union with Decision for executeWithAgentKit and execution layer.
+ * Internal execution actions (used by reserve-manager only; not emitted by LLM).
+ * Union with Decision for the execution layer.
  */
 export type ExecutableDecision =
   | Decision
