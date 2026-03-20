@@ -21,6 +21,12 @@ import {
   isWithinScope,
   isWithinValueLimit,
 } from './schemas';
+import {
+  verifyMdfDelegationSignature,
+  hashMdfDelegation,
+  serializeMdfDelegation,
+} from '../mdf';
+import type { MdfDelegation } from '../mdf';
 
 // ============================================================================
 // Configuration
@@ -702,4 +708,121 @@ function formatDelegationResponse(
     usageCount: delegation.usageRecords?.length || 0,
     totalGasUsed: totalGasUsed.toString(),
   };
+}
+
+// ============================================================================
+// MDF Integration
+// ============================================================================
+
+export interface CreateMdfDelegationParams {
+  /** The existing Aegis Delegation DB record ID to upgrade */
+  aegisDelegationId: string;
+  /** The MDF Delegation struct signed by the delegator */
+  mdfDelegation: MdfDelegation;
+  /** DelegationManager contract address used for signature verification */
+  delegationManagerAddress: `0x${string}`;
+  /** Chain ID for EIP-712 domain */
+  chainId: number;
+}
+
+export interface CreateMdfDelegationResult {
+  success: boolean;
+  mdfDelegationHash?: `0x${string}`;
+  error?: string;
+}
+
+/**
+ * Upgrade an existing Aegis Delegation to MDF mode.
+ *
+ * This does NOT create a new delegation record. It enriches the existing record
+ * with MDF fields (hash, serialized struct, manager address, account type) so
+ * the execution layer can detect and route to the redeemDelegations path.
+ *
+ * Steps:
+ * 1. Verify the MDF delegation signature via EIP-712
+ * 2. Compute the MDF delegation hash (used for revocation checks)
+ * 3. Update the Prisma record with MDF fields + delegatorAccountType = DELEGATOR
+ */
+export async function createMdfDelegation(
+  params: CreateMdfDelegationParams
+): Promise<CreateMdfDelegationResult> {
+  const { aegisDelegationId, mdfDelegation, delegationManagerAddress, chainId } = params;
+  const db = getPrisma();
+
+  try {
+    // Step 1: Verify the delegation exists and is ACTIVE
+    const existing = await db.delegation.findUnique({
+      where: { id: aegisDelegationId },
+      select: { id: true, status: true, agent: true, delegator: true },
+    });
+
+    if (!existing) {
+      return { success: false, error: `Delegation ${aegisDelegationId} not found` };
+    }
+
+    if (existing.status !== 'ACTIVE') {
+      return {
+        success: false,
+        error: `Delegation is ${existing.status} — only ACTIVE delegations can be upgraded to MDF`,
+      };
+    }
+
+    // Step 2: Verify the delegate address matches the Aegis agent
+    if (mdfDelegation.delegate.toLowerCase() !== existing.agent.toLowerCase()) {
+      return {
+        success: false,
+        error: `MDF delegation.delegate (${mdfDelegation.delegate}) does not match Aegis delegation agent (${existing.agent})`,
+      };
+    }
+
+    // Step 3: Verify the delegator address matches
+    if (mdfDelegation.delegator.toLowerCase() !== existing.delegator.toLowerCase()) {
+      return {
+        success: false,
+        error: `MDF delegation.delegator (${mdfDelegation.delegator}) does not match Aegis delegation delegator (${existing.delegator})`,
+      };
+    }
+
+    // Step 4: Verify the EIP-712 signature
+    const verification = await verifyMdfDelegationSignature(
+      mdfDelegation,
+      delegationManagerAddress,
+      chainId
+    );
+
+    if (!verification.valid) {
+      return {
+        success: false,
+        error: `MDF delegation signature invalid: ${verification.error ?? 'unknown error'}`,
+      };
+    }
+
+    // Step 5: Compute delegation hash and serialize
+    const mdfDelegationHash = hashMdfDelegation(mdfDelegation);
+    const serialized = serializeMdfDelegation(mdfDelegation);
+
+    // Step 6: Update the Prisma record with MDF fields
+    await db.delegation.update({
+      where: { id: aegisDelegationId },
+      data: {
+        mdfDelegationHash,
+        serializedMdfDelegation: serialized,
+        delegationManagerAddress,
+        delegatorAccountType: 'DELEGATOR',
+      },
+    });
+
+    logger.info('[Delegation] Delegation upgraded to MDF mode', {
+      aegisDelegationId,
+      mdfDelegationHash,
+      delegationManagerAddress,
+      chainId,
+    });
+
+    return { success: true, mdfDelegationHash };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error('[Delegation] createMdfDelegation failed', { error: message, aegisDelegationId });
+    return { success: false, error: message };
+  }
 }
