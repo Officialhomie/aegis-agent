@@ -18,8 +18,9 @@
  */
 
 import 'dotenv/config';
-import { createPublicClient, createWalletClient, http, parseEther, type Address } from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
+import { spawnSync } from 'child_process';
+import { resolve } from 'path';
+import { createPublicClient, http, parseEther, type Address } from 'viem';
 import { base, baseSepolia } from 'viem/chains';
 
 const PAYMASTER_ABI = [
@@ -46,6 +47,7 @@ async function main() {
   const rpcUrl = isBase
     ? process.env.RPC_URL_BASE ?? process.env.BASE_RPC_URL
     : process.env.RPC_URL_BASE_SEPOLIA ?? process.env.BASE_RPC_URL;
+  const keystoreAccount = process.env.FOUNDRY_ACCOUNT;
   const privateKey =
     process.env.AGENT_PRIVATE_KEY ??
     process.env.DEPLOYER_PRIVATE_KEY ??
@@ -53,19 +55,18 @@ async function main() {
   const paymasterAddress = process.env.AEGIS_PAYMASTER_ADDRESS as Address | undefined;
   const fundEth = process.env.PAYMASTER_FUND_ETH ?? '0.05';
 
-  if (!rpcUrl || !paymasterAddress || !privateKey) {
+  if (!rpcUrl || !paymasterAddress) {
     console.error('Missing required env. Set:');
     if (!rpcUrl) console.error('  - RPC_URL_BASE_SEPOLIA (or RPC_URL_BASE for mainnet)');
     if (!paymasterAddress) console.error('  - AEGIS_PAYMASTER_ADDRESS');
-    if (!privateKey) console.error('  - AGENT_PRIVATE_KEY or DEPLOYER_PRIVATE_KEY');
+    process.exit(1);
+  }
+  if (!keystoreAccount && !privateKey) {
+    console.error('  - FOUNDRY_ACCOUNT (keystore) or AGENT_PRIVATE_KEY / DEPLOYER_PRIVATE_KEY');
     process.exit(1);
   }
 
-  const account = privateKeyToAccount(privateKey as `0x${string}`);
   const publicClient = createPublicClient({ chain, transport: http(rpcUrl) });
-  const walletClient = createWalletClient({ account, chain, transport: http(rpcUrl) });
-
-  const valueWei = parseEther(fundEth);
 
   // Check current deposit
   const currentDeposit = await publicClient.readContract({
@@ -75,18 +76,47 @@ async function main() {
   });
 
   console.log('[Fund] Current EntryPoint deposit:', formatEth(currentDeposit), 'ETH');
-  console.log('[Fund] Depositing:', fundEth, 'ETH from', account.address);
+  console.log('[Fund] Depositing:', fundEth, 'ETH');
 
-  const hash = await walletClient.writeContract({
-    address: paymasterAddress,
-    abi: PAYMASTER_ABI,
-    functionName: 'deposit',
-    value: valueWei,
-  });
+  let txHash: string;
 
-  console.log('[Fund] Transaction sent:', hash);
-  const receipt = await publicClient.waitForTransactionReceipt({ hash });
-  console.log('[Fund] Transaction confirmed (block', receipt.blockNumber, ')');
+  if (keystoreAccount) {
+    // Use cast send with encrypted keystore (no plain-text key needed)
+    const root = resolve(__dirname, '..');
+    const result = spawnSync('cast', [
+      'send',
+      paymasterAddress,
+      'deposit()',
+      '--value', `${fundEth}ether`,
+      '--account', keystoreAccount,
+      '--rpc-url', rpcUrl,
+    ], { encoding: 'utf-8', cwd: root, stdio: ['inherit', 'pipe', 'pipe'] });
+
+    const combined = (result.stdout ?? '') + (result.stderr ?? '');
+    if (result.status !== 0) {
+      throw new Error(`cast send failed:\n${combined.slice(0, 500)}`);
+    }
+    const match = combined.match(/transactionHash\s+(0x[a-fA-F0-9]{64})/);
+    txHash = match?.[1] ?? '(see output above)';
+    console.log(combined.trim());
+  } else {
+    // Plain private key path
+    const { createWalletClient } = await import('viem');
+    const { privateKeyToAccount } = await import('viem/accounts');
+    const account = privateKeyToAccount(privateKey as `0x${string}`);
+    const walletClient = createWalletClient({ account, chain, transport: http(rpcUrl) });
+
+    const hash = await walletClient.writeContract({
+      address: paymasterAddress,
+      abi: PAYMASTER_ABI,
+      functionName: 'deposit',
+      value: parseEther(fundEth),
+    });
+    txHash = hash;
+    console.log('[Fund] Transaction sent:', hash);
+    const receipt = await publicClient.waitForTransactionReceipt({ hash });
+    console.log('[Fund] Transaction confirmed (block', receipt.blockNumber, ')');
+  }
 
   const newDeposit = await publicClient.readContract({
     address: paymasterAddress,
@@ -94,6 +124,7 @@ async function main() {
     functionName: 'getDeposit',
   });
 
+  console.log('[Fund] tx:', txHash);
   console.log('[Fund] New EntryPoint deposit:', formatEth(newDeposit), 'ETH');
   console.log('[Fund] AegisPaymaster funded successfully.');
 }
