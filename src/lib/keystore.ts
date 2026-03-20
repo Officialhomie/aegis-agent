@@ -166,7 +166,7 @@ async function resolvePrivateKeyHex(): Promise<string> {
 
 /**
  * Get the agent's viem PrivateKeyAccount from Foundry keystore or env.
- * Use this for all signing (paymaster, agentkit, identity, etc.).
+ * Use this for all signing (paymaster, identity, etc.).
  */
 export async function getKeystoreAccount(): Promise<PrivateKeyAccount> {
   const hex = await resolvePrivateKeyHex();
