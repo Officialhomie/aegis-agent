@@ -17,6 +17,40 @@ import {
 } from 'viem/account-abstraction';
 import { logger } from '../../logger';
 
+/**
+ * Serialize a UserOperation v0.7 for JSON-RPC submission.
+ * ERC-4337 bundlers require all QUANTITY fields as 0x-prefixed hex strings,
+ * not decimal strings. viem's HTTP transport serializes BigInt as decimal,
+ * which causes parse errors (-32700) on Pimlico and Alchemy bundlers.
+ */
+function serializeUserOpHex(userOp: UserOperation<'0.7'>): Record<string, unknown> {
+  const toHex = (n: bigint) => `0x${n.toString(16)}`;
+
+  return {
+    sender: userOp.sender,
+    nonce: toHex(userOp.nonce),
+    callData: userOp.callData,
+    callGasLimit: toHex(userOp.callGasLimit),
+    verificationGasLimit: toHex(userOp.verificationGasLimit),
+    preVerificationGas: toHex(userOp.preVerificationGas),
+    maxFeePerGas: toHex(userOp.maxFeePerGas),
+    maxPriorityFeePerGas: toHex(userOp.maxPriorityFeePerGas),
+    signature: userOp.signature,
+    ...(userOp.paymaster && {
+      paymaster: userOp.paymaster,
+      paymasterData: userOp.paymasterData ?? '0x',
+      paymasterVerificationGasLimit: userOp.paymasterVerificationGasLimit
+        ? toHex(userOp.paymasterVerificationGasLimit)
+        : '0x0',
+      paymasterPostOpGasLimit: userOp.paymasterPostOpGasLimit
+        ? toHex(userOp.paymasterPostOpGasLimit)
+        : '0x0',
+    }),
+    ...(userOp.factory && { factory: userOp.factory }),
+    ...(userOp.factoryData && { factoryData: userOp.factoryData }),
+  };
+}
+
 export class BundlerUnavailableError extends Error {
   constructor(message: string) {
     super(message);
@@ -67,14 +101,8 @@ function getChain(): Chain {
 
 /**
  * Resolve the active bundler/paymaster RPC URL from env.
- * When BUNDLER_PROVIDER=coinbase and COINBASE_BUNDLER_RPC_URL is set, use CDP; otherwise use Pimlico (BUNDLER_RPC_URL / PAYMASTER_RPC_URL).
  */
 export function getActiveBundlerRpcUrl(): string | undefined {
-  const provider = (process.env.BUNDLER_PROVIDER ?? 'pimlico').toLowerCase();
-  const coinbaseUrl = process.env.COINBASE_BUNDLER_RPC_URL?.trim();
-  if (provider === 'coinbase' && coinbaseUrl) {
-    return coinbaseUrl;
-  }
   return process.env.BUNDLER_RPC_URL ?? process.env.PAYMASTER_RPC_URL;
 }
 
@@ -84,12 +112,12 @@ function getBundlerRpcUrl(): string | undefined {
 
 /**
  * Resolve entry point address from env.
- * Default: EntryPoint v0.6 (0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789) for Coinbase Smart Wallet compatibility.
- * Set ENTRY_POINT_ADDRESS=0x0000000071727De22E5E9d8BAf0edAc6f37da032 for v0.7.
+ * Default: EntryPoint v0.7 (0x0000000071727De22E5E9d8BAf0edAc6f37da032) — required by AegisPaymaster.sol.
+ * Override with ENTRY_POINT_ADDRESS=0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789 for v0.6 Coinbase Smart Wallet compatibility.
  */
 export function getEntryPointAddress(): Address {
   const env = process.env.ENTRY_POINT_ADDRESS?.trim();
-  return (env as Address) || entryPoint06Address;
+  return (env as Address) || entryPoint07Address;
 }
 
 let bundlerClientInstance: BundlerClient | null = null;
@@ -212,7 +240,7 @@ export async function estimateUserOpGas(userOp: Partial<UserOperation<'0.7'>>): 
   try {
     const estimate = await client.request({
       method: 'eth_estimateUserOperationGas' as never,
-      params: [userOp, getEntryPointAddress()] as never,
+      params: [serializeUserOpHex(userOp as UserOperation<'0.7'>), getEntryPointAddress()] as never,
     }) as {
       callGasLimit: Hex;
       verificationGasLimit: Hex;
@@ -251,7 +279,7 @@ export async function submitUserOperation(
   try {
     const userOpHash = await client.request({
       method: 'eth_sendUserOperation' as never,
-      params: [userOp, getEntryPointAddress()] as never,
+      params: [serializeUserOpHex(userOp), getEntryPointAddress()] as never,
     }) as Hex;
 
     logger.info('[BundlerClient] UserOperation submitted', {
