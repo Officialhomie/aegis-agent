@@ -149,9 +149,6 @@ model ProtocolSponsor {
 
   // Phase 1: Onboarding workflow
   onboardingStatus        OnboardingStatus @default(PENDING_REVIEW)
-  cdpAllowlistStatus      CDPStatus        @default(NOT_SUBMITTED)
-  cdpAllowlistSubmittedAt DateTime?
-  cdpAllowlistApprovedAt  DateTime?
   simulationModeUntil     DateTime?
 
   // Phase 1: Self-service config
@@ -374,6 +371,13 @@ model Delegation {
   // On-chain reference (optional audit trail)
   onChainTxHash String?
 
+  // MDF (MetaMask Delegation Framework) integration fields
+  // Populated when the delegation is upgraded to MDF mode via /api/delegation/:id/mdf-upgrade
+  mdfDelegationHash        String?              // bytes32 hash of the MDF Delegation struct
+  serializedMdfDelegation  String?              // JSON-serialized MdfDelegation (bigint as string)
+  delegationManagerAddress String?              // DelegationManager contract used
+  delegatorAccountType     DelegatorAccountType @default(EOA)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -385,6 +389,13 @@ model Delegation {
   @@index([agent])
   @@index([status, validUntil])
   @@index([agentOnChainId])
+  @@index([mdfDelegationHash])
+}
+
+enum DelegatorAccountType {
+  DELEGATOR // MDF-compatible DeleGator smart account
+  EOA       // Standard EOA or non-DeleGator smart account (Aegis-native delegation)
+  UNKNOWN   // Account type not yet determined
 }
 
 model DelegationUsage {
@@ -451,16 +462,8 @@ enum PaymentStatus {
 enum OnboardingStatus {
   PENDING_REVIEW // Awaiting review
   APPROVED_SIMULATION // Can use simulation mode
-  PENDING_CDP // Waiting for CDP
-  LIVE // Fully live with CDP
+  LIVE // Fully live with sovereign paymaster
   SUSPENDED
-}
-
-enum CDPStatus {
-  NOT_SUBMITTED
-  SUBMITTED
-  APPROVED
-  REJECTED
 }
 
 enum RuntimeOverrideType {
