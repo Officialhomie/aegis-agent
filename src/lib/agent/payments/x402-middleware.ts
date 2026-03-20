@@ -74,7 +74,6 @@ function proofFromCdpPayload(cdpPayload: Record<string, unknown>): X402PaymentPr
     amount: value,
     currency: 'USDC',
     chainId,
-    cdpPaymentPayload: cdpPayload,
   };
 }
 
