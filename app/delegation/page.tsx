@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useMemo } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, KeyRound } from 'lucide-react';
+import { KeyRound } from 'lucide-react';
 import { Header } from '@/components/layout/header';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -19,6 +19,7 @@ import { SkeletonTable } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/common/empty-state';
 import { Address } from '@/components/common/address';
 import { Badge } from '@/components/ui/badge';
+import { useAuthenticatedFetch } from '@/hooks/use-authenticated-fetch';
 
 const DELEGATION_API_KEY_KEY = 'aegis_delegation_api_key';
 
@@ -33,54 +34,42 @@ interface Delegation {
   usageCount: number;
 }
 
+interface DelegationsResponse {
+  delegations: Delegation[];
+}
+
 export default function DelegationListPage() {
   const [apiKey, setApiKey] = useState('');
-  const [delegations, setDelegations] = useState<Delegation[]>([]);
-  const [loading, setLoading] = useState(false);
   const [filterDelegator, setFilterDelegator] = useState('');
   const [filterAgent, setFilterAgent] = useState('');
   const [filterStatus, setFilterStatus] = useState('ACTIVE');
   const [keyPersisted, setKeyPersisted] = useState(false);
 
-  const effectiveKey = apiKey || (typeof window !== 'undefined' ? sessionStorage.getItem(DELEGATION_API_KEY_KEY) : null) || '';
+  const effectiveKey =
+    apiKey ||
+    (typeof window !== 'undefined' ? sessionStorage.getItem(DELEGATION_API_KEY_KEY) : null) ||
+    '';
 
-  const fetchDelegations = useCallback(async () => {
-    if (!effectiveKey) {
-      setDelegations([]);
-      return;
-    }
-    setLoading(true);
-    try {
-      const params = new URLSearchParams();
-      if (filterDelegator.trim()) params.set('delegator', filterDelegator.trim());
-      if (filterAgent.trim()) params.set('agent', filterAgent.trim());
-      if (filterStatus) params.set('status', filterStatus);
-      params.set('limit', '50');
-      const res = await fetch(`/api/delegation?${params}`, {
-        headers: { Authorization: `Bearer ${effectiveKey}` },
-      });
-      const data = await res.json();
-      if (res.ok && data.delegations) {
-        setDelegations(data.delegations);
-      } else {
-        setDelegations([]);
-      }
-    } catch {
-      setDelegations([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [effectiveKey, filterDelegator, filterAgent, filterStatus]);
+  const fetchUrl = useMemo(() => {
+    const params = new URLSearchParams();
+    if (filterDelegator.trim()) params.set('delegator', filterDelegator.trim());
+    if (filterAgent.trim()) params.set('agent', filterAgent.trim());
+    if (filterStatus) params.set('status', filterStatus);
+    params.set('limit', '50');
+    return `/api/delegation?${params}`;
+  }, [filterDelegator, filterAgent, filterStatus]);
 
-  useEffect(() => {
-    fetchDelegations();
-  }, [fetchDelegations]);
+  const { data, loading, error, refetch } = useAuthenticatedFetch<DelegationsResponse>(
+    fetchUrl,
+    effectiveKey
+  );
+  const delegations = data?.delegations ?? [];
 
   const handleSaveKey = () => {
     if (apiKey.trim()) {
       sessionStorage.setItem(DELEGATION_API_KEY_KEY, apiKey.trim());
       setKeyPersisted(true);
-      fetchDelegations();
+      refetch();
     }
   };
 
@@ -88,7 +77,6 @@ export default function DelegationListPage() {
     sessionStorage.removeItem(DELEGATION_API_KEY_KEY);
     setApiKey('');
     setKeyPersisted(false);
-    setDelegations([]);
   };
 
   return (
@@ -165,10 +153,12 @@ export default function DelegationListPage() {
                 <option value="EXHAUSTED">EXHAUSTED</option>
                 <option value="ALL">ALL</option>
               </select>
-              <Button variant="secondary" onClick={fetchDelegations} disabled={loading}>
+              <Button variant="secondary" onClick={refetch} disabled={loading}>
                 Refresh
               </Button>
             </div>
+
+            {error && <p className="text-sm text-error mb-4">{error}</p>}
 
             <Card>
               <CardHeader>
