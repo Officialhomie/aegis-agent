@@ -69,10 +69,10 @@ export function Stats() {
   ];
 
   return (
-    <section className="py-24 px-6 bg-surface/50">
+    <section className="py-16 md:py-24 px-4 sm:px-6 bg-surface/50">
       <div className="max-w-5xl mx-auto">
         {/* Section header */}
-        <div className="text-center mb-12">
+        <div className="text-center mb-8 md:mb-12">
           <h2 className="font-display text-3xl md:text-4xl font-bold text-text-primary mb-4">
             Live Statistics
           </h2>
@@ -82,17 +82,17 @@ export function Stats() {
         </div>
 
         {/* Stats grid */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-6">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4 md:gap-6">
           {statItems.map((stat) => (
-            <div key={stat.label} className="card-agentic p-6 text-center">
+            <div key={stat.label} className="card-agentic p-4 sm:p-5 md:p-6 text-center">
               <div
-                className={`inline-flex items-center justify-center w-12 h-12 rounded-full ${stat.bgColor} mb-4`}
+                className={`inline-flex items-center justify-center w-10 h-10 sm:w-12 sm:h-12 rounded-full ${stat.bgColor} mb-3 sm:mb-4`}
               >
-                <stat.icon className={`h-6 w-6 ${stat.color}`} />
+                <stat.icon className={`h-5 w-5 sm:h-6 sm:w-6 ${stat.color}`} />
               </div>
-              <div className="font-display text-2xl md:text-3xl font-bold text-text-primary mb-1">
+              <div className="font-display text-2xl md:text-3xl font-bold text-text-primary mb-1 truncate min-w-0">
                 {loading ? (
-                  <div className="h-8 w-16 mx-auto skeleton rounded" />
+                  <div className="h-6 w-14 sm:h-8 sm:w-16 mx-auto skeleton rounded" />
                 ) : (
                   stat.value
                 )}
