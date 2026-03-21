@@ -3,7 +3,12 @@ import { colors, typography } from '../theme';
 
 const STATS = [
   { label: 'Deployed Contracts', value: 5, color: colors.accent.blue, suffix: '' },
-  { label: 'On-Chain Sponsorships', value: 50, color: colors.accent.green, suffix: '+' },
+  {
+    label: 'Batch run confirmed (Base)',
+    value: 123,
+    color: colors.accent.green,
+    suffix: '',
+  },
   { label: 'Policy Rules', value: 13, color: colors.accent.amber, suffix: '' },
   { label: 'Tests Passing', value: 975, color: colors.accent.purple, suffix: '' },
 ];

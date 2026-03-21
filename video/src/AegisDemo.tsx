@@ -2,7 +2,7 @@ import { AbsoluteFill, Sequence } from 'remotion';
 import { HookScene } from './scenes/HookScene';
 import { ProblemScene } from './scenes/ProblemScene';
 import { ArchitectureScene } from './scenes/ArchitectureScene';
-import { LiveProofScene } from './scenes/LiveProofScene';
+import { BatchDemoResultsScene } from './scenes/BatchDemoResultsScene';
 import { ImpactScene } from './scenes/ImpactScene';
 
 /**
@@ -11,7 +11,7 @@ import { ImpactScene } from './scenes/ImpactScene';
  * Scene 1 (0:00-0:15) = frames 0-449     - Hook
  * Scene 2 (0:15-0:45) = frames 450-1349   - Problem
  * Scene 3 (0:45-1:30) = frames 1350-2699  - Architecture (ORPEM)
- * Scene 4 (1:30-2:00) = frames 2700-3599  - Live Proof
+ * Scene 4 (1:30-2:00) = frames 2700-3599  - Batch demo results (mainnet run)
  * Scene 5 (2:00-2:30) = frames 3600-4499  - Impact
  */
 export const AegisDemo: React.FC = () => {
@@ -27,7 +27,7 @@ export const AegisDemo: React.FC = () => {
         <ArchitectureScene />
       </Sequence>
       <Sequence from={2700} durationInFrames={900}>
-        <LiveProofScene />
+        <BatchDemoResultsScene />
       </Sequence>
       <Sequence from={3600} durationInFrames={900}>
         <ImpactScene />
