@@ -17,7 +17,7 @@ export default function DocsLayout({
       <Header />
 
       {/* Mobile nav toggle */}
-      <div className="lg:hidden fixed bottom-4 right-4 z-30">
+      <div className="lg:hidden fixed bottom-6 right-4 z-30">
         <button
           onClick={() => setMobileNavOpen(true)}
           className="p-3 bg-coral-500 text-white rounded-full shadow-lg hover:bg-coral-600 transition-colors"
@@ -40,7 +40,7 @@ export default function DocsLayout({
 
         {/* Main content */}
         <main className="flex-1 min-w-0">
-          <div className="max-w-4xl mx-auto px-6 py-12">{children}</div>
+          <div className="max-w-4xl mx-auto px-4 sm:px-6 py-8 sm:py-12">{children}</div>
         </main>
       </div>
     </div>
