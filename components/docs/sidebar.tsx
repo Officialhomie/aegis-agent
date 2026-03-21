@@ -14,6 +14,7 @@ import {
   ChevronRight,
   Award,
   UserCheck,
+  X,
 } from 'lucide-react';
 
 interface NavItem {
@@ -65,7 +66,7 @@ export function DocsSidebar() {
 
   return (
     <aside className="w-64 shrink-0 border-r border-border bg-surface/50 overflow-y-auto">
-      <div className="sticky top-0 p-6">
+      <div className="sticky top-0 p-4 lg:p-6">
         <Link href="/docs" className="flex items-center gap-2 mb-8">
           <Shield className="h-6 w-6 text-cyan-400" />
           <span className="font-display font-bold text-text-primary">Aegis Docs</span>
@@ -126,7 +127,7 @@ export function MobileDocsSidebar({
         className="fixed inset-0 bg-black/50 z-40 lg:hidden"
         onClick={onClose}
       />
-      <aside className="fixed inset-y-0 left-0 w-72 bg-surface border-r border-border z-50 overflow-y-auto lg:hidden">
+      <aside className="fixed inset-y-0 left-0 w-64 bg-surface border-r border-border z-50 overflow-y-auto lg:hidden">
         <div className="p-6">
           <div className="flex items-center justify-between mb-8">
             <Link href="/docs" className="flex items-center gap-2" onClick={onClose}>
@@ -136,8 +137,9 @@ export function MobileDocsSidebar({
             <button
               onClick={onClose}
               className="p-2 text-text-muted hover:text-text-primary"
+              aria-label="Close navigation"
             >
-              <ChevronRight className="h-5 w-5" />
+              <X className="h-5 w-5" />
             </button>
           </div>
 
