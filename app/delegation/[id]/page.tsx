@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, KeyRound, Trash2 } from 'lucide-react';
@@ -20,6 +20,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Address } from '@/components/common/address';
 import { Badge } from '@/components/ui/badge';
 import { TxLink } from '@/components/common/tx-link';
+import { useAuthenticatedFetch } from '@/hooks/use-authenticated-fetch';
 
 const DELEGATION_API_KEY_KEY = 'aegis_delegation_api_key';
 
@@ -53,62 +54,50 @@ interface UsageRecord {
   createdAt: string;
 }
 
+interface DelegationResponse {
+  delegation: Delegation;
+}
+
+interface UsageResponse {
+  usage: UsageRecord[];
+}
+
 export default function DelegationDetailPage() {
   const params = useParams();
   const id = params.id as string;
-  const [delegation, setDelegation] = useState<Delegation | null>(null);
-  const [usage, setUsage] = useState<UsageRecord[]>([]);
-  const [loading, setLoading] = useState(true);
+
+  const apiKey =
+    typeof window !== 'undefined' ? sessionStorage.getItem(DELEGATION_API_KEY_KEY) : null;
+
+  const {
+    data: delegData,
+    loading: delegLoading,
+    error: delegError,
+    refetch: refetchDeleg,
+  } = useAuthenticatedFetch<DelegationResponse>(`/api/delegation/${id}`, apiKey ?? '');
+
+  const {
+    data: usageData,
+    loading: usageLoading,
+    refetch: refetchUsage,
+  } = useAuthenticatedFetch<UsageResponse>(
+    `/api/delegation/${id}/usage?limit=50`,
+    apiKey ?? ''
+  );
+
+  const delegation = delegData?.delegation ?? null;
+  const usage = usageData?.usage ?? [];
+  const loading = delegLoading || usageLoading;
+
   const [revokeLoading, setRevokeLoading] = useState(false);
   const [revokeReason, setRevokeReason] = useState('');
   const [showRevokeConfirm, setShowRevokeConfirm] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const apiKey = typeof window !== 'undefined' ? sessionStorage.getItem(DELEGATION_API_KEY_KEY) : null;
-
-  const fetchData = useCallback(async () => {
-    if (!apiKey) {
-      setError('API key required');
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    try {
-      const [delegRes, usageRes] = await Promise.all([
-        fetch(`/api/delegation/${id}`, {
-          headers: { Authorization: `Bearer ${apiKey}` },
-        }),
-        fetch(`/api/delegation/${id}/usage?limit=50`, {
-          headers: { Authorization: `Bearer ${apiKey}` },
-        }),
-      ]);
-      const delegData = await delegRes.json();
-      const usageData = await usageRes.json();
-      if (delegRes.ok && delegData.delegation) {
-        setDelegation(delegData.delegation);
-      } else {
-        setError(delegData.error ?? 'Failed to load delegation');
-      }
-      if (usageRes.ok && usageData.usage) {
-        setUsage(usageData.usage);
-      } else {
-        setUsage([]);
-      }
-    } catch {
-      setError('Failed to load');
-    } finally {
-      setLoading(false);
-    }
-  }, [id, apiKey]);
-
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+  const [revokeError, setRevokeError] = useState<string | null>(null);
 
   const handleRevoke = async () => {
     if (!apiKey || !delegation) return;
     setRevokeLoading(true);
+    setRevokeError(null);
     try {
       const res = await fetch(`/api/delegation/${id}`, {
         method: 'DELETE',
@@ -123,16 +112,37 @@ export default function DelegationDetailPage() {
       if (res.ok && data.success) {
         setShowRevokeConfirm(false);
         setRevokeReason('');
-        fetchData();
+        refetchDeleg();
+        refetchUsage();
       } else {
-        setError(data.error ?? data.message ?? 'Revoke failed');
+        setRevokeError(data.error ?? data.message ?? 'Revoke failed');
       }
     } catch {
-      setError('Revoke failed');
+      setRevokeError('Revoke failed');
     } finally {
       setRevokeLoading(false);
     }
   };
+
+  if (!apiKey) {
+    return (
+      <div className="min-h-screen bg-background">
+        <Header />
+        <main className="max-w-6xl mx-auto px-6 py-8">
+          <div className="flex items-center gap-2 text-text-muted mb-6">
+            <KeyRound className="h-5 w-5" />
+            <p className="text-sm">
+              API key required. Set it on the{' '}
+              <Link href="/delegation" className="text-cyan-400 hover:underline">
+                Delegations list
+              </Link>{' '}
+              page first.
+            </p>
+          </div>
+        </main>
+      </div>
+    );
+  }
 
   if (loading && !delegation) {
     return (
@@ -146,12 +156,12 @@ export default function DelegationDetailPage() {
     );
   }
 
-  if (error && !delegation) {
+  if (delegError && !delegation) {
     return (
       <div className="min-h-screen bg-background">
         <Header />
         <main className="max-w-6xl mx-auto px-6 py-8">
-          <p className="text-error mb-4">{error}</p>
+          <p className="text-error mb-4">{delegError}</p>
           <Link href="/delegation" className="text-cyan-400 hover:underline">
             Back to Delegations
           </Link>
@@ -322,12 +332,16 @@ export default function DelegationDetailPage() {
                         placeholder="e.g. No longer needed"
                       />
                     </div>
+                    {revokeError && (
+                      <p className="text-sm text-error">{revokeError}</p>
+                    )}
                     <div className="flex gap-3 justify-end">
                       <Button
                         variant="secondary"
                         onClick={() => {
                           setShowRevokeConfirm(false);
                           setRevokeReason('');
+                          setRevokeError(null);
                         }}
                       >
                         Cancel
