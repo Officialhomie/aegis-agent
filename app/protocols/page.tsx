@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import Link from 'next/link';
 import { Plus, Search } from 'lucide-react';
 import { Header } from '@/components/layout/header';
@@ -18,6 +18,7 @@ import {
 import { SkeletonTable } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/common/empty-state';
 import { formatUSD } from '@/lib/utils';
+import { useFetch } from '@/hooks/use-fetch';
 
 interface Protocol {
   protocolId: string;
@@ -29,28 +30,14 @@ interface Protocol {
   createdAt: string;
 }
 
+interface ProtocolsResponse {
+  protocols: Protocol[];
+}
+
 export default function ProtocolsPage() {
-  const [protocols, setProtocols] = useState<Protocol[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { data, loading, error } = useFetch<ProtocolsResponse>('/api/protocol');
+  const protocols = data?.protocols ?? [];
   const [search, setSearch] = useState('');
-
-  useEffect(() => {
-    async function fetchProtocols() {
-      try {
-        const res = await fetch('/api/protocol');
-        if (res.ok) {
-          const data = await res.json();
-          setProtocols(data.protocols ?? []);
-        }
-      } catch {
-        // Handle error silently
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    fetchProtocols();
-  }, []);
 
   const filteredProtocols = protocols.filter(
     (p) =>
@@ -77,6 +64,10 @@ export default function ProtocolsPage() {
             </Button>
           </Link>
         </div>
+
+        {error && (
+          <p className="text-sm text-error mb-6">{error}</p>
+        )}
 
         {/* Search */}
         <div className="mb-6">
