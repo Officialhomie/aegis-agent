@@ -11,17 +11,15 @@ import {
 import type { IBundler, GasEstimate, ReceiptOptions, UserOpReceipt, BundlerHealthStatus, UserOpSubmissionResult } from './types';
 
 /**
- * Default bundler adapter — delegates to the existing bundler-client.ts which
- * already handles Pimlico vs Coinbase CDP selection via BUNDLER_PROVIDER.
+ * Default bundler adapter — delegates to the existing bundler-client.ts.
  *
  * This adapter exists so paymaster.ts depends on IBundler, not on bundler-client.ts
  * directly. Replacing the bundler requires only a new IBundler implementation.
  */
 export class DefaultBundlerAdapter implements IBundler {
   get name(): string {
-    const provider = (process.env.BUNDLER_PROVIDER ?? 'pimlico').toLowerCase();
     const url = getActiveBundlerRpcUrl();
-    return `${provider}${url ? '' : ' (unconfigured)'}`;
+    return `pimlico${url ? '' : ' (unconfigured)'}`;
   }
 
   async checkHealth(): Promise<BundlerHealthStatus> {

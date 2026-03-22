@@ -18,7 +18,6 @@ vi.mock('@/src/lib/db', () => ({
         id: 'test-id',
         protocolId: 'test-protocol',
         onboardingStatus: 'APPROVED_SIMULATION',
-        cdpAllowlistStatus: 'NOT_SUBMITTED',
         simulationModeUntil: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
       }),
       findUnique: vi.fn().mockResolvedValue({
@@ -26,7 +25,6 @@ vi.mock('@/src/lib/db', () => ({
         protocolId: 'test-protocol',
         name: 'Test Protocol',
         onboardingStatus: 'APPROVED_SIMULATION',
-        cdpAllowlistStatus: 'NOT_SUBMITTED',
         simulationModeUntil: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
         apiKeyHash: '5e884898da28047d1f3ff04e9b8a3a5b23a0f4ea3e47c0f1c9b0d6a7e8c9d0e1',
         policyConfig: null,

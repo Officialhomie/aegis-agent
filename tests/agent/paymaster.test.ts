@@ -22,6 +22,12 @@ vi.mock('../../src/lib/db', () => ({
     },
     $executeRaw: mockExecuteRaw,
     sponsorshipRecord: { create: mockSponsorshipRecordCreate },
+    agentSpendLedger: {
+      findMany: vi.fn().mockResolvedValue([]),
+      create: vi.fn().mockResolvedValue({ id: 'ledger-1' }),
+      update: vi.fn().mockResolvedValue({}),
+    },
+    approvedAgent: { findUnique: vi.fn().mockResolvedValue({ maxDailyBudget: 100 }) },
   }),
 }));
 
@@ -29,7 +35,20 @@ vi.mock('../../src/lib/agent/state-store', () => ({
   getStateStore: vi.fn().mockResolvedValue({
     get: vi.fn().mockResolvedValue(null),
     set: vi.fn().mockResolvedValue(undefined),
+    setNX: vi.fn().mockResolvedValue(true),
+    eval: vi.fn().mockResolvedValue(1),
   }),
+}));
+
+vi.mock('../../src/lib/agent/budget', () => ({
+  reserveAgentBudget: vi.fn().mockResolvedValue({ reserved: true, reservationId: 'test-reservation-id' }),
+  commitReservation: vi.fn().mockResolvedValue(undefined),
+  releaseReservation: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('../../src/lib/cache', () => ({
+  getCachedProtocolWhitelist: vi.fn().mockResolvedValue(['0x1234567890123456789012345678901234567890']),
+  updateCachedProtocolBudget: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../../src/lib/ipfs', () => ({
@@ -45,14 +64,13 @@ vi.mock('../../src/lib/agent/observe/oracles', () => ({
 }));
 
 
-vi.mock('viem/account-abstraction', () => ({
-  createPaymasterClient: vi.fn().mockReturnValue({}),
-  getPaymasterStubData: vi.fn().mockResolvedValue({
-    paymaster: '0x0000000000000000000000000000000000000001',
-    paymasterData: '0x',
-    paymasterPostOpGasLimit: BigInt(10000),
+vi.mock('../../src/lib/agent/execute/paymaster-signer', () => ({
+  signPaymasterApproval: vi.fn().mockResolvedValue({
+    paymasterAndData: ('0x' + '0'.repeat(320)) as `0x${string}`,
+    approvalHash: ('0x' + '0'.repeat(64)) as `0x${string}`,
+    validUntil: Math.floor(Date.now() / 1000) + 300,
+    validAfter: Math.floor(Date.now() / 1000),
   }),
-  entryPoint07Address: '0x0000000071727De22E5E9d8BAf0edAc6f37da032',
 }));
 
 const mockPrivateKey = '0x0000000000000000000000000000000000000000000000000000000000000001';
@@ -88,6 +106,11 @@ describe('sponsorTransaction', () => {
   beforeEach(() => {
     vi.stubEnv('EXECUTE_WALLET_PRIVATE_KEY', mockPrivateKey);
     vi.stubEnv('ACTIVITY_LOGGER_ADDRESS', '');
+    mockProtocolSponsorFindUnique.mockResolvedValue({
+      balanceUSD: 100,
+      whitelistedContracts: ['0x1234567890123456789012345678901234567890'],
+    });
+    mockExecuteRaw.mockResolvedValue(1);
   });
 
   it('rejects non-SPONSOR_TRANSACTION decision', async () => {
@@ -124,7 +147,7 @@ describe('sponsorTransaction', () => {
 
   it('does not throw when sponsorshipRecord.create fails (fail-closed: error logged, result still returned)', async () => {
     mockSponsorshipRecordCreate.mockRejectedValueOnce(new Error('Connection refused'));
-    const decision: Decision = {
+    const decision: Decision & { _executionMode?: 'LIVE' | 'SIMULATION'; _validatedTier?: number } = {
       action: 'SPONSOR_TRANSACTION',
       confidence: 0.9,
       reasoning: 'Test sponsorship when DB record create fails.',
@@ -135,6 +158,8 @@ describe('sponsorTransaction', () => {
         estimatedCostUSD: 0.12,
       },
     };
+    (decision as any)._executionMode = 'SIMULATION'; // Use simulation so executePaymasterSponsorship returns success without bundler
+    (decision as any)._validatedTier = 2;
     const result = await sponsorTransaction(decision, 'LIVE');
     expect(result).toBeDefined();
     expect(typeof result.success).toBe('boolean');

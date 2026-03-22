@@ -10,6 +10,8 @@ import type { AgentConfig } from '../../src/lib/agent';
 const mockProtocolFindUnique = vi.fn().mockResolvedValue({
   protocolId: 'test-protocol',
   whitelistedContracts: ['0x1234567890123456789012345678901234567890'],
+  requireERC8004: false,
+  requireERC4337: false,
 });
 const mockApprovedAgentFindUnique = vi.fn();
 
@@ -33,6 +35,18 @@ vi.mock('../../src/lib/agent/state-store', () => ({
   getStateStore: vi.fn().mockResolvedValue({
     get: mockStoreGet,
     set: mockStoreSet,
+    setNX: vi.fn().mockResolvedValue(true),
+    eval: vi.fn().mockResolvedValue(1), // 1 = allowed for rate limit check script
+  }),
+}));
+
+vi.mock('../../src/lib/agent/validation/account-validator', () => ({
+  validateAccount: vi.fn().mockResolvedValue({
+    agentTier: 2,
+    agentType: 'ERC4337_ACCOUNT',
+    isValid: true,
+    accountType: 'smart_account',
+    reason: 'ERC-4337 compatible',
   }),
 }));
 
@@ -45,6 +59,26 @@ vi.mock('@prisma/client', () => ({
     protocolSponsor = { findUnique: mockProtocolFindUnique };
     approvedAgent = { findUnique: mockApprovedAgentFindUnique };
   },
+}));
+
+vi.mock('../../src/lib/db', () => ({
+  getPrisma: vi.fn().mockReturnValue({
+    protocolSponsor: { findUnique: mockProtocolFindUnique },
+    approvedAgent: { findUnique: mockApprovedAgentFindUnique },
+  }),
+}));
+
+vi.mock('../../src/lib/protocol/onboarding', () => ({
+  canExecuteSponsorship: vi.fn().mockResolvedValue({ allowed: true, mode: 'SIMULATION' }),
+}));
+
+vi.mock('../../src/lib/protocol/runtime-overrides', () => ({
+  getActiveRuntimeOverride: vi.fn().mockResolvedValue(null),
+  isWalletBlocked: vi.fn().mockResolvedValue(false),
+}));
+
+vi.mock('../../src/lib/agent/identity/gas-passport', () => ({
+  getPassport: vi.fn().mockResolvedValue(null),
 }));
 
 describe('Fail-closed: DB unavailable blocks sponsorship', () => {

@@ -3,14 +3,13 @@
  *
  * Handles the self-serve protocol onboarding flow:
  * 1. Registration → instant simulation mode access
- * 2. CDP allowlist submission (manual batch process)
- * 3. CDP approval → live mode enabled
- * 4. Event tracking throughout lifecycle
+ * 2. Sovereign paymaster → live mode enabled immediately
+ * 3. Event tracking throughout lifecycle
  */
 
 import { getPrisma } from '../db';
 import { logger } from '../logger';
-import type { OnboardingStatus, CDPStatus } from '@prisma/client';
+import type { OnboardingStatus } from '@prisma/client';
 
 export interface ProtocolRegistrationData {
   protocolId: string;
@@ -25,7 +24,6 @@ export interface ProtocolRegistrationData {
 export interface OnboardingStatusInfo {
   protocolId: string;
   onboardingStatus: OnboardingStatus;
-  cdpAllowlistStatus: CDPStatus;
   canUseSimulation: boolean;
   simulationExpiresAt?: Date | null;
   isLive: boolean;
@@ -61,7 +59,6 @@ export async function registerProtocol(
 
         // Onboarding fields
         onboardingStatus: 'APPROVED_SIMULATION',
-        cdpAllowlistStatus: 'NOT_SUBMITTED',
         simulationModeUntil,
 
         // Contact info
@@ -126,18 +123,11 @@ export async function getOnboardingStatus(protocolId: string): Promise<Onboardin
     protocol.simulationModeUntil !== null &&
     protocol.simulationModeUntil > now;
 
-  const isLive =
-    protocol.onboardingStatus === 'LIVE' && protocol.cdpAllowlistStatus === 'APPROVED';
+  const isLive = protocol.onboardingStatus === 'LIVE';
 
   let nextAction: string | undefined;
   if (!isLive && !canUseSimulation) {
-    if (protocol.cdpAllowlistStatus === 'NOT_SUBMITTED') {
-      nextAction = 'Awaiting CDP allowlist submission';
-    } else if (protocol.cdpAllowlistStatus === 'SUBMITTED') {
-      nextAction = 'Waiting for CDP approval (typically 5-7 days)';
-    } else if (protocol.cdpAllowlistStatus === 'REJECTED') {
-      nextAction = 'CDP allowlist rejected - contact support';
-    }
+    nextAction = 'Simulation mode expired - contact support to go live';
   } else if (canUseSimulation) {
     nextAction = `Simulation mode active until ${protocol.simulationModeUntil?.toISOString()}`;
   }
@@ -145,7 +135,6 @@ export async function getOnboardingStatus(protocolId: string): Promise<Onboardin
   return {
     protocolId,
     onboardingStatus: protocol.onboardingStatus,
-    cdpAllowlistStatus: protocol.cdpAllowlistStatus,
     canUseSimulation,
     simulationExpiresAt: protocol.simulationModeUntil,
     isLive,
@@ -156,90 +145,6 @@ export async function getOnboardingStatus(protocolId: string): Promise<Onboardin
       createdAt: e.createdAt,
     })),
   };
-}
-
-/**
- * Submit protocols to CDP allowlist (manual batch process)
- */
-export async function submitToCDPAllowlist(protocolIds: string[]): Promise<void> {
-  const db = getPrisma();
-
-  try {
-    // Update all protocols to SUBMITTED status
-    await db.protocolSponsor.updateMany({
-      where: {
-        protocolId: { in: protocolIds },
-        cdpAllowlistStatus: 'NOT_SUBMITTED',
-      },
-      data: {
-        cdpAllowlistStatus: 'SUBMITTED',
-        cdpAllowlistSubmittedAt: new Date(),
-        onboardingStatus: 'PENDING_CDP',
-      },
-    });
-
-    // Create events for each protocol
-    for (const protocolId of protocolIds) {
-      await db.onboardingEvent.create({
-        data: {
-          protocolId,
-          eventType: 'CDP_SUBMITTED',
-          eventData: { submittedAt: new Date().toISOString() },
-        },
-      });
-    }
-
-    logger.info('[Onboarding] Submitted to CDP allowlist', {
-      count: protocolIds.length,
-      protocolIds,
-    });
-  } catch (err) {
-    logger.error('[Onboarding] CDP submission failed', { error: err });
-    throw new Error(`Failed to submit to CDP: ${err instanceof Error ? err.message : String(err)}`);
-  }
-}
-
-/**
- * Mark protocols as CDP-approved and transition to live mode
- */
-export async function markCDPApproved(protocolIds: string[]): Promise<void> {
-  const db = getPrisma();
-
-  try {
-    // Update all protocols to APPROVED status
-    await db.protocolSponsor.updateMany({
-      where: {
-        protocolId: { in: protocolIds },
-        cdpAllowlistStatus: 'SUBMITTED',
-      },
-      data: {
-        cdpAllowlistStatus: 'APPROVED',
-        cdpAllowlistApprovedAt: new Date(),
-        onboardingStatus: 'LIVE',
-      },
-    });
-
-    // Create events and send notifications
-    for (const protocolId of protocolIds) {
-      await db.onboardingEvent.create({
-        data: {
-          protocolId,
-          eventType: 'CDP_APPROVED',
-          eventData: { approvedAt: new Date().toISOString() },
-        },
-      });
-
-      // TODO: Send notification email/webhook to protocol
-    }
-
-    logger.info('[Onboarding] Marked CDP approved', {
-      count: protocolIds.length,
-      protocolIds,
-    });
-  } catch (err) {
-    logger.error('[Onboarding] CDP approval failed', { error: err });
-    throw new Error(`Failed to mark CDP approved: ${err instanceof Error ? err.message : String(err)}`);
-  }
 }
 
 /**
@@ -254,7 +159,6 @@ export async function canExecuteSponsorship(
     where: { protocolId },
     select: {
       onboardingStatus: true,
-      cdpAllowlistStatus: true,
       simulationModeUntil: true,
     },
   });
@@ -263,11 +167,19 @@ export async function canExecuteSponsorship(
     return { allowed: false, mode: null, reason: 'Protocol not found' };
   }
 
+  // Sovereign paymaster mode: when Aegis paymaster env vars are configured,
+  // Aegis owns the paymaster contract and signs its own approvals on-chain.
+  // Any non-suspended protocol gets LIVE mode immediately.
+  const sovereignPaymaster = !!(
+    process.env.AEGIS_PAYMASTER_ADDRESS?.trim() &&
+    process.env.AEGIS_PAYMASTER_SIGNING_KEY?.trim()
+  );
+  if (sovereignPaymaster && protocol.onboardingStatus !== 'SUSPENDED') {
+    return { allowed: true, mode: 'LIVE' };
+  }
+
   // Check if live mode
-  if (
-    protocol.onboardingStatus === 'LIVE' &&
-    protocol.cdpAllowlistStatus === 'APPROVED'
-  ) {
+  if (protocol.onboardingStatus === 'LIVE') {
     return { allowed: true, mode: 'LIVE' };
   }
 
@@ -289,7 +201,7 @@ export async function canExecuteSponsorship(
   return {
     allowed: false,
     mode: null,
-    reason: 'Simulation mode expired and not yet CDP approved',
+    reason: 'Simulation mode expired and not live',
   };
 }
 

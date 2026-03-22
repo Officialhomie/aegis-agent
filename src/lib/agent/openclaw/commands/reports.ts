@@ -144,7 +144,6 @@ async function generateSummaryReport(protocolId: string): Promise<string> {
     '',
     'Status:',
     `  Onboarding: ${protocol.onboardingStatus}`,
-    `  CDP Status: ${protocol.cdpAllowlistStatus}`,
     `  Service Tier: ${protocol.tier.toUpperCase()}`,
     '',
     'Financials:',

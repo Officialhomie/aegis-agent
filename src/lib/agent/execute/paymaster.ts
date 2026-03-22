@@ -31,7 +31,8 @@ import type { SponsorParams } from '../reason/schemas';
 import type { ExecutionResult } from './index';
 import { updateCachedProtocolBudget, getCachedProtocolWhitelist } from '../../cache';
 import { getEthPriceUSD } from '../observe/oracles';
-import { buildExecuteCalldata, getActivityLoggerPingData } from './userop-calldata';
+import { buildExecuteCalldata, buildMdfCalldata, getActivityLoggerPingData } from './userop-calldata';
+import { deserializeMdfDelegation } from '../../mdf';
 import {
   deductDelegationBudget,
   rollbackDelegationBudget,
@@ -716,9 +717,31 @@ export async function sponsorTransaction(
     targetContract.toLowerCase() === activityLogger.toLowerCase()
       ? getActivityLoggerPingData()
       : ('0x' as `0x${string}`);
-  const callData = targetContract
-    ? buildExecuteCalldata({ targetContract, value: BigInt(0), data: innerData })
-    : undefined;
+  // Check MDF mode: if delegation was upgraded to MDF, use redeemDelegations calldata
+  const mdfDelegationRecord = params.delegationId
+    ? await getPrisma().delegation.findUnique({
+        where: { id: params.delegationId },
+        select: { delegatorAccountType: true, serializedMdfDelegation: true },
+      })
+    : null;
+  const isMdfMode = mdfDelegationRecord?.delegatorAccountType === 'DELEGATOR';
+
+  let callData: `0x${string}` | undefined;
+  if (isMdfMode && mdfDelegationRecord?.serializedMdfDelegation && targetContract) {
+    try {
+      const mdfDelegation = deserializeMdfDelegation(mdfDelegationRecord.serializedMdfDelegation);
+      callData = buildMdfCalldata({ delegation: mdfDelegation, targetContract, value: BigInt(0), innerCalldata: innerData });
+      logger.info('[Paymaster] MDF mode: built redeemDelegations calldata', { delegationId: params.delegationId });
+    } catch (err) {
+      logger.warn('[Paymaster] MDF calldata build failed — falling back to standard path', {
+        error: err instanceof Error ? err.message : String(err),
+        delegationId: params.delegationId,
+      });
+      callData = targetContract ? buildExecuteCalldata({ targetContract, value: BigInt(0), data: innerData }) : undefined;
+    }
+  } else {
+    callData = targetContract ? buildExecuteCalldata({ targetContract, value: BigInt(0), data: innerData }) : undefined;
+  }
 
   // Step 4: Get nonce from EntryPoint (prevents nonce collisions for same sender)
   let nonce: bigint | undefined;
@@ -834,17 +857,20 @@ export async function sponsorTransaction(
         ? BigInt(paymasterResult.actualGasUsed)
         : BigInt(maxGasLimit) * BigInt(1_000_000_000); // Estimate at 1 gwei
 
-      const delegationDeductResult = await deductDelegationBudget(params.delegationId, gasCostWei);
-      if (!delegationDeductResult.success) {
-        logger.error('[Paymaster] Delegation budget deduction failed', {
-          delegationId: params.delegationId,
-          gasCostWei: gasCostWei.toString(),
-          error: delegationDeductResult.error,
-          severity: 'HIGH',
-        });
+      // MDF path: on-chain caveats enforce budget — skip off-chain deduction
+      if (!isMdfMode) {
+        const delegationDeductResult = await deductDelegationBudget(params.delegationId, gasCostWei);
+        if (!delegationDeductResult.success) {
+          logger.error('[Paymaster] Delegation budget deduction failed', {
+            delegationId: params.delegationId,
+            gasCostWei: gasCostWei.toString(),
+            error: delegationDeductResult.error,
+            severity: 'HIGH',
+          });
+        }
       }
 
-      // Record delegation usage
+      // Record delegation usage (always — for analytics on both paths)
       await recordDelegationUsage({
         delegationId: params.delegationId,
         targetContract: targetContract ?? '0x0000000000000000000000000000000000000000',
@@ -888,8 +914,8 @@ export async function sponsorTransaction(
       });
     }
 
-    // Rollback delegation budget if it was deducted optimistically
-    if (params.delegationId) {
+    // Rollback delegation budget if it was deducted optimistically (AEGIS path only)
+    if (params.delegationId && !isMdfMode) {
       const estimatedGasWei = BigInt(maxGasLimit) * BigInt(1_000_000_000);
       await rollbackDelegationBudget(params.delegationId, estimatedGasWei);
 

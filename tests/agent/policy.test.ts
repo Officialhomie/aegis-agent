@@ -20,14 +20,31 @@ vi.mock('../../src/lib/agent/state-store', () => ({
     get: vi.fn().mockResolvedValue(null),
     set: vi.fn().mockResolvedValue(undefined),
     setNX: vi.fn().mockResolvedValue(true),
+    eval: vi.fn().mockResolvedValue(1), // 1 = allowed for rate limit check script
+  }),
+}));
+
+vi.mock('../../src/lib/agent/validation/account-validator', () => ({
+  validateAccount: vi.fn().mockResolvedValue({
+    agentTier: 2,
+    agentType: 'ERC4337_ACCOUNT',
+    isValid: true,
+    accountType: 'smart_account',
+    reason: 'ERC-4337 compatible',
   }),
 }));
 
 vi.mock('../../src/lib/db', () => ({
   getPrisma: vi.fn().mockReturnValue({
     protocolSponsor: {
-      findUnique: vi.fn().mockResolvedValue(null),
+      findUnique: vi.fn().mockResolvedValue({
+        protocolId: 'test-protocol',
+        whitelistedContracts: ['0x1234567890123456789012345678901234567890'],
+        requireERC8004: false,
+        requireERC4337: false,
+      }),
     },
+    approvedAgent: { findUnique: vi.fn().mockResolvedValue(null) },
   }),
 }));
 

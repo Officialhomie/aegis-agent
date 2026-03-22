@@ -67,3 +67,36 @@ export function buildExecuteCalldata(params: BuildUserOpCalldataParams): `0x${st
     args: [params.targetContract, value, data],
   });
 }
+
+export interface BuildMdfCalldataParams {
+  /** The MDF Delegation struct (deserialized from DB) */
+  delegation: import('../../mdf').MdfDelegation;
+  /** Target contract the delegated call should invoke */
+  targetContract: `0x${string}`;
+  /** ETH value for the inner call (typically 0) */
+  value?: bigint;
+  /** Calldata for the inner call to targetContract */
+  innerCalldata?: `0x${string}`;
+}
+
+/**
+ * Build UserOperation callData using MDF redeemDelegations.
+ *
+ * This replaces buildExecuteCalldata when a delegation has been upgraded to MDF mode.
+ * The calldata calls DelegationManager.redeemDelegations() which:
+ *  1. Validates the delegation + caveat chain on-chain
+ *  2. Calls the delegator's DeleGator account
+ *  3. DeleGator executes the target contract call
+ *
+ * The AegisPaymaster signs this calldata unchanged — it is calldata-agnostic.
+ */
+export function buildMdfCalldata(params: BuildMdfCalldataParams): `0x${string}` {
+  const { buildRedeemDelegationsCalldata } = require('../../mdf') as typeof import('../../mdf');
+  const result = buildRedeemDelegationsCalldata({
+    delegation: params.delegation,
+    targetContract: params.targetContract,
+    value: params.value ?? BigInt(0),
+    innerCalldata: params.innerCalldata ?? ('0x' as `0x${string}`),
+  });
+  return result.callData;
+}

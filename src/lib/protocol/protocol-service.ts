@@ -8,7 +8,7 @@
 
 import { getPrisma } from '../db';
 import { logger } from '../logger';
-import type { OnboardingStatus, CDPStatus } from '@prisma/client';
+import type { OnboardingStatus } from '@prisma/client';
 
 /**
  * Parameters for creating a protocol
@@ -59,7 +59,6 @@ export interface ProtocolDetails {
 
   // Onboarding
   onboardingStatus: OnboardingStatus;
-  cdpAllowlistStatus: CDPStatus;
   simulationModeUntil: Date | null;
 
   // Tier policies
@@ -125,7 +124,6 @@ export async function createProtocol(
       requireERC8004: false,
       requireERC4337: false,
       onboardingStatus: 'PENDING_REVIEW',
-      cdpAllowlistStatus: 'NOT_SUBMITTED',
       notificationEmail: params.notificationEmail,
       notificationWebhook: params.notificationWebhook,
       onboardingEvents: {
@@ -305,9 +303,7 @@ export async function reactivateProtocol(
   }
 
   // Determine appropriate status to restore to
-  const restoredStatus = newStatus ?? (
-    existing.cdpAllowlistStatus === 'APPROVED' ? 'LIVE' : 'APPROVED_SIMULATION'
-  );
+  const restoredStatus = newStatus ?? 'APPROVED_SIMULATION';
 
   const updated = await prisma.protocolSponsor.update({
     where: { protocolId },

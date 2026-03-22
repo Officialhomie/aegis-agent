@@ -2,7 +2,7 @@
  * Approved-agent-check policy rule tests
  *
  * Agent A approved, Agent B rejected, Agent C revoked,
- * daily budget exceeded, DB unavailable fail-closed, REQUIRE_AGENT_APPROVAL=false.
+ * budget enforcement delegated to reserveAgentBudget(), DB unavailable fail-closed, REQUIRE_AGENT_APPROVAL=false.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -18,6 +18,8 @@ const PROTOCOL_ID = 'test-protocol';
 const mockProtocolFindUnique = vi.hoisted(() => vi.fn().mockResolvedValue({
   protocolId: 'test-protocol',
   whitelistedContracts: ['0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'],
+  requireERC8004: false,
+  requireERC4337: false,
 }));
 const mockApprovedAgentFindUnique = vi.hoisted(() => vi.fn());
 
@@ -41,6 +43,18 @@ vi.mock('../../src/lib/agent/state-store', () => ({
   getStateStore: vi.fn().mockResolvedValue({
     get: mockStoreGet,
     set: mockStoreSet,
+    setNX: vi.fn().mockResolvedValue(true),
+    eval: vi.fn().mockResolvedValue(1), // 1 = allowed for rate limit check script
+  }),
+}));
+
+vi.mock('../../src/lib/agent/validation/account-validator', () => ({
+  validateAccount: vi.fn().mockResolvedValue({
+    agentTier: 2,
+    agentType: 'ERC4337_ACCOUNT',
+    isValid: true,
+    accountType: 'smart_account',
+    reason: 'ERC-4337 compatible',
   }),
 }));
 
@@ -145,7 +159,10 @@ describe('approved-agent-check rule', () => {
     expect(err).toBeDefined();
   });
 
-  it('fails when agent A daily budget exceeded', async () => {
+  it('passes when agent A is active even if daily budget would be exceeded (budget enforcement is atomic via reserveAgentBudget)', async () => {
+    // approved-agent-check only verifies agent approval status.
+    // Daily budget enforcement is handled atomically by reserveAgentBudget() at
+    // execution time (via AgentSpendLedger + Redis distributed lock), not here.
     mockApprovedAgentFindUnique.mockResolvedValue({
       isActive: true,
       maxDailyBudget: 1,
@@ -153,9 +170,7 @@ describe('approved-agent-check rule', () => {
     mockStoreGet.mockResolvedValue('0.95');
     const { validatePolicy } = await import('../../src/lib/agent/policy');
     const result = await validatePolicy(makeDecision(AGENT_A, 0.5), config);
-    expect(result.passed).toBe(false);
-    const err = result.errors?.find((e) => e.toLowerCase().includes('daily budget exceeded'));
-    expect(err).toBeDefined();
+    expect(result.passed).toBe(true);
   });
 
   it('fails closed when database throws (database unavailable)', async () => {

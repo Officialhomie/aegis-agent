@@ -13,6 +13,17 @@ vi.mock('../../src/lib/agent/state-store', () => ({
     get: mockGet,
     set: mockSet,
     setNX: mockSetNX,
+    eval: vi.fn().mockResolvedValue(1), // 1 = allowed for sponsorship rate limit check (checkDailyCap, etc.)
+  }),
+}));
+
+vi.mock('../../src/lib/agent/validation/account-validator', () => ({
+  validateAccount: vi.fn().mockResolvedValue({
+    agentTier: 2,
+    agentType: 'ERC4337_ACCOUNT',
+    isValid: true,
+    accountType: 'smart_account',
+    reason: 'ERC-4337 compatible',
   }),
 }));
 
@@ -26,7 +37,15 @@ vi.mock('../../src/lib/agent/observe/chains', () => ({
 
 vi.mock('../../src/lib/db', () => ({
   getPrisma: vi.fn().mockReturnValue({
-    protocolSponsor: { findUnique: vi.fn().mockResolvedValue(null) },
+    protocolSponsor: {
+      findUnique: vi.fn().mockResolvedValue({
+        protocolId: 'test-protocol',
+        whitelistedContracts: ['0x1234567890123456789012345678901234567890'],
+        requireERC8004: false,
+        requireERC4337: false,
+      }),
+    },
+    approvedAgent: { findUnique: vi.fn().mockResolvedValue(null) },
   }),
 }));
 
@@ -38,6 +57,19 @@ vi.mock('../../src/lib/agent/observe/sponsorship', () => ({
 
 vi.mock('../../src/lib/agent/security/abuse-detection', () => ({
   detectAbuse: vi.fn().mockResolvedValue({ isAbusive: false }),
+}));
+
+vi.mock('../../src/lib/protocol/onboarding', () => ({
+  canExecuteSponsorship: vi.fn().mockResolvedValue({ allowed: true, mode: 'SIMULATION' }),
+}));
+
+vi.mock('../../src/lib/protocol/runtime-overrides', () => ({
+  getActiveRuntimeOverride: vi.fn().mockResolvedValue(null),
+  isWalletBlocked: vi.fn().mockResolvedValue(false),
+}));
+
+vi.mock('../../src/lib/agent/identity/gas-passport', () => ({
+  getPassport: vi.fn().mockResolvedValue(null),
 }));
 
 import { validateRules } from '../../src/lib/agent/policy/rules';

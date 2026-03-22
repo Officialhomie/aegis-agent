@@ -57,7 +57,18 @@ export {
   deductDelegationBudget,
   rollbackDelegationBudget,
   recordDelegationUsage,
+  createMdfDelegation,
   type CreateDelegationResult,
   type RevokeDelegationResult,
   type DelegationValidation,
+  type CreateMdfDelegationParams,
+  type CreateMdfDelegationResult,
 } from './service';
+
+// MDF schemas
+export {
+  MdfCaveatSchema,
+  MdfDelegationStructSchema,
+  MdfDelegationUpgradeRequestSchema,
+  type MdfDelegationUpgradeRequest,
+} from './schemas';

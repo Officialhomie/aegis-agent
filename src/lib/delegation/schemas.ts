@@ -301,3 +301,47 @@ export function isWithinValueLimit(
   if (maxValue === BigInt(0)) return true;
   return valueWei <= maxValue;
 }
+
+// ============================================================================
+// MDF Integration Schemas
+// ============================================================================
+
+const Bytes32Schema = z
+  .string()
+  .regex(/^0x[a-fA-F0-9]{64}$/, 'Invalid bytes32 — must be 0x-prefixed 32-byte hex');
+
+const HexBytesSchema = z
+  .string()
+  .regex(/^0x([a-fA-F0-9]{2})*$/, 'Invalid hex bytes — must be 0x-prefixed even-length hex');
+
+/** Schema for a single MDF Caveat */
+export const MdfCaveatSchema = z.object({
+  enforcer: AddressSchema,
+  terms: HexBytesSchema,
+  args: HexBytesSchema,
+});
+
+/** Schema for a complete MDF Delegation struct */
+export const MdfDelegationStructSchema = z.object({
+  delegate: AddressSchema,
+  delegator: AddressSchema,
+  authority: Bytes32Schema,
+  caveats: z.array(MdfCaveatSchema),
+  salt: BigIntStringSchema,
+  signature: HexBytesSchema,
+});
+
+/**
+ * Request body for POST /api/delegation/:id/mdf-upgrade
+ * Links an MDF Delegation struct (signed by the delegator) to an existing Aegis Delegation record.
+ */
+export const MdfDelegationUpgradeRequestSchema = z.object({
+  /** The MDF Delegation struct as signed by the user's DeleGator account */
+  mdfDelegation: MdfDelegationStructSchema,
+  /** DelegationManager contract address (must be in Aegis trusted list) */
+  delegationManagerAddress: AddressSchema,
+  /** Chain ID where the DelegationManager is deployed */
+  chainId: z.number().int().positive(),
+});
+
+export type MdfDelegationUpgradeRequest = z.infer<typeof MdfDelegationUpgradeRequestSchema>;

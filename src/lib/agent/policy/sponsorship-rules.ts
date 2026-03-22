@@ -7,7 +7,6 @@
 
 import { getConfigNumber } from '../../config';
 import { logger } from '../../logger';
-import { getStateStore } from '../state-store';
 import {
   checkDailyCap,
   checkGlobalRate,
@@ -169,6 +168,15 @@ export const sponsorshipPolicyRules: PolicyRule[] = [
       if (!isSponsorshipDecision(decision)) {
         return { ruleName: 'agent-legitimacy-check', passed: true, message: 'N/A', severity: 'ERROR' };
       }
+      // Allow bypass for demo / testnet environments where wallets are freshly funded.
+      if (process.env.SKIP_LEGITIMACY_CHECK === 'true') {
+        return {
+          ruleName: 'agent-legitimacy-check',
+          passed: true,
+          message: 'Legitimacy check skipped (SKIP_LEGITIMACY_CHECK=true)',
+          severity: 'ERROR',
+        };
+      }
       const agentWallet = decision.parameters.agentWallet as `0x${string}`;
       const [txCount, abuse, passport] = await Promise.all([
         getOnchainTxCount(agentWallet),
@@ -256,26 +264,12 @@ export const sponsorshipPolicyRules: PolicyRule[] = [
           };
         }
 
-        // Check daily budget limit for this agent
-        const estimatedCost = decision.parameters.estimatedCostUSD ?? 0;
-        const store = await getStateStore();
-        const dailyKey = `aegis:agent:${agentAddress}:${protocolId}:daily_spend`;
-        const rawSpend = await store.get(dailyKey);
-        const currentSpend = rawSpend ? parseFloat(rawSpend) : 0;
-
-        if (currentSpend + estimatedCost > approval.maxDailyBudget) {
-          return {
-            ruleName: 'approved-agent-check',
-            passed: false,
-            message: `Agent daily budget exceeded ($${(currentSpend + estimatedCost).toFixed(2)} > $${approval.maxDailyBudget} limit)`,
-            severity: 'ERROR',
-          };
-        }
-
+        // Budget enforcement is handled atomically by reserveAgentBudget() in paymaster.ts
+        // via Redis distributed lock + AgentSpendLedger. Do not duplicate here.
         return {
           ruleName: 'approved-agent-check',
           passed: true,
-          message: `Agent ${agentAddress.slice(0, 10)}... approved (budget: $${(approval.maxDailyBudget - currentSpend).toFixed(2)} remaining)`,
+          message: `Agent ${agentAddress.slice(0, 10)}... approved for protocol ${protocolId}`,
           severity: 'ERROR',
         };
       } catch (error) {
