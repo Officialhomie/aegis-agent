@@ -70,7 +70,7 @@ export default function RegisterProtocolPage() {
   return (
     <div className="min-h-screen bg-background">
       <Header />
-      <main className="max-w-2xl mx-auto px-6 py-8">
+      <main className="max-w-2xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
         {/* Back link */}
         <Link
           href="/protocols"
@@ -160,7 +160,7 @@ export default function RegisterProtocolPage() {
               {/* Whitelisted Contracts */}
               <div className="space-y-2">
                 <Label>Whitelisted Contracts</Label>
-                <div className="flex gap-2">
+                <div className="flex flex-col sm:flex-row gap-2">
                   <Input
                     placeholder="0x..."
                     value={newContract}
@@ -183,7 +183,7 @@ export default function RegisterProtocolPage() {
                         key={address}
                         className="flex items-center justify-between bg-elevated rounded-lg px-3 py-2"
                       >
-                        <code className="text-sm text-text-secondary">{address}</code>
+                        <code className="text-sm text-text-secondary break-all">{address}</code>
                         <button
                           type="button"
                           onClick={() => handleRemoveContract(address)}
@@ -208,15 +208,15 @@ export default function RegisterProtocolPage() {
               )}
 
               {/* Submit */}
-              <div className="flex gap-4">
-                <Button type="submit" loading={loading} className="flex-1">
-                  Register Protocol
-                </Button>
-                <Link href="/protocols">
-                  <Button type="button" variant="outline">
+              <div className="flex flex-col-reverse sm:flex-row gap-3 sm:gap-4">
+                <Link href="/protocols" className="sm:shrink-0">
+                  <Button type="button" variant="outline" className="w-full sm:w-auto">
                     Cancel
                   </Button>
                 </Link>
+                <Button type="submit" loading={loading} className="flex-1">
+                  Register Protocol
+                </Button>
               </div>
             </form>
           </CardContent>

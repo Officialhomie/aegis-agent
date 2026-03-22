@@ -20,10 +20,10 @@ const steps = [
 
 export function HowItWorks() {
   return (
-    <section id="how-it-works" className="py-24 px-6">
+    <section id="how-it-works" className="py-16 md:py-24 px-4 sm:px-6">
       <div className="max-w-5xl mx-auto">
         {/* Section header */}
-        <div className="text-center mb-16">
+        <div className="text-center mb-10 md:mb-16">
           <h2 className="font-display text-3xl md:text-4xl font-bold text-text-primary mb-4">
             How It Works
           </h2>
@@ -33,14 +33,14 @@ export function HowItWorks() {
         </div>
 
         {/* Steps */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-8 relative">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-5 md:gap-8 relative">
           {/* Connecting lines (desktop) */}
-          <div className="hidden md:block absolute top-16 left-1/4 right-1/4 h-0.5 bg-gradient-to-r from-cyan-500/50 via-coral-500/50 to-cyan-500/50" />
+          <div className="hidden md:block absolute top-16 left-1/4 right-1/4 h-0.5 bg-linear-to-r from-cyan-500/50 via-coral-500/50 to-cyan-500/50" />
 
           {steps.map((step, index) => (
             <div key={step.title} className="relative">
               {/* Step card */}
-              <div className="card-agentic p-8 text-center h-full">
+              <div className="card-agentic p-5 sm:p-6 md:p-8 text-center h-full">
                 {/* Step number */}
                 <div className="absolute -top-4 left-1/2 -translate-x-1/2 w-8 h-8 rounded-full bg-coral-500 flex items-center justify-center">
                   <span className="font-display font-bold text-white text-sm">{index + 1}</span>
@@ -60,7 +60,7 @@ export function HowItWorks() {
 
               {/* Arrow (mobile) */}
               {index < steps.length - 1 && (
-                <div className="flex justify-center my-4 md:hidden">
+                <div className="flex justify-center my-2 sm:my-4 md:hidden">
                   <ArrowRight className="h-6 w-6 text-text-muted rotate-90" />
                 </div>
               )}

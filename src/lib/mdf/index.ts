@@ -28,6 +28,7 @@ export {
 export {
   verifyMdfDelegationSignature,
   hashMdfDelegation,
+  mdfDelegationTypedDataDigest,
 } from './verifier';
 
 export {

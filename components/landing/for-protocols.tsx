@@ -13,27 +13,27 @@ const benefits = [
 
 export function ForProtocols() {
   return (
-    <section id="for-protocols" className="py-24 px-6">
+    <section id="for-protocols" className="py-16 md:py-24 px-4 sm:px-6">
       <div className="max-w-5xl mx-auto">
-        <div className="grid md:grid-cols-2 gap-12 items-center">
+        <div className="grid md:grid-cols-2 gap-8 md:gap-12 items-center">
           {/* Left: Content */}
           <div>
             <span className="text-coral-400 font-medium text-sm uppercase tracking-wider">
               For Protocols
             </span>
-            <h2 className="font-display text-3xl md:text-4xl font-bold text-text-primary mt-2 mb-6">
+            <h2 className="font-display text-2xl sm:text-3xl md:text-4xl font-bold text-text-primary mt-2 mb-6">
               Sponsor Gas for Your Users
             </h2>
-            <p className="text-lg text-text-secondary mb-8">
+            <p className="text-base sm:text-lg text-text-secondary mb-6 md:mb-8">
               Remove the biggest barrier to onchain adoption. With Aegis, your users never need
               to hold ETH for gas. You deposit USDC, we handle the sponsorships.
             </p>
 
             {/* Benefits list */}
-            <ul className="space-y-3 mb-8">
+            <ul className="space-y-2 sm:space-y-3 mb-6 md:mb-8">
               {benefits.map((benefit) => (
                 <li key={benefit} className="flex items-center gap-3">
-                  <div className="flex-shrink-0 w-5 h-5 rounded-full bg-cyan-500/20 flex items-center justify-center">
+                  <div className="shrink-0 w-5 h-5 rounded-full bg-cyan-500/20 flex items-center justify-center">
                     <Check className="h-3 w-3 text-cyan-400" />
                   </div>
                   <span className="text-text-secondary">{benefit}</span>
@@ -51,7 +51,7 @@ export function ForProtocols() {
 
           {/* Right: Visual */}
           <div className="relative">
-            <div className="card-agentic p-8">
+            <div className="card-agentic p-5 sm:p-6 md:p-8">
               {/* Mock protocol registration preview */}
               <div className="space-y-4">
                 <div className="flex items-center gap-3 mb-6">
@@ -92,7 +92,7 @@ export function ForProtocols() {
             </div>
 
             {/* Glow effect */}
-            <div className="absolute -inset-4 bg-gradient-to-r from-coral-500/10 to-cyan-500/10 rounded-2xl blur-2xl -z-10" />
+            <div className="hidden sm:block absolute -inset-4 bg-linear-to-r from-coral-500/10 to-cyan-500/10 rounded-2xl blur-2xl -z-10" />
           </div>
         </div>
       </div>

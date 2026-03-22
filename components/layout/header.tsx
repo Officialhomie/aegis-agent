@@ -20,7 +20,7 @@ export function Header() {
 
   return (
     <header className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-md">
-      <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
         {/* Logo */}
         <Link href="/" className="flex items-center gap-2">
           <Shield className="h-7 w-7 text-coral-500" />
@@ -54,7 +54,7 @@ export function Header() {
 
         {/* Mobile menu button */}
         <button
-          className="md:hidden p-2 text-text-secondary hover:text-text-primary"
+          className="md:hidden p-2.5 text-text-secondary hover:text-text-primary"
           onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
           aria-label="Toggle menu"
         >
@@ -72,7 +72,7 @@ export function Header() {
                 href={link.href}
                 onClick={() => setMobileMenuOpen(false)}
                 className={cn(
-                  'block py-2 text-sm font-medium transition-colors',
+                  'block py-3 text-sm font-medium transition-colors',
                   pathname === link.href
                     ? 'text-cyan-400'
                     : 'text-text-secondary hover:text-text-primary'

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, Plus, Wallet, Activity, Clock, Users } from 'lucide-react';
@@ -20,6 +20,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton';
 import { Address } from '@/components/common/address';
 import { formatUSD } from '@/lib/utils';
+import { useFetch } from '@/hooks/use-fetch';
 
 interface Protocol {
   protocolId: string;
@@ -45,23 +46,25 @@ export default function ProtocolDetailPage() {
   const params = useParams();
   const protocolId = params.id as string;
 
-  const [protocol, setProtocol] = useState<Protocol | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { data: protocol, loading, error } = useFetch<Protocol>(`/api/protocol/${protocolId}`);
 
   // Top-up state
   const [topupAmount, setTopupAmount] = useState('');
   const [topupLoading, setTopupLoading] = useState(false);
   const [topupSuccess, setTopupSuccess] = useState(false);
+  const [topupError, setTopupError] = useState<string | null>(null);
+  const [updatedBalance, setUpdatedBalance] = useState<number | null>(null);
 
   // Approved agents (optional API key)
   const [agentsApiKey, setAgentsApiKey] = useState('');
   const [approvedAgents, setApprovedAgents] = useState<ApprovedAgent[]>([]);
   const [agentsLoading, setAgentsLoading] = useState(false);
+  const [agentsError, setAgentsError] = useState<string | null>(null);
 
   const fetchApprovedAgents = useCallback(async () => {
     if (!agentsApiKey.trim() || !protocolId) return;
     setAgentsLoading(true);
+    setAgentsError(null);
     try {
       const res = await fetch(`/api/protocol/${protocolId}/agents`, {
         headers: { Authorization: `Bearer ${agentsApiKey.trim()}` },
@@ -71,35 +74,15 @@ export default function ProtocolDetailPage() {
         setApprovedAgents(data.agents);
       } else {
         setApprovedAgents([]);
+        setAgentsError(data.error ?? 'Failed to load agents');
       }
     } catch {
       setApprovedAgents([]);
+      setAgentsError('Failed to load agents');
     } finally {
       setAgentsLoading(false);
     }
   }, [protocolId, agentsApiKey]);
-
-  useEffect(() => {
-    async function fetchProtocol() {
-      try {
-        const res = await fetch(`/api/protocol/${protocolId}`);
-        if (res.ok) {
-          const data = await res.json();
-          setProtocol(data);
-        } else if (res.status === 404) {
-          setError('Protocol not found');
-        } else {
-          setError('Failed to load protocol');
-        }
-      } catch {
-        setError('Failed to load protocol');
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    fetchProtocol();
-  }, [protocolId]);
 
   const handleTopup = async () => {
     const amount = parseFloat(topupAmount);
@@ -107,6 +90,7 @@ export default function ProtocolDetailPage() {
 
     setTopupLoading(true);
     setTopupSuccess(false);
+    setTopupError(null);
 
     try {
       const res = await fetch(`/api/protocol/${protocolId}/topup`, {
@@ -114,16 +98,17 @@ export default function ProtocolDetailPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ amountUSD: amount }),
       });
-
+      const data = await res.json();
       if (res.ok) {
-        const data = await res.json();
-        setProtocol((prev) => (prev ? { ...prev, balanceUSD: data.balanceUSD } : null));
+        setUpdatedBalance(data.balanceUSD);
         setTopupAmount('');
         setTopupSuccess(true);
         setTimeout(() => setTopupSuccess(false), 3000);
+      } else {
+        setTopupError(data.error ?? 'Top-up failed');
       }
     } catch {
-      // Handle error silently
+      setTopupError('Top-up failed');
     } finally {
       setTopupLoading(false);
     }
@@ -201,7 +186,7 @@ export default function ProtocolDetailPage() {
                 <span className="text-sm text-text-muted">Balance</span>
               </div>
               <div className="font-display text-2xl font-bold text-text-primary">
-                {formatUSD(protocol.balanceUSD)}
+                {formatUSD(updatedBalance ?? protocol.balanceUSD)}
               </div>
             </CardContent>
           </Card>
@@ -263,6 +248,9 @@ export default function ProtocolDetailPage() {
             </div>
             {topupSuccess && (
               <p className="text-sm text-success mt-2">Balance updated successfully!</p>
+            )}
+            {topupError && (
+              <p className="text-sm text-error mt-2">{topupError}</p>
             )}
           </CardContent>
         </Card>
@@ -331,8 +319,10 @@ export default function ProtocolDetailPage() {
             </div>
             {agentsLoading ? (
               <Skeleton className="h-24 w-full" />
+            ) : agentsError ? (
+              <p className="text-sm text-error">{agentsError}</p>
             ) : approvedAgents.length === 0 && agentsApiKey.trim() ? (
-              <p className="text-text-muted text-sm">No approved agents or invalid key.</p>
+              <p className="text-text-muted text-sm">No approved agents found.</p>
             ) : approvedAgents.length > 0 ? (
               <div className="overflow-x-auto">
                 <Table>

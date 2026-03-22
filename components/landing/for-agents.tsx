@@ -10,14 +10,14 @@ const requirements = [
 
 export function ForAgents() {
   return (
-    <section id="for-agents" className="py-24 px-6 bg-surface/50">
+    <section id="for-agents" className="py-16 md:py-24 px-4 sm:px-6 bg-surface/50">
       <div className="max-w-5xl mx-auto">
-        <div className="grid md:grid-cols-2 gap-12 items-center">
+        <div className="grid md:grid-cols-2 gap-8 md:gap-12 items-center">
           {/* Left: Visual */}
           <div className="order-2 md:order-1 relative">
-            <div className="card-agentic p-8">
+            <div className="card-agentic p-5 sm:p-6 md:p-8">
               {/* Mock agent eligibility check */}
-              <div className="flex items-center gap-3 mb-6">
+              <div className="flex items-center gap-3 mb-4 sm:mb-6">
                 <div className="w-12 h-12 rounded-full bg-cyan-500/20 flex items-center justify-center">
                   <Bot className="h-6 w-6 text-cyan-400" />
                 </div>
@@ -29,11 +29,11 @@ export function ForAgents() {
 
               <div className="space-y-3">
                 {requirements.map((req) => (
-                  <div key={req.text} className="flex items-center gap-3 p-3 bg-elevated rounded-lg">
+                  <div key={req.text} className="flex items-center gap-3 p-2.5 sm:p-3 bg-elevated rounded-lg">
                     {req.met ? (
-                      <CheckCircle className="h-5 w-5 text-success flex-shrink-0" />
+                      <CheckCircle className="h-5 w-5 text-success shrink-0" />
                     ) : (
-                      <XCircle className="h-5 w-5 text-error flex-shrink-0" />
+                      <XCircle className="h-5 w-5 text-error shrink-0" />
                     )}
                     <span className="text-sm text-text-secondary">{req.text}</span>
                   </div>
@@ -49,7 +49,7 @@ export function ForAgents() {
             </div>
 
             {/* Glow effect */}
-            <div className="absolute -inset-4 bg-gradient-to-r from-cyan-500/10 to-coral-500/10 rounded-2xl blur-2xl -z-10" />
+            <div className="hidden sm:block absolute -inset-4 bg-linear-to-r from-cyan-500/10 to-coral-500/10 rounded-2xl blur-2xl -z-10" />
           </div>
 
           {/* Right: Content */}
@@ -57,15 +57,15 @@ export function ForAgents() {
             <span className="text-cyan-400 font-medium text-sm uppercase tracking-wider">
               For AI Agents
             </span>
-            <h2 className="font-display text-3xl md:text-4xl font-bold text-text-primary mt-2 mb-6">
+            <h2 className="font-display text-2xl sm:text-3xl md:text-4xl font-bold text-text-primary mt-2 mb-6">
               Zero Gas, Zero Friction
             </h2>
-            <p className="text-lg text-text-secondary mb-6">
+            <p className="text-base sm:text-lg text-text-secondary mb-6">
               If your agent wallet is interacting with a registered protocol, Aegis will
               automatically check eligibility and sponsor the gas fee. No setup required.
             </p>
 
-            <div className="space-y-4 mb-8">
+            <div className="space-y-3 sm:space-y-4 mb-8">
               <FeatureItem
                 title="Automatic Detection"
                 description="Aegis monitors registered protocol contracts for agent transactions."
@@ -96,7 +96,7 @@ export function ForAgents() {
 function FeatureItem({ title, description }: { title: string; description: string }) {
   return (
     <div className="flex gap-4">
-      <div className="flex-shrink-0 w-1 bg-gradient-to-b from-cyan-500 to-coral-500 rounded-full" />
+      <div className="shrink-0 w-1 bg-linear-to-b from-cyan-500 to-coral-500 rounded-full" />
       <div>
         <h3 className="font-medium text-text-primary mb-1">{title}</h3>
         <p className="text-sm text-text-secondary">{description}</p>

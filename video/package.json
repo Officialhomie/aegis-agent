@@ -7,7 +7,9 @@
     "preview": "npx remotion studio",
     "render": "npx remotion render AegisDemo --output=out/aegis-demo.mp4",
     "render:square": "npx remotion render AegisDemo-Square --output=out/aegis-demo-square.mp4",
-    "render:gif": "npx remotion render AegisDemo --output=out/aegis-demo.gif --image-format=png"
+    "render:gif": "npx remotion render AegisDemo --output=out/aegis-demo.gif --image-format=png",
+    "render:marketing": "npx remotion render AegisMarketing --output=out/aegis-marketing.mp4",
+    "render:marketing:square": "npx remotion render AegisMarketing-Square --output=out/aegis-marketing-square.mp4"
   },
   "keywords": [],
   "author": "",

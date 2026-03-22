@@ -1,11 +1,20 @@
 import { AbsoluteFill, useCurrentFrame, interpolate, spring, useVideoConfig } from 'remotion';
 import { colors, typography } from '../theme';
 
-const TX_EXAMPLES = [
-  { hash: '0xa8440e...bcb7e', protocol: 'uniswap-v4', block: '42602403', status: 'SUCCESS' },
-  { hash: '0x3c9737...94378', protocol: 'uniswap-v4', block: '42602399', status: 'SUCCESS' },
-  { hash: '0x7c06a0...f3899', protocol: 'test-protocol', block: '42009248', status: 'SUCCESS' },
-  { hash: '0x6eb4db...dd9e9', protocol: 'test-protocol', block: '42000630', status: 'SUCCESS' },
+/** Grounded in BATCH_DEMO_REPORT.md (Base mainnet batch demo, Mar 2026). */
+const BATCH_SUMMARY = {
+  agentsRegistered: 100,
+  userOpsSubmitted: 202,
+  confirmedOnChain: 123,
+  successRatePct: 61,
+  protocol: 'aegis-batch-demo',
+};
+
+const SAMPLE_TX = [
+  { hash: '0xc1c6fcb3…5e34b3', archetype: 'Power User', status: 'CONFIRMED' },
+  { hash: '0xcfd16810…f9d1c', archetype: 'DeFi Trader', status: 'CONFIRMED' },
+  { hash: '0x25fc37fb…1ae3f6', archetype: 'NFT Collector', status: 'CONFIRMED' },
+  { hash: '0x571e42d7…fda762', archetype: 'DeFi Trader', status: 'CONFIRMED' },
 ];
 
 const InfoCard: React.FC<{
@@ -79,7 +88,7 @@ const InfoCard: React.FC<{
   );
 };
 
-export const LiveProofScene: React.FC = () => {
+export const BatchDemoResultsScene: React.FC = () => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
 
@@ -99,7 +108,6 @@ export const LiveProofScene: React.FC = () => {
         overflow: 'hidden',
       }}
     >
-      {/* Green accent glow */}
       <div
         style={{
           position: 'absolute',
@@ -122,7 +130,7 @@ export const LiveProofScene: React.FC = () => {
           fontFamily: typography.fontDisplay,
         }}
       >
-        Live On-Chain Proof
+        Batch demo results
       </div>
       <div
         style={{
@@ -130,12 +138,14 @@ export const LiveProofScene: React.FC = () => {
           color: colors.text.secondary,
           marginBottom: 40,
           opacity: titleOpacity,
+          textAlign: 'center',
+          maxWidth: 900,
         }}
       >
-        Real transactions on Base Mainnet — verified on BaseScan
+        Controlled mainnet stress run on Base — {BATCH_SUMMARY.agentsRegistered} agents,{' '}
+        {BATCH_SUMMARY.userOpsSubmitted} UserOps, {BATCH_SUMMARY.confirmedOnChain} confirmed (see project report)
       </div>
 
-      {/* Info cards */}
       <div
         style={{
           display: 'flex',
@@ -146,35 +156,43 @@ export const LiveProofScene: React.FC = () => {
         }}
       >
         <InfoCard
-          label="AegisActivityLogger"
-          value="0xC76eaA20...e97"
-          sub="Base Mainnet | Verified"
-          color={colors.accent.green}
+          label="Agents registered"
+          value={String(BATCH_SUMMARY.agentsRegistered)}
+          sub="5 archetypes × 20"
+          color={colors.accent.blue}
           delay={30}
           frame={frame}
           fps={fps}
         />
         <InfoCard
-          label="Agent Wallet"
-          value="0x7B9763b4...12f"
-          sub="Autonomous | ERC-8004"
-          color={colors.accent.blue}
+          label="UserOps submitted"
+          value={String(BATCH_SUMMARY.userOpsSubmitted)}
+          sub="Bundled + paymaster"
+          color={colors.accent.purple}
           delay={55}
           frame={frame}
           fps={fps}
         />
         <InfoCard
-          label="Sponsorships"
-          value="9+"
-          sub="Feb 10 — Present"
-          color={colors.accent.purple}
+          label="Confirmed on-chain"
+          value={String(BATCH_SUMMARY.confirmedOnChain)}
+          sub="Base mainnet receipts"
+          color={colors.accent.green}
           delay={80}
+          frame={frame}
+          fps={fps}
+        />
+        <InfoCard
+          label="Success rate"
+          value={`${BATCH_SUMMARY.successRatePct}%`}
+          sub="Includes debug / race failures"
+          color={colors.accent.amber}
+          delay={105}
           frame={frame}
           fps={fps}
         />
       </div>
 
-      {/* Transaction table */}
       <div
         style={{
           width: '100%',
@@ -186,7 +204,6 @@ export const LiveProofScene: React.FC = () => {
           boxShadow: '0 4px 24px rgba(0,0,0,0.3)',
         }}
       >
-        {/* Table header */}
         <div
           style={{
             display: 'flex',
@@ -201,14 +218,13 @@ export const LiveProofScene: React.FC = () => {
             letterSpacing: 1,
           }}
         >
-          <div style={{ flex: 2 }}>TX Hash</div>
-          <div style={{ flex: 1.5 }}>Protocol</div>
-          <div style={{ flex: 1 }}>Block</div>
+          <div style={{ flex: 2 }}>TX hash (sample)</div>
+          <div style={{ flex: 1.2 }}>Archetype</div>
           <div style={{ flex: 0.8, textAlign: 'right' as const }}>Status</div>
         </div>
 
-        {TX_EXAMPLES.map((tx, i) => {
-          const rowDelay = 120 + i * 55;
+        {SAMPLE_TX.map((tx, i) => {
+          const rowDelay = 140 + i * 55;
           const opacity = interpolate(frame, [rowDelay, rowDelay + 35], [0, 1], {
             extrapolateRight: 'clamp',
           });
@@ -227,7 +243,7 @@ export const LiveProofScene: React.FC = () => {
                 display: 'flex',
                 padding: '18px 28px',
                 backgroundColor: i % 2 === 0 ? colors.bg.dark : colors.bg.card,
-                borderBottom: i < TX_EXAMPLES.length - 1 ? `1px solid ${colors.bg.border}` : 'none',
+                borderBottom: i < SAMPLE_TX.length - 1 ? `1px solid ${colors.bg.border}` : 'none',
                 fontSize: typography.sizes.body,
                 color: colors.text.primary,
                 gap: 20,
@@ -245,8 +261,7 @@ export const LiveProofScene: React.FC = () => {
               >
                 {tx.hash}
               </div>
-              <div style={{ flex: 1.5 }}>{tx.protocol}</div>
-              <div style={{ flex: 1, color: colors.text.secondary }}>{tx.block}</div>
+              <div style={{ flex: 1.2 }}>{tx.archetype}</div>
               <div
                 style={{
                   flex: 0.8,
@@ -274,7 +289,6 @@ export const LiveProofScene: React.FC = () => {
         })}
       </div>
 
-      {/* BaseScan link */}
       <div
         style={{
           marginTop: 28,
@@ -282,9 +296,12 @@ export const LiveProofScene: React.FC = () => {
           color: colors.text.muted,
           fontFamily: typography.fontMono,
           opacity: interpolate(frame, [380, 420], [0, 1], { extrapolateRight: 'clamp' }),
+          textAlign: 'center',
+          maxWidth: 1000,
+          lineHeight: 1.5,
         }}
       >
-        basescan.org/address/0xC76eaA20A3F9E074931D4B101fE59b6bf2471e97
+        Protocol {BATCH_SUMMARY.protocol} · Paymaster 0x0F64…25534 · Full hashes in BATCH_DEMO_REPORT.md / basescan.org
       </div>
     </AbsoluteFill>
   );
