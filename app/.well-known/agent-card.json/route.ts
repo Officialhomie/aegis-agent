@@ -21,6 +21,7 @@ export async function GET(): Promise<Response> {
       x402Payments: true,
       erc8004Identity: true,
       transparencyProofs: true,
+      aegControlProduct: true,
     },
     skills: [
       'gas-sponsorship',
@@ -46,6 +47,17 @@ export async function GET(): Promise<Response> {
       delegation: '/api/delegation',
       delegationById: '/api/delegation/:id',
       agentDelegations: '/api/agent/:agentAddress/delegations',
+      openClaw: '/api/openclaw',
+      aegControl: {
+        execute: '/api/control/execute',
+        fsm: '/api/control/fsm',
+        session: '/api/control/session',
+        policy: '/api/control/policy',
+        activity: '/api/control/activity',
+        methods: '/api/control/methods',
+        entitlement: '/api/control/entitlement',
+        ui: '/control',
+      },
     },
     authentication: {
       publicEndpoints: [
@@ -66,6 +78,7 @@ export async function GET(): Promise<Response> {
         '/api/v1/protocol/[id]/stats',
         '/api/v1/sponsorship/check-eligibility',
         '/api/v1/passport',
+        '/control',
       ],
       apiKeyEndpoints: [
         '/api/delegation',
@@ -79,6 +92,16 @@ export async function GET(): Promise<Response> {
         '/api/protocol/[protocolId]/deposit-verify',
         '/api/reactive/event',
         '/api/v1/sponsorship/request',
+        '/api/openclaw',
+        '/api/control/execute',
+        '/api/control/fsm',
+        '/api/control/session',
+        '/api/control/policy',
+        '/api/control/policy/[id]',
+        '/api/control/policy/[id]/revoke',
+        '/api/control/activity',
+        '/api/control/methods',
+        '/api/control/entitlement',
       ],
       webhookEndpoints: [
         { path: '/api/protocol/webhook', auth: 'HMAC (PROTOCOL_WEBHOOK_SECRET)' },
