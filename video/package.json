@@ -9,7 +9,11 @@
     "render:square": "npx remotion render AegisDemo-Square --output=out/aegis-demo-square.mp4",
     "render:gif": "npx remotion render AegisDemo --output=out/aegis-demo.gif --image-format=png",
     "render:marketing": "npx remotion render AegisMarketing --output=out/aegis-marketing.mp4",
-    "render:marketing:square": "npx remotion render AegisMarketing-Square --output=out/aegis-marketing-square.mp4"
+    "render:marketing:square": "npx remotion render AegisMarketing-Square --output=out/aegis-marketing-square.mp4",
+    "render:bot": "npx remotion render AegisControlDemo --output=out/aeg-control-demo.mp4",
+    "render:bot:square": "npx remotion render AegisControlDemo-Square --output=out/aeg-control-demo-square.mp4",
+    "render:bot:marketing": "npx remotion render AegisControlMarketing --output=out/aeg-control-marketing.mp4",
+    "render:bot:marketing:square": "npx remotion render AegisControlMarketing-Square --output=out/aeg-control-marketing-square.mp4"
   },
   "keywords": [],
   "author": "",
