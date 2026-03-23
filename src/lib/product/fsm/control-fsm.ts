@@ -1,3 +1,5 @@
+import type { Prisma } from '@prisma/client';
+
 import { getPrisma } from '@/src/lib/db';
 import { ONBOARDING_STEPS, type OnboardingStep } from '@/lib/onboarding-steps';
 
@@ -42,7 +44,10 @@ export async function advanceOnboarding(params: {
     where: { sessionId: params.sessionId },
   });
   const prev = (existing?.payload ?? {}) as Record<string, unknown>;
-  const merged = { ...prev, ...(params.payload ?? {}) };
+  const merged: Prisma.InputJsonValue = {
+    ...prev,
+    ...(params.payload ?? {}),
+  } as Prisma.InputJsonValue;
   const completionPct = completionForStep(params.step);
 
   const row = await prisma.controlOnboardingState.upsert({
