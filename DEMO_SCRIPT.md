@@ -9,7 +9,7 @@
 
 ```bash
 BASE_URL="https://clawgas.vercel.app"
-API_KEY="sn98LHQlYRkfHcGESRniD7JLxchC4L5gl4TyDVfKu/U="
+API_KEY="<your-AEGIS_API_KEY-from-Railway-or-.env>"
 ```
 
 ---

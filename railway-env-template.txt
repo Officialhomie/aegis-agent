@@ -1,26 +1,18 @@
 # ============================================
 # RAILWAY DEPLOYMENT (FULL LIVE MODE)
 # ============================================
-# Railway runs in LIVE mode with full signing capability
-# All secrets should be marked as encrypted in Railway UI
-#
-# To set variables:
-# 1. Railway Dashboard → Your Project → Variables
-# 2. Add each variable below
-# 3. Mark sensitive values as "Secret" (🔒 icon)
+# Copy to Railway Variables — never commit real values to git.
+# All secrets should be marked as encrypted in Railway UI.
 # ============================================
 
 # ============================================
 # PRIVATE KEY (REQUIRED FOR SIGNING)
 # ============================================
-# Option 1 (RECOMMENDED): Direct private key
-# Get it locally: cast wallet private-key --account aegis-agent
 EXECUTE_WALLET_PRIVATE_KEY=0x... # Mark as SECRET 🔒
 
-# Option 2 (ALTERNATIVE): Foundry Keystore
-# Only if Foundry is installed in Railway environment
+# Option: Foundry Keystore (if used in Railway)
 # KEYSTORE_ACCOUNT=aegis-agent
-# KEYSTORE_PASSWORD=HOMIEXAEGIS # Mark as SECRET 🔒
+# KEYSTORE_PASSWORD=<your-keystore-password> # Mark as SECRET 🔒
 
 # ============================================
 # AGENT MODE (REQUIRED)
@@ -30,8 +22,8 @@ AGENT_MODE=LIVE
 # ============================================
 # DATABASE (REQUIRED)
 # ============================================
-DATABASE_URL="postgresql://postgres.peasmkzwubianpfanilm:INYEBUCHI12345@aws-1-eu-west-1.pooler.supabase.com:5432/postgres" # Mark as SECRET 🔒
-DIRECT_URL="postgresql://postgres:INYEBUCHI12345@db.peasmkzwubianpfanilm.supabase.co:5432/postgres" # Mark as SECRET 🔒
+DATABASE_URL="postgresql://USER:PASSWORD@HOST:5432/postgres" # Mark as SECRET 🔒
+DIRECT_URL="postgresql://USER:PASSWORD@HOST:5432/postgres" # Mark as SECRET 🔒
 
 # ============================================
 # AI SERVICES (REQUIRED)
@@ -40,21 +32,19 @@ ANTHROPIC_API_KEY="sk-ant-api03-..." # Mark as SECRET 🔒
 USE_CLAUDE_REASONING="true"
 ANTHROPIC_REASONING_MODEL="claude-sonnet-4-20250514"
 
-# Optional: OpenAI (if not using Claude)
 # OPENAI_API_KEY="sk-..." # Mark as SECRET 🔒
-# OPENAI_REASONING_MODEL="gpt-4-turbo"
 
 # ============================================
 # BLOCKCHAIN RPC (REQUIRED)
 # ============================================
-RPC_URL_BASE="https://base-mainnet.g.alchemy.com/v2/..." # Mark as SECRET 🔒
-RPC_URL_BASE_SEPOLIA="https://base-sepolia.g.alchemy.com/v2/..." # Mark as SECRET 🔒
+RPC_URL_BASE="https://base-mainnet.g.alchemy.com/v2/<YOUR_KEY>" # Mark as SECRET 🔒
+RPC_URL_BASE_SEPOLIA="https://base-sepolia.g.alchemy.com/v2/<YOUR_KEY>" # Mark as SECRET 🔒
 
 # ============================================
 # CDP (REQUIRED FOR AGENTKIT)
 # ============================================
-CDP_API_KEY_NAME="48345826-65b2-449c-8886-41b7bb98233a"
-CDP_API_KEY_PRIVATE_KEY="LOjurdT/..." # Mark as SECRET 🔒
+CDP_API_KEY_NAME="<your-cdp-key-name-uuid>"
+CDP_API_KEY_PRIVATE_KEY="<your-cdp-ecdsa-private-key-pem-or-base64>" # Mark as SECRET 🔒
 
 # ============================================
 # AGENT CONFIGURATION
@@ -63,43 +53,41 @@ AGENT_CONFIDENCE_THRESHOLD="0.75"
 MAX_TRANSACTION_VALUE_USD="10000"
 MAX_GAS_PRICE_GWEI="100"
 SUPPORTED_CHAINS="84532,8453"
-# For Base mainnet production use: AGENT_NETWORK_ID="base"
 AGENT_NETWORK_ID="base-sepolia"
 RESERVE_CRITICAL_ETH="0.001"
 GAS_SPONSORSHIP_HEALTH_SKIP_THRESHOLD="0"
 TARGET_RESERVE_ETH="0.01"
-AGENT_WALLET_ADDRESS="0x7B9763b416F89aB9A2468d8E9f041C4542B5612f"
+AGENT_WALLET_ADDRESS="0x..."
 
 # ============================================
-# CONTRACTS & ADDRESSES
+# CONTRACTS & ADDRESSES (set per deployment)
 # ============================================
-ACTIVITY_LOGGER_ADDRESS="0x013b34F14D06e90CBaba20Ea47DF418e62E66E11"
-ATTESTATION_LOGGER_ADDRESS="0x72a51cDff0279ADC9856530e8b823DEcad90259a"
-DELEGATION_REGISTRY_ADDRESS="0x07D604D6d973b89615970718329c3c315D81b41C"
-REACTIVE_OBSERVER_ADDRESS="0x..."   # From Step 2 deploy; required for reactive callbacks
-USDC_ADDRESS="0x036CbD53842c5426634e7929541eC2318f3dCF7e"
-USDC_ADDRESS_BASE_MAINNET="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
-ALLOWED_CONTRACT_ADDRESSES="0x036CbD53842c5426634e7929541eC2318f3dCF7e,0x4200000000000000000000000000000000000006,0x0000000071727De22E5E9d8BAf0edAc6f37da032,0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24,0x94cC0AaC535CCDB3C01d6787D6413C739ae12bc4,0x492E6456D9528771018DeB9E87ef7750EF184104,0x27F971cb582BF9E50F397e4d29a5C7A34f11faA2,0x000000000022D473030F116dDEE9F6B43aC78BA3"
+ACTIVITY_LOGGER_ADDRESS="0x..."
+ATTESTATION_LOGGER_ADDRESS="0x..."
+DELEGATION_REGISTRY_ADDRESS="0x..."
+REACTIVE_OBSERVER_ADDRESS="0x..."
+USDC_ADDRESS="0x..."
+USDC_ADDRESS_BASE_MAINNET="0x..."
+ALLOWED_CONTRACT_ADDRESSES="0x...,0x..."
 
 # ============================================
 # API KEYS (REQUIRED)
 # ============================================
-AEGIS_API_KEY="sn98LHQlYRkfHcGESRniD7JLxchC4L5gl4TyDVfKu/U=" # Mark as SECRET 🔒
-BASESCAN_API_KEY="6ABTFVR9RNERQ6U2CWXT4NDRB6FT95KPH6" # Mark as SECRET 🔒
+AEGIS_API_KEY="<generate-32+-byte-random-base64>" # Mark as SECRET 🔒
+BASESCAN_API_KEY="<your-basescan-api-key>" # Mark as SECRET 🔒
 
 # ============================================
 # SOCIAL INTEGRATIONS
 # ============================================
-MOLTBOOK_API_KEY="moltbook_sk_mn-..." # Mark as SECRET 🔒
+MOLTBOOK_API_KEY="moltbook_sk_..." # Mark as SECRET 🔒
 MOLTBOOK_HEARTBEAT_INTERVAL="1800000"
 MOLTBOOK_SUBMOLT="general"
 
-NEYNAR_API_KEY="D3663CB8-..." # Mark as SECRET 🔒
-FARCASTER_SIGNER_UUID="238e59fa-..." # Mark as SECRET 🔒
+NEYNAR_API_KEY="<your-neynar-key>" # Mark as SECRET 🔒
+FARCASTER_SIGNER_UUID="<uuid>" # Mark as SECRET 🔒
 FARCASTER_FID=""
 FARCASTER_UPDATE_INTERVAL_MS="900000"
-# Social post LLM (Groq free tier primary, Claude fallback). Set GROQ_API_KEY from console.groq.com for free tier.
-GROQ_API_KEY="" # Mark as SECRET. Optional: use template-only to disable LLM posts.
+GROQ_API_KEY="" # Mark as SECRET 🔒
 SOCIAL_LLM_PROVIDER="groq"
 SOCIAL_LLM_MAX_TOKENS_FARCASTER="150"
 SOCIAL_LLM_MAX_TOKENS_MOLTBOOK="250"
@@ -125,29 +113,20 @@ ERC8004_REPUTATION_REGISTRY_ADDRESS=""
 # ============================================
 # REACTIVE NETWORK
 # ============================================
-REACTIVE_CALLBACK_SECRET="your-hmac-secret-key" # Mark as SECRET 🔒
+REACTIVE_CALLBACK_SECRET="<random-hmac-secret>" # Mark as SECRET 🔒
 
 # ============================================
 # MONITORING & LOGGING
 # ============================================
 LOG_LEVEL="info"
-AEGIS_DASHBOARD_URL="https://ClawGas.vercel.app"
+AEGIS_DASHBOARD_URL="https://your-app.vercel.app"
 
 # ============================================
 # OPTIONAL
 # ============================================
-PINECONE_API_KEY="" # If using vector memory
+PINECONE_API_KEY=""
 PINECONE_ENVIRONMENT="us-east-1"
 PINECONE_INDEX_NAME="aegis-memory"
+REDIS_URL=""
 
-# For Railway two-service setup: REDIS_URL="${{ Redis.REDIS_URL }}" (both worker and web)
-REDIS_URL="" # If using Redis for reserve state sync and rate limiting
-
-# ============================================
-# DEPLOYMENT INFO
-# ============================================
-# Railway automatically sets these:
-# - RAILWAY_ENVIRONMENT (production/staging)
-# - RAILWAY_PROJECT_ID
-# - RAILWAY_SERVICE_ID
-# ============================================
+# Railway: REDIS_URL="${{ Redis.REDIS_URL }}" when using Railway Redis
