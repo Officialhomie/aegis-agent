@@ -26,6 +26,7 @@
 *.md
 !README.md
 !**/SKILL.md
+!docs/**/*.md
 
 # debug
 npm-debug.log*
