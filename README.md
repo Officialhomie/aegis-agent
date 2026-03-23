@@ -8,6 +8,18 @@
 >
 > Now with **MetaMask Delegation Framework (MDF)** integration: users grant agents bounded on-chain authority via caveats (target whitelist, function selectors, value caps, time windows). Aegis sponsors the gas. Three independent trust layers — AI intent analysis + deterministic policy rules + on-chain caveats — must all agree before any transaction executes.
 
+### Demo video (public URL for judges)
+
+**Video link (replace after upload):** `REPLACE_WITH_YOUR_PUBLIC_VIDEO_URL`
+
+**Using Luma:** [Luma](https://lu.ma) event and submission pages do **not** store arbitrary MP4 uploads as a file host. Their editor only **embeds** players when you paste a link from **YouTube, Loom, or Vimeo** ([rich text / video embeds](https://help.lu.ma/p/rich-text-on-luma)). Recommended flow:
+
+1. Render the marketing cut locally: `cd video && npm run render:marketing` → `video/out/aegis-marketing.mp4`.
+2. Upload that file to **Loom** ([loom.com](https://www.loom.com) → record or **Upload video**) or **YouTube** (Unlisted).
+3. Copy the **Share** URL (must be viewable without login if judges are anonymous).
+4. Paste the URL into your **Luma hackathon / event description** (embeds inline) and any other submission field (e.g. Devpost).
+5. Update the link at the top of this section in `README.md` to match.
+
 Aegis prevents execution failure by autonomously sponsoring transactions for legitimate agents who are low on gas — with zero human intervention. Designed as agent-native infrastructure, Aegis serves trading bots, deployment agents, DAO executors, and other autonomous systems, ensuring the Base agent economy never stalls due to gas constraints.
 
 ---

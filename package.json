@@ -35,6 +35,7 @@
     "db:migrate-agent-tiers": "tsx scripts/migrate-agent-tiers.ts",
     "db:studio": "prisma studio",
     "db:seed": "prisma db seed",
+    "seed:control-demo": "tsx scripts/seed-control-demo.ts",
     "register:moltbook": "tsx scripts/register-moltbook.ts",
     "register:eas-schema": "tsx scripts/register-eas-schema.ts",
     "agent:report": "tsx scripts/agent-activity-report.ts",

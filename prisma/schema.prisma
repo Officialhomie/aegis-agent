@@ -722,6 +722,102 @@ model OpenClawAudit {
 }
 
 // ============================================================================
+// Aeg-control — product layer (policy-governed sponsored execution UX)
+// ============================================================================
+
+model SponsoredMethod {
+  id                String   @id @default(cuid())
+  commandName       String   @unique
+  displayName       String
+  description       String
+  riskTier          String
+  isPremium         Boolean  @default(false)
+  defaultDailyLimit Int      @default(10)
+  defaultTotalLimit Int      @default(100)
+  createdAt         DateTime @default(now())
+
+  userPolicies UserAgentPolicy[]
+}
+
+model UserAgentPolicy {
+  id                String   @id @default(cuid())
+  sessionId         String
+  protocolId        String
+  agentAddress      String?
+  sponsoredMethodId String
+  sponsoredMethod   SponsoredMethod @relation(fields: [sponsoredMethodId], references: [id], onDelete: Cascade)
+  dailyLimit        Int
+  totalLimit        Int
+  windowHours       Int      @default(24)
+  status            String   @default("ACTIVE")
+  revokedAt         DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  snapshots   PolicySnapshot[]
+  executions  ProductExecutionRecord[]
+
+  @@unique([sessionId, sponsoredMethodId])
+  @@index([sessionId])
+  @@index([protocolId])
+}
+
+model PolicySnapshot {
+  id           String   @id @default(cuid())
+  policyId     String
+  policy       UserAgentPolicy @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  snapshotJson Json
+  createdAt    DateTime @default(now())
+
+  executions ProductExecutionRecord[]
+
+  @@index([policyId])
+}
+
+model ProductExecutionRecord {
+  id               String   @id @default(cuid())
+  sessionId        String
+  protocolId       String
+  policyId         String?
+  policy           UserAgentPolicy? @relation(fields: [policyId], references: [id], onDelete: SetNull)
+  policySnapshotId String?
+  policySnapshot   PolicySnapshot?  @relation(fields: [policySnapshotId], references: [id], onDelete: SetNull)
+  openClawAuditId  String?
+  rawUserText      String
+  parsedCommand    String
+  policyDecision   String
+  policyReason     String?
+  summaryText      String?
+  success          Boolean
+  txHash           String?
+  decisionHash     String?
+  createdAt        DateTime @default(now())
+
+  @@index([sessionId, createdAt])
+  @@index([protocolId, createdAt])
+}
+
+model Entitlement {
+  id        String    @id @default(cuid())
+  sessionId String    @unique
+  tier      String    @default("FREE")
+  expiresAt DateTime?
+  orgId     String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
+
+model ControlOnboardingState {
+  id            String   @id @default(cuid())
+  sessionId     String   @unique
+  step          String
+  payload       Json     @default("{}")
+  completionPct Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+// ============================================================================
 // Heartbeat & Liveness Monitoring
 // Scheduled heartbeat transactions for agent liveness tracking
 // ============================================================================

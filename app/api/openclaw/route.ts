@@ -15,6 +15,7 @@
 
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
+import { runOpenClawHttpCommand } from '@/src/lib/agent/openclaw/http-runner';
 
 const OpenClawRequestSchema = z.object({
   command: z.string().min(1, 'command is required'),
@@ -57,26 +58,13 @@ export async function POST(request: Request) {
 
   const { command, sessionId, callbackUrl } = parsed.data;
 
-  const { parseCommand, executeCommand } = await import(
-    '../../../src/lib/agent/openclaw/command-handler'
-  );
-  const { appendActionLog } = await import('../../../src/lib/agent/openclaw/memory-manager');
+  const { result, asyncPending } = await runOpenClawHttpCommand({
+    command,
+    sessionId,
+    callbackUrl,
+  });
 
-  // Register callback URL for proactive reporting
-  if (callbackUrl) {
-    const { setLatestSession } = await import(
-      '../../../src/lib/agent/openclaw/proactive-reporter'
-    );
-    await setLatestSession(sessionId, callbackUrl);
-  }
-
-  const cmd = parseCommand(command);
-
-  // For async commands (cycle), acknowledge immediately and let the cycle
-  // report back via callbackUrl when done.
-  if (cmd.name === 'cycle' && callbackUrl) {
-    const result = await executeCommand(cmd, sessionId);
-    await appendActionLog('USER_CMD', `cycle triggered from session ${sessionId}`);
+  if (asyncPending) {
     return NextResponse.json({
       ok: true,
       acknowledged: true,
@@ -84,12 +72,6 @@ export async function POST(request: Request) {
       immediate: result.message,
     });
   }
-
-  const result = await executeCommand(cmd, sessionId);
-  await appendActionLog(
-    'USER_CMD',
-    `[${sessionId}] ${command} -> ${result.message.slice(0, 100)}`
-  );
 
   return NextResponse.json({
     ok: true,
@@ -109,6 +91,7 @@ export async function GET() {
     endpoints: {
       command: 'POST /api/openclaw',
       manifest: 'GET /api/openclaw',
+      aegControlExecute: 'POST /api/control/execute',
     },
   });
 }

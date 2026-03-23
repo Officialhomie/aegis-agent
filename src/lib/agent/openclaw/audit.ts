@@ -45,11 +45,11 @@ export function hashPhoneNumber(phoneNumber: string): string {
 /**
  * Record an OpenClaw command execution to the audit log
  */
-export async function auditCommand(entry: AuditEntry): Promise<void> {
+export async function auditCommand(entry: AuditEntry): Promise<string | null> {
   const prisma = getPrisma();
 
   try {
-    await prisma.openClawAudit.create({
+    const row = await prisma.openClawAudit.create({
       data: {
         sessionId: entry.sessionId,
         protocolId: entry.protocolId,
@@ -70,6 +70,7 @@ export async function auditCommand(entry: AuditEntry): Promise<void> {
       success: entry.success,
       executionMs: entry.executionMs,
     });
+    return row.id;
   } catch (error) {
     // Don't let audit failures break command execution
     logger.error('[Audit] Failed to log command', {
@@ -77,6 +78,7 @@ export async function auditCommand(entry: AuditEntry): Promise<void> {
       sessionId: entry.sessionId,
       commandName: entry.commandName,
     });
+    return null;
   }
 }
 
@@ -92,7 +94,7 @@ export async function executeWithAudit(
     userPhoneHash?: string;
     confidence?: number;
   } = {}
-): Promise<CommandResult> {
+): Promise<{ result: CommandResult; openClawAuditId: string | null }> {
   const startTime = Date.now();
   let result: CommandResult;
 
@@ -107,8 +109,7 @@ export async function executeWithAudit(
 
   const executionMs = Date.now() - startTime;
 
-  // Log to audit trail
-  await auditCommand({
+  const openClawAuditId = await auditCommand({
     sessionId,
     protocolId,
     userPhoneHash: options.userPhoneHash,
@@ -121,7 +122,7 @@ export async function executeWithAudit(
     executionMs,
   });
 
-  return result;
+  return { result, openClawAuditId };
 }
 
 /**
