@@ -59,7 +59,7 @@ export async function POST(request: Request) {
   const { command, sessionId, callbackUrl } = parsed.data;
 
   let result: Awaited<ReturnType<typeof runOpenClawHttpCommand>>['result'];
-  let asyncPending: boolean;
+  let asyncPending: boolean | undefined;
   try {
     ({ result, asyncPending } = await runOpenClawHttpCommand({
       command,
