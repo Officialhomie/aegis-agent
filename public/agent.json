@@ -1,0 +1,43 @@
+{
+  "schemaVersion": "erc-8004-v1",
+  "name": "Aegis",
+  "description": "Autonomous gas sponsorship infrastructure for AI agents on Base. Sponsors ERC-4337 UserOps using LLM policy decisions, 27 safety rules, and onchain proof storage.",
+  "version": "1.0.0",
+  "url": "https://clawgas.vercel.app",
+  "operatorWallet": "0x7B9763b416F89aB9A2468d8E9f041C4542B5612f",
+  "smartWallet": "0x32dbb81174ecFbac83D30a9D36cEba7Ebf4Ae97f",
+  "identity": {
+    "registry": "eip155:8453:0x8004A169FB4a3325136EB29fA0ceB6D2e539a432",
+    "reputationRegistry": "eip155:8453:0x8004BAa17C55a88189AE136b182e5fdA19dE9b63",
+    "network": "base"
+  },
+  "contracts": {
+    "activityLogger": "0xC76eaA20A3F9E074931D4B101fE59b6bf2471e97",
+    "attestationLogger": "0x72a51cDff0279ADC9856530e8b823DEcad90259a",
+    "delegationRegistry": "0x07d604d6d973b89615970718329c3c315d81b41c",
+    "paymaster": "0x0F64748F16Ff3fA2De00f728599969A5b9125534"
+  },
+  "chains": [
+    { "chainId": 8453, "name": "Base Mainnet" },
+    { "chainId": 84532, "name": "Base Sepolia" }
+  ],
+  "techStack": ["next.js", "viem", "prisma", "pinecone", "foundry", "erc-4337", "erc-8004"],
+  "tools": ["viem", "foundry", "next.js", "ipfs", "base-rpc", "aegis-activity-logger", "pimlico-bundler", "pinecone"],
+  "skills": ["gas-sponsorship", "erc-8004-identity", "llm-policy-decisions", "ipfs-storage", "mdf-delegation", "orpem-loop"],
+  "autonomyLoop": "ORPEM",
+  "executionMode": "SIMULATION",
+  "endpoints": {
+    "health": "https://clawgas.vercel.app/api/health",
+    "agentStatus": "https://clawgas.vercel.app/api/agent/status",
+    "command": "https://clawgas.vercel.app/api/openclaw",
+    "agentCard": "https://clawgas.vercel.app/.well-known/agent-card.json",
+    "passport": "https://clawgas.vercel.app/api/v1/passport"
+  },
+  "authentication": {
+    "type": "Bearer",
+    "header": "Authorization",
+    "description": "Bearer token required for /api/openclaw and /api/agent/* endpoints"
+  },
+  "agentLog": "https://github.com/Officialhomie/aegis-agent/blob/main/AGENTS.md",
+  "repository": "https://github.com/Officialhomie/aegis-agent"
+}

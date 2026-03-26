@@ -58,11 +58,20 @@ export async function POST(request: Request) {
 
   const { command, sessionId, callbackUrl } = parsed.data;
 
-  const { result, asyncPending } = await runOpenClawHttpCommand({
-    command,
-    sessionId,
-    callbackUrl,
-  });
+  let result: Awaited<ReturnType<typeof runOpenClawHttpCommand>>['result'];
+  let asyncPending: boolean;
+  try {
+    ({ result, asyncPending } = await runOpenClawHttpCommand({
+      command,
+      sessionId,
+      callbackUrl,
+    }));
+  } catch (err) {
+    return NextResponse.json(
+      { ok: false, error: err instanceof Error ? err.message : 'Internal error' },
+      { status: 500 }
+    );
+  }
 
   if (asyncPending) {
     return NextResponse.json({
