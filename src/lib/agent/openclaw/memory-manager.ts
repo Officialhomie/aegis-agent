@@ -27,7 +27,11 @@ export async function ensureMemoryFile(): Promise<void> {
   try {
     await fs.access(MEMORY_FILE);
   } catch {
-    await fs.writeFile(MEMORY_FILE, HEADER, 'utf-8');
+    try {
+      await fs.writeFile(MEMORY_FILE, HEADER, 'utf-8');
+    } catch {
+      // Read-only filesystem (serverless) — skip silently
+    }
   }
 }
 
@@ -38,7 +42,11 @@ export async function writeMemory(entry: MemoryEntry): Promise<void> {
   await ensureMemoryFile();
   const ts = (entry.timestamp ?? new Date()).toISOString().replace('T', ' ').slice(0, 19);
   const line = `[${ts}] ${entry.category}: ${entry.message}\n`;
-  await fs.appendFile(MEMORY_FILE, line, 'utf-8');
+  try {
+    await fs.appendFile(MEMORY_FILE, line, 'utf-8');
+  } catch {
+    // Read-only filesystem (serverless) — skip silently
+  }
 }
 
 /**
