@@ -26,7 +26,7 @@ You run **two services + Redis** on Railway:
 |------|---------|
 | **railway.toml** | Build = Dockerfile; deploy = restart on failure. |
 | **Dockerfile** | Node 22, Prisma generate + build, `CMD npm run start`. Worker overrides CMD in Railway dashboard. |
-| **railway-env-template.txt** | Full list of env vars for Railway (worker + web). |
+| **railway-env-template.example.txt** | Full list of env vars for Railway (worker + web); copy to `railway-env-template.txt` locally (gitignored). |
 | **RAILWAY_DEPLOYMENT.md** | Full Railway guide (signing, vars, verify). |
 | **RAILWAY_STEPS.md** | CLI steps, Redis, Start Command, verify URLs. |
 | **RAILWAY_SERVICES_SYNC.md** | Two-service + Redis design, sync checklist. |
@@ -61,7 +61,7 @@ You run **two services + Redis** on Railway:
 - [ ] **ACTIVITY_LOGGER_ADDRESS**, **REACTIVE_OBSERVER_ADDRESS** (from Step 2).
 - [ ] **AGENT_NETWORK_ID** = `base` for mainnet (8453) or `base-sepolia` for testnet (84532).
 - [ ] **AGENT_WALLET_ADDRESS**, **USDC_ADDRESS** / **USDC_ADDRESS_BASE_MAINNET**, **AEGIS_API_KEY**, **BASESCAN_API_KEY**.
-- [ ] Optional: Neynar, Farcaster, Moltbook, x402, REACTIVE_CALLBACK_SECRET, etc. (see railway-env-template.txt).
+- [ ] Optional: Neynar, Farcaster, Moltbook, x402, REACTIVE_CALLBACK_SECRET, etc. (see railway-env-template.example.txt).
 
 ### Web env (read-only dashboard)
 
@@ -134,7 +134,7 @@ If all of the above are done, you're up to date with Step 5 and good to go on Ra
 - [RAILWAY_STEPS.md](../RAILWAY_STEPS.md) – CLI steps, Redis, Start Command
 - [RAILWAY_SERVICES_SYNC.md](../RAILWAY_SERVICES_SYNC.md) – Two-service + Redis design
 - [RAILWAY_SYNC_COMMANDS.md](../RAILWAY_SYNC_COMMANDS.md) – Sync and verify commands
-- **railway-env-template.txt** – Env vars for Railway (worker + web)
+- **railway-env-template.example.txt** – Env vars for Railway (worker + web); keep secrets only in Railway UI or a local gitignored file.
 - **scripts/sync-railway-services.sh** – Compare vars and check logs
 
 Next: [Step 6 – Agent Configuration](../PRODUCTION_DEPLOYMENT.md#6-agent-configuration).

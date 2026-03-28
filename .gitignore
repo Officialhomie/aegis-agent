@@ -34,17 +34,40 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# --- Secrets & environment (never commit real values) ---
 .env*
+!.env.example
+!.env*.example
+
+# Filled Railway/Vercel scratch templates (safe example is railway-env-template.example.txt)
+railway-env-template.txt
 
 # vercel
 .vercel
 vercel-env-template.txt
 
+# Keys, keystores, and signing material
+*.key
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+*.p12
+*.pfx
+*.keystore
+
 # Nested git repos (e.g. accidental clones under skills bundles)
 openclaw-skills-PR-ready/**/.git/
+
+# IDE / agent session dirs (may reference local paths or keys)
+.claude/
+.cursor/
+
+# Local logs and on-chain build artifacts
+agent.log
+broadcast/
+cache/
 
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-.env*.local
