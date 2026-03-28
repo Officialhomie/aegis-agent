@@ -1,7 +1,9 @@
 # ============================================
 # RAILWAY DEPLOYMENT (FULL LIVE MODE)
 # ============================================
-# Copy to Railway Variables — never commit real values to git.
+# This file is tracked in git as a placeholder-only example.
+# For a local working copy with real values, use:  cp railway-env-template.example.txt railway-env-template.txt
+# (railway-env-template.txt is gitignored — never commit secrets.)
 # All secrets should be marked as encrypted in Railway UI.
 # ============================================
 
