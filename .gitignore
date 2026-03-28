@@ -41,6 +41,9 @@ yarn-error.log*
 .vercel
 vercel-env-template.txt
 
+# Nested git repos (e.g. accidental clones under skills bundles)
+openclaw-skills-PR-ready/**/.git/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
